@@ -1,0 +1,26 @@
+{
+  "schema_version": "qwendex.model_catalog.v1",
+  "source_catalog": "internal delegate: config/local_llm_stack/qwen_local_model_catalog.json",
+  "models": {
+    "qwen-local": {
+      "backend": "local-responses-adapter",
+      "context_window": 65536,
+      "compact_limit": 56000,
+      "template": "internal delegate: config/local_llm_stack/qwen3_codex_tool_plain.jinja",
+      "tool_call_reliability": "bounded",
+      "recommended_limits": {
+        "max_output_tokens": 2048,
+        "tool_output_token_limit": 1200,
+        "temperature": 0.15
+      },
+      "known_markers": [
+        "LOCAL_MODEL_TOOL_CALL_TOO_LARGE",
+        "LOCAL_MODEL_TOOL_CALL_TRUNCATED",
+        "LOCAL_MODEL_TOOL_MARKUP_SUPPRESSED",
+        "LOCAL_MODEL_LOOP_DETECTED",
+        "LOCAL_QWEN_VALIDATOR_FAILED"
+      ],
+      "promotion_gate": "offline eval, live bridge check, receipt review, GPT acceptance"
+    }
+  }
+}

@@ -1,0 +1,709 @@
+{
+  "schema_version": 1,
+  "name": "Local LLM Stack",
+  "tmux_session": "local-llm-stack",
+  "repo_root": "{repo_root}",
+  "safe_runtime_dir": "{home}/.local/state/qwendex/local_llm_stack",
+  "transcript_dir": "{home}/.local/state/qwendex/local_llm_stack/transcripts",
+  "prompt_template_roots": [
+    "{repo_root}/templates",
+    "{repo_root}/prompts"
+  ],
+  "chat_interfaces": {
+    "open-webui": {
+      "display_name": "Open WebUI",
+      "windows_start_script": "C:\\open-webui\\start-open-webui.ps1",
+      "url": "http://127.0.0.1:7070",
+      "backend_url": "http://127.0.0.1:4000/v1",
+      "backend_profile": "qwopus36-coder-heretic-thinking-chat2048-llamacpp-gguf-q4km-32k",
+      "webui_name": "Local Qwen Thinking",
+      "notes": "Open WebUI's optional reload route uses the Heretic switchable chat-thinking profile through LiteLLM with a large but finite reasoning budget. Normal Local Qwen/Codex bridge requests automatically send enable_thinking=false against the same loaded backend."
+    }
+  },
+  "user_state_file": "{home}/.local/state/qwendex/local_llm_projects.json",
+  "default_project": "{repo_root}",
+  "managed_scope": "operator UX and local infrastructure only",
+  "default_backend_profile": "qwopus36-coder-heretic-nothink-llamacpp-gguf-q4km-32k",
+  "backend_profiles": [
+    {
+      "name": "textgen-exl3-q8",
+      "display_name": "TextGen EXL3 q8 88k: qwen36-27Bb",
+      "backend_kind": "textgen",
+      "model_alias": "qwen36-27Bb",
+      "model_path": "{home}/Text-Generation-WebUI/user_data/models/qwen36-27Bb",
+      "mtp_expected": false,
+      "notes": "Conservative verified default. Uses TextGen ExLlamav3 with q8 KV cache and a reduced 88k context window for extra VRAM headroom. Latest staged audit showed steady core-stage behavior through Stage 4, with Stage 5 handoff/audit still a stress failure.",
+      "service_overrides": {
+        "textgen": {
+          "display_name": "TextGen EXL3 model",
+          "window_name": "textgen",
+          "provider_type": "text-generation backend",
+          "command": "TEXTGEN_MODEL='qwen36-27Bb' TEXTGEN_LOADER='ExLlamav3' TEXTGEN_CACHE_TYPE=q8 TEXTGEN_CTX_SIZE=88064 TEXTGEN_GPU_SPLIT=22 TEXTGEN_EXLLAMAV3_MAX_CHUNK_SIZE=2048 TEXTGEN_TEMPERATURE=0.55 TEXTGEN_TOP_K=20 TEXTGEN_TOP_P=0.95 TEXTGEN_MIN_P=0.05 TEXTGEN_REPETITION_PENALTY=1.0 TEXTGEN_PRESENCE_PENALTY=1.0 TEXTGEN_ENABLE_THINKING=1 TEXTGEN_PRESERVE_THINKING=1 scripts/run_textgen_qwen_exl3.sh",
+          "health_url": "http://127.0.0.1:5000/v1/models",
+          "models_url": "http://127.0.0.1:5000/v1/models",
+          "port": 5000,
+          "startup_timeout_seconds": 900,
+          "notes": "Serves qwen36-27Bb through TextGen ExLlamav3 with full q8 K/V cache and 88k context."
+        }
+      }
+    },
+    {
+      "name": "llmfanq36-27b-tweak-no-mtp-q8-96k-no-vision",
+      "display_name": "TextGen EXL3 q8 96k no-MTP no-media: llmfanq36 27B tweak",
+      "backend_kind": "textgen",
+      "model_alias": "llmfanq36-27b-tweak-no-mtp",
+      "model_path": "{home}/Text-Generation-WebUI/user_data/models/llmfanq36-27b-uncen-no-mtp-exl3-4p5bpw-h6-tweak",
+      "mtp_expected": false,
+      "notes": "Custom llmfan Qwen3.6 27B EXL3 4.5bpw h6 no-MTP lean variant. Disables the vision/media component, uses q8 K/V cache, 2048 ExLlamaV3 chunking, and a verified 96k context with measured VRAM headroom.",
+      "service_overrides": {
+        "textgen": {
+          "display_name": "TextGen EXL3 model",
+          "window_name": "textgen",
+          "provider_type": "text-generation backend",
+          "command": "TEXTGEN_MODEL='llmfanq36-27b-uncen-no-mtp-exl3-4p5bpw-h6-tweak' TEXTGEN_LOADER='ExLlamav3' TEXTGEN_CACHE_TYPE=q8 TEXTGEN_CTX_SIZE=98304 TEXTGEN_GPU_SPLIT=22 TEXTGEN_EXLLAMAV3_MAX_CHUNK_SIZE=2048 TEXTGEN_DISABLE_VISION=1 TEXTGEN_TEMPERATURE=0.55 TEXTGEN_TOP_K=20 TEXTGEN_TOP_P=0.95 TEXTGEN_MIN_P=0.05 TEXTGEN_REPETITION_PENALTY=1.0 TEXTGEN_PRESENCE_PENALTY=0.0 TEXTGEN_FREQUENCY_PENALTY=0.0 TEXTGEN_ENABLE_THINKING=1 TEXTGEN_PRESERVE_THINKING=1 TEXTGEN_SPEC_TYPE=none scripts/run_textgen_qwen_exl3.sh",
+          "health_url": "http://127.0.0.1:5000/v1/models",
+          "models_url": "http://127.0.0.1:5000/v1/models",
+          "port": 5000,
+          "startup_timeout_seconds": 900,
+          "notes": "Custom llmfan Qwen3.6 27B EXL3 4.5bpw h6 no-MTP lean variant. Disables the vision/media component, uses q8 K/V cache, 2048 ExLlamaV3 chunking, and a verified 96k context with measured VRAM headroom."
+        }
+      },
+      "description": "Headroom profile. Vision/mmproj disabled; start at 32k and raise context after live VRAM check."
+    },
+    {
+      "name": "simonycl-qwen3-30b-plateau-6skill-0617-iter399-exl3-4p5bpw-h6",
+      "display_name": "TextGen EXL3 q8 34k no-thinking: SimonYCL Qwen3 30B Plateau iter399",
+      "backend_kind": "textgen",
+      "model_alias": "simonycl-qwen3-30b-plateau-6skill-0617-iter399",
+      "model_path": "{home}/Text-Generation-WebUI/user_data/models/simonycl-qwen3-30b-plateau-6skill-0617-iter399-EXL3-4.5bpw-h6",
+      "mtp_expected": false,
+      "notes": "Direct plain EXL3 4.5bpw h6 quant of simonycl/qwen3-30b-plateau-6skill-0617-iter399. Native non-thinking checkpoint; uses TextGen ExLlamav3, q8 K/V cache, model-card sampling defaults, and a tested 34816-token context with about 1.5 GB free VRAM.",
+      "service_overrides": {
+        "textgen": {
+          "display_name": "TextGen EXL3 SimonYCL Qwen3 30B Plateau iter399",
+          "window_name": "textgen",
+          "provider_type": "text-generation backend",
+          "command": "TEXTGEN_MODEL='simonycl-qwen3-30b-plateau-6skill-0617-iter399-EXL3-4.5bpw-h6' TEXTGEN_LOADER='ExLlamav3' TEXTGEN_CACHE_TYPE=q8 TEXTGEN_CTX_SIZE=34816 TEXTGEN_GPU_SPLIT=22 TEXTGEN_EXLLAMAV3_MAX_CHUNK_SIZE=2048 TEXTGEN_DISABLE_VISION=1 TEXTGEN_TEMPERATURE=0.7 TEXTGEN_TOP_K=20 TEXTGEN_TOP_P=0.8 TEXTGEN_MIN_P=0 TEXTGEN_REPETITION_PENALTY=1.0 TEXTGEN_PRESENCE_PENALTY=0.0 TEXTGEN_FREQUENCY_PENALTY=0.0 TEXTGEN_ENABLE_THINKING=0 TEXTGEN_PRESERVE_THINKING=0 TEXTGEN_SPEC_TYPE=none TEXTGEN_CHAT_TEMPLATE={repo_root}/config/local_llm_stack/qwen3_simonycl_no_think_prefill.jinja scripts/run_textgen_qwen_exl3.sh",
+          "health_url": "http://127.0.0.1:5000/v1/models",
+          "models_url": "http://127.0.0.1:5000/v1/models",
+          "port": 5000,
+          "startup_timeout_seconds": 900,
+          "notes": "Serves the plain SimonYCL Qwen3 30B Plateau iter399 EXL3 4.5bpw h6 quant through TextGen ExLlamav3 with q8 KV cache."
+        }
+      },
+      "description": "Direct plain EXL3 4.5bpw h6 quant. Q8 KV cache tested at 32768, 34816, and 40960 tokens; 34816 keeps about 1.5 GB free VRAM."
+    },
+    {
+      "name": "llmfanq36-27b-qwopus-coder-no-mtp-exl3-4p5bpw-h6",
+      "display_name": "TextGen EXL3 q8 96k no-MTP no-media: Qwopus Coder 27B",
+      "backend_kind": "textgen",
+      "model_alias": "llmfanq36-27b-qwopus-coder-no-mtp-exl3-4p5bpw-h6",
+      "model_path": "{home}/Text-Generation-WebUI/user_data/models/llmfanq36-27b-qwopus-coder-no-mtp-exl3-4p5bpw-h6",
+      "mtp_expected": false,
+      "notes": "STAR/Codex repo-agent LoRA SFT merged into the uncensored Qwopus/Qwen3.6 27B base, stripped to text-only non-MTP tensors and quantized EXL3 4.5bpw h6. Register separately; do not promote until local harness gates pass.",
+      "service_overrides": {
+        "textgen": {
+          "display_name": "TextGen EXL3 Qwopus Coder model",
+          "window_name": "textgen",
+          "provider_type": "text-generation backend",
+          "command": "TEXTGEN_MODEL='llmfanq36-27b-qwopus-coder-no-mtp-exl3-4p5bpw-h6' TEXTGEN_LOADER='ExLlamav3' TEXTGEN_CACHE_TYPE=q8 TEXTGEN_CTX_SIZE=98304 TEXTGEN_GPU_SPLIT=22 TEXTGEN_EXLLAMAV3_MAX_CHUNK_SIZE=2048 TEXTGEN_DISABLE_VISION=1 TEXTGEN_TEMPERATURE=0.55 TEXTGEN_TOP_K=20 TEXTGEN_TOP_P=0.95 TEXTGEN_MIN_P=0.05 TEXTGEN_REPETITION_PENALTY=1.0 TEXTGEN_PRESENCE_PENALTY=0.0 TEXTGEN_FREQUENCY_PENALTY=0.0 TEXTGEN_ENABLE_THINKING=1 TEXTGEN_PRESERVE_THINKING=1 TEXTGEN_SPEC_TYPE=none TEXTGEN_CHAT_TEMPLATE={home}/llama.cpp-codex/qwen3_codex_no_think.jinja scripts/run_textgen_qwen_exl3.sh",
+          "health_url": "http://127.0.0.1:5000/v1/models",
+          "models_url": "http://127.0.0.1:5000/v1/models",
+          "port": 5000,
+          "startup_timeout_seconds": 900,
+          "notes": "Serves the Qwopus Coder 27B non-MTP text-only EXL3 4.5bpw h6 artifact through TextGen ExLlamav3 with q8 KV cache."
+        }
+      },
+      "description": "Candidate local coder profile. Keep isolated from defaults until TextGen, bridge, harder-task, reliability, and tool-markup gates pass."
+    },
+    {
+      "name": "jackrong-qwopus36-coder-exl3-4p5bpw-h6-textonly-nonmtp",
+      "display_name": "TextGen EXL3 q8 32k text-only: Jackrong Qwopus3.6 27B Coder",
+      "backend_kind": "textgen",
+      "model_alias": "Jackrong-Qwopus3.6-27B-Coder-textonly-nonmtp",
+      "model_path": "{home}/Text-Generation-WebUI/user_data/models/Jackrong-Qwopus3.6-27B-Coder-EXL3-4.5bpw-h6-textonly-nonmtp",
+      "mtp_expected": false,
+      "notes": "Direct Jackrong/Qwopus3.6-27B-Coder fallback quant, EXL3 4.5bpw h6, text-only non-MTP. Use as the official coder baseline; no Anderson training data.",
+      "service_overrides": {
+        "textgen": {
+          "display_name": "TextGen EXL3 model",
+          "window_name": "textgen",
+          "provider_type": "text-generation backend",
+          "command": "TEXTGEN_MODEL='Jackrong-Qwopus3.6-27B-Coder-EXL3-4.5bpw-h6-textonly-nonmtp' TEXTGEN_LOADER='ExLlamav3' TEXTGEN_CACHE_TYPE=q8 TEXTGEN_CTX_SIZE=32768 TEXTGEN_GPU_SPLIT=22 TEXTGEN_EXLLAMAV3_MAX_CHUNK_SIZE=2048 TEXTGEN_DISABLE_VISION=1 TEXTGEN_TEMPERATURE=0.55 TEXTGEN_TOP_K=20 TEXTGEN_TOP_P=0.95 TEXTGEN_MIN_P=0.05 TEXTGEN_REPETITION_PENALTY=1.0 TEXTGEN_PRESENCE_PENALTY=0.0 TEXTGEN_FREQUENCY_PENALTY=0.0 TEXTGEN_ENABLE_THINKING=1 TEXTGEN_PRESERVE_THINKING=1 TEXTGEN_SPEC_TYPE=none TEXTGEN_CHAT_TEMPLATE={home}/llama.cpp-codex/qwen3_codex_no_think.jinja scripts/run_textgen_qwen_exl3.sh",
+          "health_url": "http://127.0.0.1:5000/v1/models",
+          "models_url": "http://127.0.0.1:5000/v1/models",
+          "port": 5000,
+          "startup_timeout_seconds": 900,
+          "notes": "Direct Jackrong/Qwopus3.6-27B-Coder fallback quant, EXL3 4.5bpw h6, text-only non-MTP. Use as the official coder baseline; no Anderson training data."
+        }
+      },
+      "description": "Direct Jackrong/Qwopus3.6-27B-Coder fallback quant, EXL3 4.5bpw h6, text-only non-MTP. Use as the official coder baseline; no Anderson training data."
+    },
+    {
+      "name": "jackrong-qwopus36-coder-exl3-4p5bpw-h6-vision-nonmtp",
+      "display_name": "TextGen EXL3 q8 32k vision: Jackrong Qwopus3.6 27B Coder",
+      "backend_kind": "textgen",
+      "model_alias": "Jackrong-Qwopus3.6-27B-Coder-vision-nonmtp",
+      "model_path": "{home}/Text-Generation-WebUI/user_data/models/Jackrong-Qwopus3.6-27B-Coder-EXL3-4.5bpw-h6-vision-nonmtp",
+      "mtp_expected": false,
+      "notes": "Direct Jackrong/Qwopus3.6-27B-Coder fallback quant, EXL3 4.5bpw h6, vision-preserved non-MTP. Keep separate from Anderson custom models.",
+      "service_overrides": {
+        "textgen": {
+          "display_name": "TextGen EXL3 model",
+          "window_name": "textgen",
+          "provider_type": "text-generation backend",
+          "command": "TEXTGEN_MODEL='Jackrong-Qwopus3.6-27B-Coder-EXL3-4.5bpw-h6-vision-nonmtp' TEXTGEN_LOADER='ExLlamav3' TEXTGEN_CACHE_TYPE=q8 TEXTGEN_CTX_SIZE=32768 TEXTGEN_GPU_SPLIT=22 TEXTGEN_EXLLAMAV3_MAX_CHUNK_SIZE=2048 TEXTGEN_TEMPERATURE=0.55 TEXTGEN_TOP_K=20 TEXTGEN_TOP_P=0.95 TEXTGEN_MIN_P=0.05 TEXTGEN_REPETITION_PENALTY=1.0 TEXTGEN_PRESENCE_PENALTY=0.0 TEXTGEN_FREQUENCY_PENALTY=0.0 TEXTGEN_ENABLE_THINKING=1 TEXTGEN_PRESERVE_THINKING=1 TEXTGEN_SPEC_TYPE=none TEXTGEN_CHAT_TEMPLATE={home}/llama.cpp-codex/qwen3_codex_no_think.jinja scripts/run_textgen_qwen_exl3.sh",
+          "health_url": "http://127.0.0.1:5000/v1/models",
+          "models_url": "http://127.0.0.1:5000/v1/models",
+          "port": 5000,
+          "startup_timeout_seconds": 900,
+          "notes": "Direct Jackrong/Qwopus3.6-27B-Coder fallback quant, EXL3 4.5bpw h6, vision-preserved non-MTP. Keep separate from Anderson custom models."
+        }
+      },
+      "description": "Direct Jackrong/Qwopus3.6-27B-Coder fallback quant, EXL3 4.5bpw h6, vision-preserved non-MTP. Keep separate from Anderson custom models."
+    },
+    {
+      "name": "qwopucode-full-v15-27b-vllm-gguf-q4km-32k",
+      "display_name": "vLLM GGUF 32k: Qwopucode full v15 27B Q4_K_M",
+      "backend_kind": "vllm-gguf",
+      "model_alias": "Qwopucode-full-v15-27B-FP8-Block-i1-Q4_K_M",
+      "model_path": "{home}/.lmstudio/models/Qwen36/mradermacherQwopucode-full-v15-27B/Qwopucode-full-v15-27B-FP8-Block.i1-Q4_K_M.gguf",
+      "mtp_expected": false,
+      "notes": "User-supplied Qwopucode GGUF served through vLLM's OpenAI-compatible server on the standard local backend port. Uses the local Jackrong/Qwopus tokenizer, the existing Qwen/Codex chat template, TextGen-matched sampler defaults where request-side proxies support them, and a 32768-token minimum context.",
+      "service_overrides": {
+        "textgen": {
+          "display_name": "vLLM GGUF Qwopucode model",
+          "window_name": "vllm",
+          "provider_type": "vLLM OpenAI-compatible backend",
+          "command": "VLLM_BIN={home}/.local/share/qwendex/vllm-venv/bin/vllm VLLM_MODEL_PATH='{home}/.lmstudio/models/Qwen36/mradermacherQwopucode-full-v15-27B/Qwopucode-full-v15-27B-FP8-Block.i1-Q4_K_M.gguf' VLLM_TOKENIZER='{home}/Text-Generation-WebUI/user_data/models/Jackrong-Qwopus3.6-27B-Coder-EXL3-4.5bpw-h6-textonly-nonmtp' VLLM_MODEL_ALIAS='Qwopucode-full-v15-27B-FP8-Block-i1-Q4_K_M' VLLM_MAX_MODEL_LEN=32768 VLLM_GPU_MEMORY_UTILIZATION=0.90 VLLM_DTYPE=auto VLLM_CHAT_TEMPLATE={home}/llama.cpp-codex/qwen3_codex_no_think.jinja CODEX_TEXTGEN_CONTEXT_LIMIT_TOKENS=32768 scripts/run_vllm_qwopucode_gguf.sh",
+          "health_url": "http://127.0.0.1:5000/v1/models",
+          "models_url": "http://127.0.0.1:5000/v1/models",
+          "port": 5000,
+          "startup_timeout_seconds": 900,
+          "notes": "Serves Qwopucode-full-v15-27B-FP8-Block.i1-Q4_K_M.gguf through vLLM with a 32k context window."
+        },
+        "bridge": {
+          "command": "CODEX_TEXTGEN_CONTEXT_LIMIT_TOKENS=32768 scripts/run_codex_textgen_bridge.sh",
+          "notes": "Codex bridge context limit follows the vLLM Qwopucode 32k backend profile."
+        }
+      },
+      "description": "vLLM-managed GGUF profile for the user-supplied Qwopucode full v15 27B Q4_K_M file. Keep on the standard 5000 -> 4000 -> 1234 proxy chain."
+    },
+    {
+      "name": "qwopucode-full-v15-27b-llamacpp-gguf-q4km-32k",
+      "display_name": "llama.cpp GGUF 32k: Qwopucode full v15 27B Q4_K_M",
+      "backend_kind": "llamacpp-gguf",
+      "model_alias": "Qwopucode-full-v15-27B-FP8-Block-i1-Q4_K_M",
+      "model_path": "{home}/.lmstudio/models/Qwen36/mradermacherQwopucode-full-v15-27B/Qwopucode-full-v15-27B-FP8-Block.i1-Q4_K_M.gguf",
+      "mtp_expected": false,
+      "notes": "Preferred GGUF-native fallback after vLLM rejected this file's qwen35 architecture. llama.cpp provides explicit full q8_0 K/V cache, flash attention, prompt cache RAM, batch/ubatch, GPU layer offload, slot controls, Qwen3.6 precise-coding sampler defaults, and thinking-on Qwen3-Coder formatting while preserving the standard local proxy chain.",
+      "service_overrides": {
+        "textgen": {
+          "display_name": "llama.cpp GGUF Qwopucode model",
+          "window_name": "llamacpp",
+          "provider_type": "llama.cpp OpenAI-compatible backend",
+          "command": "LLAMACPP_SERVER={home}/llama.cpp-codex/src/build/bin/llama-server LLAMACPP_MODEL_PATH='{home}/.lmstudio/models/Qwen36/mradermacherQwopucode-full-v15-27B/Qwopucode-full-v15-27B-FP8-Block.i1-Q4_K_M.gguf' LLAMACPP_MODEL_ALIAS='Qwopucode-full-v15-27B-FP8-Block-i1-Q4_K_M' LLAMACPP_CTX_SIZE=32768 LLAMACPP_CACHE_TYPE_K=q8_0 LLAMACPP_CACHE_TYPE_V=q8_0 LLAMACPP_TEMPERATURE=0.6 LLAMACPP_TOP_P=0.95 LLAMACPP_TOP_K=20 LLAMACPP_MIN_P=0 LLAMACPP_CACHE_RAM=4096 LLAMACPP_PARALLEL=1 LLAMACPP_BATCH_SIZE=4096 LLAMACPP_UBATCH_SIZE=2048 LLAMACPP_GPU_LAYERS=all LLAMACPP_CHAT_TEMPLATE={home}/llama.cpp-codex/src/models/templates/Qwen3-Coder.jinja LLAMACPP_REASONING=on LLAMACPP_REASONING_FORMAT=deepseek CODEX_TEXTGEN_CONTEXT_LIMIT_TOKENS=32768 scripts/run_llamacpp_qwopucode_gguf.sh",
+          "health_url": "http://127.0.0.1:5000/v1/models",
+          "models_url": "http://127.0.0.1:5000/v1/models",
+          "port": 5000,
+          "startup_timeout_seconds": 900,
+          "notes": "Serves Qwopucode-full-v15-27B-FP8-Block.i1-Q4_K_M.gguf through llama.cpp with 32k context, flash attention, full q8_0 K/V cache, prompt cache, two-slot concurrency control, and thinking enabled."
+        },
+        "bridge": {
+          "command": "CODEX_TEXTGEN_CONTEXT_LIMIT_TOKENS=32768 scripts/run_codex_textgen_bridge.sh",
+          "notes": "Codex bridge context limit follows the llama.cpp Qwopucode 32k backend profile."
+        }
+      },
+      "description": "Preferred memory/cache-managed GGUF profile for the Qwopucode full v15 27B Q4_K_M file. Keep on the standard 5000 -> 4000 -> 1234 proxy chain."
+    },
+    {
+      "name": "qwopucode-full-v15-27b-nothink-llamacpp-gguf-q4km-32k",
+      "display_name": "llama.cpp GGUF 32k: Qwopucode full v15 27B Q4_K_M no-thinking",
+      "backend_kind": "llamacpp-gguf",
+      "model_alias": "Qwopucode-full-v15-27B-FP8-Block-i1-Q4_K_M-nothink",
+      "model_path": "{home}/.lmstudio/models/Qwen36/mradermacherQwopucode-full-v15-27B/Qwopucode-full-v15-27B-FP8-Block.i1-Q4_K_M.gguf",
+      "mtp_expected": false,
+      "notes": "No-thinking apples-to-apples Qwopucode profile matching the current Qwopus/Heretic no-thinking default shape: 32k context, q8_0 K/V cache, prompt cache RAM, batch/ubatch, GPU offload, temp 0.2, and qwen3_codex_no_think.jinja template.",
+      "service_overrides": {
+        "textgen": {
+          "display_name": "llama.cpp GGUF Qwopucode no-thinking model",
+          "window_name": "llamacpp",
+          "provider_type": "llama.cpp OpenAI-compatible backend",
+          "command": "LLAMACPP_SERVER={home}/llama.cpp-codex/src/build/bin/llama-server LLAMACPP_MODEL_PATH='{home}/.lmstudio/models/Qwen36/mradermacherQwopucode-full-v15-27B/Qwopucode-full-v15-27B-FP8-Block.i1-Q4_K_M.gguf' LLAMACPP_MODEL_ALIAS='Qwopucode-full-v15-27B-FP8-Block-i1-Q4_K_M-nothink' LLAMACPP_CTX_SIZE=32768 LLAMACPP_CACHE_TYPE_K=q8_0 LLAMACPP_CACHE_TYPE_V=q8_0 LLAMACPP_TEMPERATURE=0.2 LLAMACPP_CACHE_RAM=4096 LLAMACPP_PARALLEL=1 LLAMACPP_BATCH_SIZE=4096 LLAMACPP_UBATCH_SIZE=2048 LLAMACPP_GPU_LAYERS=all LLAMACPP_CHAT_TEMPLATE={home}/llama.cpp-codex/qwen3_codex_no_think.jinja CODEX_TEXTGEN_CONTEXT_LIMIT_TOKENS=32768 scripts/run_llamacpp_qwopucode_gguf.sh",
+          "health_url": "http://127.0.0.1:5000/v1/models",
+          "models_url": "http://127.0.0.1:5000/v1/models",
+          "port": 5000,
+          "startup_timeout_seconds": 900,
+          "notes": "Serves Qwopucode-full-v15-27B-FP8-Block.i1-Q4_K_M.gguf through llama.cpp with the same no-thinking template and sampler shape as the current Qwopus/Heretic no-thinking default."
+        },
+        "bridge": {
+          "command": "CODEX_TEXTGEN_CONTEXT_LIMIT_TOKENS=32768 scripts/run_codex_textgen_bridge.sh",
+          "notes": "Codex bridge context limit follows the llama.cpp Qwopucode no-thinking 32k profile."
+        }
+      },
+      "description": "No-thinking Qwopucode profile cloned from the Qwopus/Heretic no-thinking default shape for exact apples-to-apples measurement."
+    },
+    {
+      "name": "qwopus36-coder-llamacpp-gguf-q4km-32k",
+      "display_name": "llama.cpp GGUF 32k: Qwopus3.6 27B Coder Q4_K_M",
+      "backend_kind": "llamacpp-gguf",
+      "model_alias": "Qwopus3.6-27B-Coder.i1-Q4_K_M",
+      "model_path": "{home}/.lmstudio/models/Qwen36/mradermacherQwopus3.6-27B-Coder-i1-GGUF/Qwopus3.6-27B-Coder.i1-Q4_K_M.gguf",
+      "mtp_expected": false,
+      "notes": "Apples-to-apples GGUF comparison target for the Qwopus coder EXL3 workflow. Uses direct llama.cpp with explicit full q8_0 K/V cache, flash attention, prompt cache RAM, batch/ubatch, GPU layer offload, and two-slot controls.",
+      "service_overrides": {
+        "textgen": {
+          "display_name": "llama.cpp GGUF Qwopus coder model",
+          "window_name": "llamacpp",
+          "provider_type": "llama.cpp OpenAI-compatible backend",
+          "command": "LLAMACPP_SERVER={home}/llama.cpp-codex/src/build/bin/llama-server LLAMACPP_MODEL_PATH='{home}/.lmstudio/models/Qwen36/mradermacherQwopus3.6-27B-Coder-i1-GGUF/Qwopus3.6-27B-Coder.i1-Q4_K_M.gguf' LLAMACPP_MODEL_ALIAS='Qwopus3.6-27B-Coder.i1-Q4_K_M' LLAMACPP_CTX_SIZE=32768 LLAMACPP_CACHE_TYPE_K=q8_0 LLAMACPP_CACHE_TYPE_V=q8_0 LLAMACPP_TEMPERATURE=0.2 LLAMACPP_CACHE_RAM=4096 LLAMACPP_PARALLEL=1 LLAMACPP_BATCH_SIZE=4096 LLAMACPP_UBATCH_SIZE=2048 LLAMACPP_GPU_LAYERS=all LLAMACPP_CHAT_TEMPLATE={home}/llama.cpp-codex/qwen3_codex_no_think.jinja CODEX_TEXTGEN_CONTEXT_LIMIT_TOKENS=32768 scripts/run_llamacpp_qwopucode_gguf.sh",
+          "health_url": "http://127.0.0.1:5000/v1/models",
+          "models_url": "http://127.0.0.1:5000/v1/models",
+          "port": 5000,
+          "startup_timeout_seconds": 900,
+          "notes": "Serves Qwopus3.6-27B-Coder.i1-Q4_K_M.gguf through llama.cpp with 32k context, flash attention, full q8_0 K/V cache, prompt cache, and two-slot concurrency control."
+        },
+        "bridge": {
+          "command": "CODEX_TEXTGEN_CONTEXT_LIMIT_TOKENS=32768 scripts/run_codex_textgen_bridge.sh",
+          "notes": "Codex bridge context limit follows the llama.cpp Qwopus coder 32k backend profile."
+        }
+      },
+      "description": "Memory/cache-managed GGUF profile for the Qwopus3.6 27B Coder Q4_K_M file, intended as the closest GGUF comparison to the Qwopus coder EXL3 workflow."
+    },
+    {
+      "name": "qwopus36-coder-thinking-llamacpp-gguf-q4km-32k",
+      "display_name": "llama.cpp GGUF 32k: Qwopus3.6 27B Coder Q4_K_M thinking",
+      "backend_kind": "llamacpp-gguf",
+      "model_alias": "Qwopus3.6-27B-Coder.i1-Q4_K_M-thinking",
+      "model_path": "{home}/.lmstudio/models/Qwen36/mradermacherQwopus3.6-27B-Coder-i1-GGUF/Qwopus3.6-27B-Coder.i1-Q4_K_M.gguf",
+      "mtp_expected": false,
+      "notes": "Thinking-on fair baseline for the original Qwopus3.6 Coder GGUF. Uses the same Q4_K_M file as the current fast default, but switches from the no-thinking Codex template to Qwen3-Coder formatting with reasoning enabled and preserve_thinking passed through the llama.cpp launcher. Keep separate from the fast default until benchmark evidence supports promotion.",
+      "service_overrides": {
+        "textgen": {
+          "display_name": "llama.cpp GGUF Qwopus coder thinking model",
+          "window_name": "llamacpp",
+          "provider_type": "llama.cpp OpenAI-compatible backend",
+          "command": "LLAMACPP_SERVER={home}/llama.cpp-codex/src/build/bin/llama-server LLAMACPP_MODEL_PATH='{home}/.lmstudio/models/Qwen36/mradermacherQwopus3.6-27B-Coder-i1-GGUF/Qwopus3.6-27B-Coder.i1-Q4_K_M.gguf' LLAMACPP_MODEL_ALIAS='Qwopus3.6-27B-Coder.i1-Q4_K_M-thinking' LLAMACPP_CTX_SIZE=32768 LLAMACPP_CACHE_TYPE_K=q8_0 LLAMACPP_CACHE_TYPE_V=q8_0 LLAMACPP_TEMPERATURE=0.6 LLAMACPP_TOP_P=0.95 LLAMACPP_TOP_K=20 LLAMACPP_MIN_P=0 LLAMACPP_CACHE_RAM=4096 LLAMACPP_PARALLEL=1 LLAMACPP_BATCH_SIZE=4096 LLAMACPP_UBATCH_SIZE=2048 LLAMACPP_GPU_LAYERS=all LLAMACPP_CHAT_TEMPLATE={home}/llama.cpp-codex/src/models/templates/Qwen3-Coder.jinja LLAMACPP_REASONING=on LLAMACPP_REASONING_FORMAT=deepseek CODEX_TEXTGEN_CONTEXT_LIMIT_TOKENS=32768 CODEX_TEXTGEN_MAX_OUTPUT_TOKENS=2048 CODEX_TEXTGEN_TOOL_TEMPERATURE=0.15 scripts/run_llamacpp_qwopucode_gguf.sh",
+          "health_url": "http://127.0.0.1:5000/v1/models",
+          "models_url": "http://127.0.0.1:5000/v1/models",
+          "port": 5000,
+          "startup_timeout_seconds": 900,
+          "notes": "Serves Qwopus3.6-27B-Coder.i1-Q4_K_M.gguf through llama.cpp with 32k context, flash attention, full q8_0 K/V cache, prompt cache, Qwen3-Coder formatting, reasoning enabled, and preserve_thinking template kwargs."
+        },
+        "bridge": {
+          "command": "CODEX_TEXTGEN_CONTEXT_LIMIT_TOKENS=32768 CODEX_TEXTGEN_MAX_OUTPUT_TOKENS=2048 CODEX_TEXTGEN_TOOL_TEMPERATURE=0.15 CODEX_TEXTGEN_TOOL_TOP_P=0.95 CODEX_TEXTGEN_TOOL_TOP_K=20 CODEX_TEXTGEN_TOOL_MIN_P=0 scripts/run_codex_textgen_bridge.sh",
+          "notes": "Codex bridge context and sampler defaults follow the llama.cpp Qwopus Coder thinking-on 32k profile."
+        }
+      },
+      "description": "Fair thinking-on baseline for the original Qwopus3.6 27B Coder Q4_K_M file, for direct comparison against the Heretic Q4_K_M preserve-thinking profile."
+    },
+    {
+      "name": "qwopus36-coder-heretic-llamacpp-gguf-q4km-32k",
+      "display_name": "llama.cpp GGUF 32k: Qwopus3.6 27B Coder Heretic Q4_K_M",
+      "backend_kind": "llamacpp-gguf",
+      "model_alias": "Qwopus3.6-27B-Coder-heretic-Q4_K_M",
+      "model_path": "{home}/.lmstudio/models/Qwopus3.6-27B-Coder-heretic-Q4_K_M.gguf",
+      "mtp_expected": false,
+      "notes": "Staged 8sp4rk/Qwopus3.6-27B-Coder-heretic GGUF candidate. Uses direct llama.cpp with explicit full q8_0 K/V cache, flash attention, prompt cache RAM, Qwen3-Coder formatting, reasoning enabled, and preserve_thinking passed through the llama.cpp launcher. Keep separate from the current default until apples-to-apples benchmark and local-agent gates pass.",
+      "service_overrides": {
+        "textgen": {
+          "display_name": "llama.cpp GGUF Qwopus coder heretic model",
+          "window_name": "llamacpp",
+          "provider_type": "llama.cpp OpenAI-compatible backend",
+          "command": "LLAMACPP_SERVER={home}/llama.cpp-codex/src/build/bin/llama-server LLAMACPP_MODEL_PATH='{home}/.lmstudio/models/Qwopus3.6-27B-Coder-heretic-Q4_K_M.gguf' LLAMACPP_MODEL_ALIAS='Qwopus3.6-27B-Coder-heretic-Q4_K_M' LLAMACPP_CTX_SIZE=32768 LLAMACPP_CACHE_TYPE_K=q8_0 LLAMACPP_CACHE_TYPE_V=q8_0 LLAMACPP_TEMPERATURE=0.6 LLAMACPP_TOP_P=0.95 LLAMACPP_TOP_K=20 LLAMACPP_MIN_P=0 LLAMACPP_CACHE_RAM=4096 LLAMACPP_PARALLEL=1 LLAMACPP_BATCH_SIZE=4096 LLAMACPP_UBATCH_SIZE=2048 LLAMACPP_GPU_LAYERS=all LLAMACPP_CHAT_TEMPLATE={home}/llama.cpp-codex/src/models/templates/Qwen3-Coder.jinja LLAMACPP_REASONING=on LLAMACPP_REASONING_FORMAT=deepseek CODEX_TEXTGEN_CONTEXT_LIMIT_TOKENS=32768 CODEX_TEXTGEN_MAX_OUTPUT_TOKENS=2048 CODEX_TEXTGEN_TOOL_TEMPERATURE=0.15 scripts/run_llamacpp_qwopucode_gguf.sh",
+          "health_url": "http://127.0.0.1:5000/v1/models",
+          "models_url": "http://127.0.0.1:5000/v1/models",
+          "port": 5000,
+          "startup_timeout_seconds": 900,
+          "notes": "Serves Qwopus3.6-27B-Coder-heretic-Q4_K_M.gguf through llama.cpp with 32k context, flash attention, full q8_0 K/V cache, prompt cache, Qwen3-Coder formatting, reasoning enabled, and preserve_thinking template kwargs."
+        },
+        "bridge": {
+          "command": "CODEX_TEXTGEN_CONTEXT_LIMIT_TOKENS=32768 CODEX_TEXTGEN_MAX_OUTPUT_TOKENS=2048 CODEX_TEXTGEN_TOOL_TEMPERATURE=0.15 CODEX_TEXTGEN_TOOL_TOP_P=0.95 CODEX_TEXTGEN_TOOL_TOP_K=20 CODEX_TEXTGEN_TOOL_MIN_P=0 scripts/run_codex_textgen_bridge.sh",
+          "notes": "Codex bridge context and sampler defaults follow the llama.cpp Qwopus Coder Heretic 32k preserve-thinking profile."
+        }
+      },
+      "description": "Staged Heretic Q4_K_M candidate for apples-to-apples testing against the current Qwopus3.6 27B Coder llama.cpp default. Do not promote until benchmark and local-agent evidence supports it."
+    },
+    {
+      "name": "qwopus36-coder-heretic-thinking-budget256-llamacpp-gguf-q4km-32k",
+      "display_name": "llama.cpp GGUF 32k: Qwopus3.6 27B Coder Heretic Q4_K_M thinking budget 256",
+      "backend_kind": "llamacpp-gguf",
+      "model_alias": "Qwopus3.6-27B-Coder-heretic-Q4_K_M-thinking-budget256",
+      "model_path": "{home}/.lmstudio/models/Qwopus3.6-27B-Coder-heretic-Q4_K_M.gguf",
+      "mtp_expected": false,
+      "notes": "Budgeted-thinking Heretic candidate for repo tasks that benefit from reasoning without unrestricted hidden-token drift. It uses the repo-local Qwen3 Codex bounded-thinking template and Qwen 0.6/min_p=0 sampler, then caps llama.cpp reasoning at 256 tokens to reduce code-only spillover and long pre-answer wandering. Keep separate from the fast no-thinking default until repeated apples and local-agent gates prove it.",
+      "service_overrides": {
+        "textgen": {
+          "display_name": "llama.cpp GGUF Qwopus coder heretic thinking budget 256 model",
+          "window_name": "llamacpp",
+          "provider_type": "llama.cpp OpenAI-compatible backend",
+          "command": "LLAMACPP_SERVER={home}/llama.cpp-codex/src/build/bin/llama-server LLAMACPP_MODEL_PATH='{home}/.lmstudio/models/Qwopus3.6-27B-Coder-heretic-Q4_K_M.gguf' LLAMACPP_MODEL_ALIAS='Qwopus3.6-27B-Coder-heretic-Q4_K_M-thinking-budget256' LLAMACPP_CTX_SIZE=32768 LLAMACPP_CACHE_TYPE_K=q8_0 LLAMACPP_CACHE_TYPE_V=q8_0 LLAMACPP_TEMPERATURE=0.6 LLAMACPP_TOP_P=0.95 LLAMACPP_TOP_K=20 LLAMACPP_MIN_P=0 LLAMACPP_CACHE_RAM=4096 LLAMACPP_PARALLEL=1 LLAMACPP_BATCH_SIZE=4096 LLAMACPP_UBATCH_SIZE=2048 LLAMACPP_GPU_LAYERS=all LLAMACPP_CHAT_TEMPLATE={repo_root}/config/local_llm_stack/qwen3_codex_budget_think.jinja LLAMACPP_REASONING=on LLAMACPP_REASONING_FORMAT=deepseek LLAMACPP_REASONING_BUDGET=256 CODEX_TEXTGEN_CONTEXT_LIMIT_TOKENS=32768 CODEX_TEXTGEN_MAX_OUTPUT_TOKENS=2048 CODEX_TEXTGEN_TOOL_TEMPERATURE=0.15 scripts/run_llamacpp_qwopucode_gguf.sh",
+          "health_url": "http://127.0.0.1:5000/v1/models",
+          "models_url": "http://127.0.0.1:5000/v1/models",
+          "port": 5000,
+          "startup_timeout_seconds": 900,
+          "notes": "Serves Qwopus3.6-27B-Coder-heretic-Q4_K_M.gguf through llama.cpp with 32k context, flash attention, full q8_0 K/V cache, prompt cache, repo-local bounded-thinking Qwen3/Codex formatting, reasoning enabled, and --reasoning-budget 256."
+        },
+        "bridge": {
+          "command": "CODEX_TEXTGEN_CONTEXT_LIMIT_TOKENS=32768 CODEX_TEXTGEN_MAX_OUTPUT_TOKENS=2048 CODEX_TEXTGEN_TOOL_TEMPERATURE=0.15 CODEX_TEXTGEN_TOOL_TOP_P=0.95 CODEX_TEXTGEN_TOOL_TOP_K=20 CODEX_TEXTGEN_TOOL_MIN_P=0 scripts/run_codex_textgen_bridge.sh",
+          "notes": "Codex bridge context and sampler defaults follow the llama.cpp Qwopus Coder Heretic 32k budgeted-thinking profile."
+        }
+      },
+      "description": "Budgeted-thinking Heretic Q4_K_M candidate for planning/review/harder reasoning routes; not a replacement for the fast no-thinking default until repeated evidence supports it."
+    },
+    {
+      "name": "qwopus36-coder-heretic-thinking-chat2048-llamacpp-gguf-q4km-32k",
+      "display_name": "llama.cpp GGUF 64k chat / 64k bridge: Qwopus3.6 27B Coder Heretic Q4_K_M chat thinking 2048",
+      "backend_kind": "llamacpp-gguf",
+      "model_alias": "Qwopus3.6-27B-Coder-heretic-Q4_K_M-thinking-chat2048",
+      "model_path": "{home}/.lmstudio/models/Qwopus3.6-27B-Coder-heretic-Q4_K_M.gguf",
+      "mtp_expected": false,
+      "notes": "Open WebUI chat profile for the Heretic GGUF. It uses the repo-local switchable Qwen3 Codex template and Qwen 0.6/min_p=0 sampler, with a 64k backend window, a generous but finite 2048-token llama.cpp reasoning budget, and a 4096-token server predict cap to avoid runaway chat generations. Bridge/Codex requests disable thinking per request while passing through the full hosted 64k context window.",
+      "service_overrides": {
+        "textgen": {
+          "display_name": "llama.cpp GGUF Qwopus coder heretic chat thinking 2048 model",
+          "window_name": "llamacpp",
+          "provider_type": "llama.cpp OpenAI-compatible backend",
+          "command": "LLAMACPP_SERVER={home}/llama.cpp-codex/src/build/bin/llama-server LLAMACPP_MODEL_PATH='{home}/.lmstudio/models/Qwopus3.6-27B-Coder-heretic-Q4_K_M.gguf' LLAMACPP_MODEL_ALIAS='Qwopus3.6-27B-Coder-heretic-Q4_K_M-thinking-chat2048' LLAMACPP_CTX_SIZE=65536 LLAMACPP_CACHE_TYPE_K=q8_0 LLAMACPP_CACHE_TYPE_V=q8_0 LLAMACPP_TEMPERATURE=0.6 LLAMACPP_TOP_P=0.95 LLAMACPP_TOP_K=20 LLAMACPP_MIN_P=0 LLAMACPP_CACHE_RAM=4096 LLAMACPP_PARALLEL=1 LLAMACPP_BATCH_SIZE=4096 LLAMACPP_UBATCH_SIZE=2048 LLAMACPP_GPU_LAYERS=all LLAMACPP_CHAT_TEMPLATE={repo_root}/config/local_llm_stack/qwen3_codex_switchable_think.jinja LLAMACPP_REASONING=on LLAMACPP_REASONING_FORMAT=deepseek LLAMACPP_REASONING_BUDGET=2048 LLAMACPP_EXTRA_ARGS='--predict 4096' CODEX_TEXTGEN_CONTEXT_LIMIT_TOKENS=65536 CODEX_TEXTGEN_MAX_OUTPUT_TOKENS=2048 CODEX_TEXTGEN_TOOL_TEMPERATURE=0.15 scripts/run_llamacpp_qwopucode_gguf.sh",
+          "health_url": "http://127.0.0.1:5000/v1/models",
+          "models_url": "http://127.0.0.1:5000/v1/models",
+          "port": 5000,
+          "startup_timeout_seconds": 900,
+          "notes": "Serves Qwopus3.6-27B-Coder-heretic-Q4_K_M.gguf through llama.cpp with 64k context, q8_0 K/V cache, prompt cache, repo-local switchable Qwen3/Codex formatting, --reasoning-budget 2048, and --predict 4096 for Open WebUI chat stability. Verified on 2026-06-27 with a 53,399-token LiteLLM chat prompt and about 3.2-3.5 GB free VRAM on the RTX 3090 after load."
+        },
+        "bridge": {
+          "command": "CODEX_TEXTGEN_CONTEXT_LIMIT_TOKENS=65536 CODEX_TEXTGEN_MAX_OUTPUT_TOKENS=2048 CODEX_TEXTGEN_TOOL_TEMPERATURE=0.15 CODEX_TEXTGEN_TOOL_TOP_P=0.95 CODEX_TEXTGEN_TOOL_TOP_K=20 CODEX_TEXTGEN_TOOL_MIN_P=0 CODEX_TEXTGEN_ENABLE_THINKING=false CODEX_TEXTGEN_PRESERVE_THINKING=false scripts/run_codex_textgen_bridge.sh",
+          "notes": "Codex bridge requests use the same loaded backend but disable thinking per request, preserving the no-reload split between Open WebUI thinking chat and repo-agent tool use. System-prompt sweep on 2026-06-27 favored tool_temperature=0.4 over preserve-thinking 0.5 on repeated stress median."
+        }
+      },
+      "description": "Generous bounded-thinking Heretic Q4_K_M 64k chat profile for Open WebUI, with the Codex bridge using the same 64k hosted window while keeping no-thinking repo-agent requests."
+    },
+    {
+      "name": "qwopus36-coder-heretic-thinking-unlimited-llamacpp-gguf-q4km-32k",
+      "display_name": "llama.cpp GGUF 32k: Qwopus3.6 27B Coder Heretic Q4_K_M thinking unlimited",
+      "backend_kind": "llamacpp-gguf",
+      "model_alias": "Qwopus3.6-27B-Coder-heretic-Q4_K_M-thinking-unlimited",
+      "model_path": "{home}/.lmstudio/models/Qwopus3.6-27B-Coder-heretic-Q4_K_M.gguf",
+      "mtp_expected": false,
+      "notes": "Open WebUI chat profile for the Heretic GGUF. It uses the repo-local Qwen3 Codex thinking template and Qwen 0.6/min_p=0 sampler, then sets llama.cpp reasoning budget to -1 for unrestricted chat reasoning. Do not use as the repo-agent default; unrestricted thinking is for human chat, review, and exploratory reasoning.",
+      "service_overrides": {
+        "textgen": {
+          "display_name": "llama.cpp GGUF Qwopus coder heretic unlimited-thinking chat model",
+          "window_name": "llamacpp",
+          "provider_type": "llama.cpp OpenAI-compatible backend",
+          "command": "LLAMACPP_SERVER={home}/llama.cpp-codex/src/build/bin/llama-server LLAMACPP_MODEL_PATH='{home}/.lmstudio/models/Qwopus3.6-27B-Coder-heretic-Q4_K_M.gguf' LLAMACPP_MODEL_ALIAS='Qwopus3.6-27B-Coder-heretic-Q4_K_M-thinking-unlimited' LLAMACPP_CTX_SIZE=32768 LLAMACPP_CACHE_TYPE_K=q8_0 LLAMACPP_CACHE_TYPE_V=q8_0 LLAMACPP_TEMPERATURE=0.6 LLAMACPP_TOP_P=0.95 LLAMACPP_TOP_K=20 LLAMACPP_MIN_P=0 LLAMACPP_CACHE_RAM=4096 LLAMACPP_PARALLEL=1 LLAMACPP_BATCH_SIZE=4096 LLAMACPP_UBATCH_SIZE=2048 LLAMACPP_GPU_LAYERS=all LLAMACPP_CHAT_TEMPLATE={repo_root}/config/local_llm_stack/qwen3_codex_budget_think.jinja LLAMACPP_REASONING=on LLAMACPP_REASONING_FORMAT=deepseek LLAMACPP_REASONING_BUDGET=-1 CODEX_TEXTGEN_CONTEXT_LIMIT_TOKENS=32768 CODEX_TEXTGEN_MAX_OUTPUT_TOKENS=2048 CODEX_TEXTGEN_TOOL_TEMPERATURE=0.15 scripts/run_llamacpp_qwopucode_gguf.sh",
+          "health_url": "http://127.0.0.1:5000/v1/models",
+          "models_url": "http://127.0.0.1:5000/v1/models",
+          "port": 5000,
+          "startup_timeout_seconds": 900,
+          "notes": "Serves Qwopus3.6-27B-Coder-heretic-Q4_K_M.gguf through llama.cpp with 32k context, q8_0 K/V cache, prompt cache, repo-local thinking Qwen3/Codex formatting, reasoning enabled, and --reasoning-budget -1 for unrestricted Open WebUI chat."
+        },
+        "bridge": {
+          "command": "CODEX_TEXTGEN_CONTEXT_LIMIT_TOKENS=32768 CODEX_TEXTGEN_MAX_OUTPUT_TOKENS=2048 CODEX_TEXTGEN_TOOL_TEMPERATURE=0.15 CODEX_TEXTGEN_TOOL_TOP_P=0.95 CODEX_TEXTGEN_TOOL_TOP_K=20 CODEX_TEXTGEN_TOOL_MIN_P=0 scripts/run_codex_textgen_bridge.sh",
+          "notes": "Codex bridge limits are raised for parity if this profile is loaded, but this profile is intended for Open WebUI chat rather than repo-agent default use."
+        }
+      },
+      "description": "Unrestricted-thinking Heretic Q4_K_M chat profile for Open WebUI; not a replacement for the fast no-thinking repo-agent default."
+    },
+    {
+      "name": "qwopus36-coder-heretic-nothink-llamacpp-gguf-q4km-32k",
+      "display_name": "llama.cpp GGUF 32k: Qwopus3.6 27B Coder Heretic Q4_K_M no-thinking",
+      "backend_kind": "llamacpp-gguf",
+      "model_alias": "Qwopus3.6-27B-Coder-heretic-Q4_K_M-nothink",
+      "model_path": "{home}/.lmstudio/models/Qwopus3.6-27B-Coder-heretic-Q4_K_M.gguf",
+      "mtp_expected": false,
+      "notes": "No-thinking apples-to-apples Heretic profile matching the current Qwopus Coder llama.cpp default: same 32k context, q8_0 K/V cache, prompt cache RAM, batch/ubatch, GPU offload, temp 0.2, and qwen3_codex_no_think.jinja template. Promote only if repeated benchmark evidence matches or beats the current default.",
+      "service_overrides": {
+        "textgen": {
+          "display_name": "llama.cpp GGUF Qwopus coder heretic no-thinking model",
+          "window_name": "llamacpp",
+          "provider_type": "llama.cpp OpenAI-compatible backend",
+          "command": "LLAMACPP_SERVER={home}/llama.cpp-codex/src/build/bin/llama-server LLAMACPP_MODEL_PATH='{home}/.lmstudio/models/Qwopus3.6-27B-Coder-heretic-Q4_K_M.gguf' LLAMACPP_MODEL_ALIAS='Qwopus3.6-27B-Coder-heretic-Q4_K_M-nothink' LLAMACPP_CTX_SIZE=32768 LLAMACPP_CACHE_TYPE_K=q8_0 LLAMACPP_CACHE_TYPE_V=q8_0 LLAMACPP_TEMPERATURE=0.2 LLAMACPP_CACHE_RAM=4096 LLAMACPP_PARALLEL=1 LLAMACPP_BATCH_SIZE=4096 LLAMACPP_UBATCH_SIZE=2048 LLAMACPP_GPU_LAYERS=all LLAMACPP_CHAT_TEMPLATE={home}/llama.cpp-codex/qwen3_codex_no_think.jinja CODEX_TEXTGEN_CONTEXT_LIMIT_TOKENS=32768 scripts/run_llamacpp_qwopucode_gguf.sh",
+          "health_url": "http://127.0.0.1:5000/v1/models",
+          "models_url": "http://127.0.0.1:5000/v1/models",
+          "port": 5000,
+          "startup_timeout_seconds": 900,
+          "notes": "Serves Qwopus3.6-27B-Coder-heretic-Q4_K_M.gguf through llama.cpp with the same no-thinking template and sampler shape as the current Qwopus Coder default."
+        },
+        "bridge": {
+          "command": "CODEX_TEXTGEN_CONTEXT_LIMIT_TOKENS=32768 scripts/run_codex_textgen_bridge.sh",
+          "notes": "Codex bridge context limit follows the llama.cpp Qwopus Coder Heretic no-thinking 32k profile."
+        }
+      },
+      "description": "No-thinking Heretic profile cloned from the current Qwopus3.6 Coder llama.cpp default for exact apples-to-apples promotion testing."
+    },
+    {
+      "name": "qwopucode-full-v15-27b-koboldcpp-gguf-q4km-32k",
+      "display_name": "KoboldCPP GGUF 32k: Qwopucode full v15 27B Q4_K_M",
+      "backend_kind": "koboldcpp-gguf",
+      "model_alias": "Qwopucode-full-v15-27B-FP8-Block-i1-Q4_K_M",
+      "model_path": "{home}/.lmstudio/models/Qwen36/mradermacherQwopucode-full-v15-27B/Qwopucode-full-v15-27B-FP8-Block.i1-Q4_K_M.gguf",
+      "mtp_expected": false,
+      "notes": "KoboldCPP comparison profile for the Qwopucode GGUF after vLLM rejected qwen35. Uses CUDA, 32k context, q8_0 KV cache, Qwen3-Coder jinja chat formatting with thinking and preserve_thinking enabled, Qwen3.6 precise-coding sampler defaults, and SmartCache. KoboldCPP logs that MRoPE disables context shifting for this model, so repeated-prefix SmartCache/fast-forward behavior is the relevant cache feature.",
+      "service_overrides": {
+        "textgen": {
+          "display_name": "KoboldCPP GGUF Qwopucode model",
+          "window_name": "koboldcpp",
+          "provider_type": "KoboldCPP OpenAI-compatible backend",
+          "command": "KOBOLDCPP_BIN={home}/.local/share/qwendex/koboldcpp/koboldcpp-linux-x64 KOBOLDCPP_MODEL_PATH='{home}/.lmstudio/models/Qwen36/mradermacherQwopucode-full-v15-27B/Qwopucode-full-v15-27B-FP8-Block.i1-Q4_K_M.gguf' KOBOLDCPP_MODEL_ALIAS='Qwopucode-full-v15-27B-FP8-Block-i1-Q4_K_M' KOBOLDCPP_CTX_SIZE=32768 KOBOLDCPP_QUANT_KV=q8_0 KOBOLDCPP_TEMPERATURE=0.6 KOBOLDCPP_TOP_P=0.95 KOBOLDCPP_TOP_K=20 KOBOLDCPP_MIN_P=0 KOBOLDCPP_REPETITION_PENALTY=1.0 KOBOLDCPP_SMARTCACHE=4096 KOBOLDCPP_DEFAULT_GEN_AMT=4096 KOBOLDCPP_REQ_TIMEOUT=600 KOBOLDCPP_BATCH_SIZE=4096 KOBOLDCPP_GPU_LAYERS=-1 KOBOLDCPP_JINJA_TEMPLATE={home}/llama.cpp-codex/src/models/templates/Qwen3-Coder.jinja KOBOLDCPP_JINJA_THINK=true KOBOLDCPP_REASONING_EFFORT=high CODEX_TEXTGEN_TOOL_TEMPERATURE=0.15 CODEX_TEXTGEN_MAX_OUTPUT_TOKENS=2048 CODEX_TEXTGEN_CONTEXT_LIMIT_TOKENS=32768 scripts/run_koboldcpp_gguf.sh",
+          "health_url": "http://127.0.0.1:5000/v1/models",
+          "models_url": "http://127.0.0.1:5000/v1/models",
+          "port": 5000,
+          "startup_timeout_seconds": 900,
+          "notes": "Serves Qwopucode-full-v15-27B-FP8-Block.i1-Q4_K_M.gguf through KoboldCPP with 32k context, CUDA, q8_0 KV cache, thinking and preserve_thinking enabled, temp 0.6, context shifting, 4096 smartcache snapshots, 4096 default generation amount, and 600s backend request timeout."
+        },
+        "bridge": {
+          "command": "CODEX_TEXTGEN_CONTEXT_LIMIT_TOKENS=32768 CODEX_TEXTGEN_MAX_OUTPUT_TOKENS=2048 CODEX_TEXTGEN_TOOL_TEMPERATURE=0.15 CODEX_TEXTGEN_TOOL_TOP_P=0.95 CODEX_TEXTGEN_TOOL_TOP_K=20 CODEX_TEXTGEN_TOOL_MIN_P=0 CODEX_TEXTGEN_TOOL_REASONING_EFFORT=high scripts/run_codex_textgen_bridge.sh",
+          "notes": "Codex bridge context and sampler defaults follow the KoboldCPP Qwopucode 32k preserve-thinking profile."
+        }
+      },
+      "description": "KoboldCPP-managed GGUF profile for testing context shifting, smart cache, and preserve_thinking against the existing llama.cpp Qwopucode path."
+    },
+    {
+      "name": "qwopus36-coder-koboldcpp-gguf-q4km-32k",
+      "display_name": "KoboldCPP GGUF 32k: Qwopus3.6 27B Coder Q4_K_M",
+      "backend_kind": "koboldcpp-gguf",
+      "model_alias": "Qwopus3.6-27B-Coder.i1-Q4_K_M",
+      "model_path": "{home}/.lmstudio/models/Qwen36/mradermacherQwopus3.6-27B-Coder-i1-GGUF/Qwopus3.6-27B-Coder.i1-Q4_K_M.gguf",
+      "mtp_expected": false,
+      "notes": "KoboldCPP apples-to-apples comparison profile for the Qwopus coder GGUF. Uses CUDA, 32k context, q8_0 KV cache, jinja chat formatting, and SmartCache to test whether KoboldCPP's repeated-prefix cache management beats direct llama.cpp for repo-agent work. MRoPE Qwen models disable normal context shifting in KoboldCPP.",
+      "service_overrides": {
+        "textgen": {
+          "display_name": "KoboldCPP GGUF Qwopus coder model",
+          "window_name": "koboldcpp",
+          "provider_type": "KoboldCPP OpenAI-compatible backend",
+          "command": "KOBOLDCPP_BIN={home}/.local/share/qwendex/koboldcpp/koboldcpp-linux-x64 KOBOLDCPP_MODEL_PATH='{home}/.lmstudio/models/Qwen36/mradermacherQwopus3.6-27B-Coder-i1-GGUF/Qwopus3.6-27B-Coder.i1-Q4_K_M.gguf' KOBOLDCPP_MODEL_ALIAS='Qwopus3.6-27B-Coder.i1-Q4_K_M' KOBOLDCPP_CTX_SIZE=32768 KOBOLDCPP_QUANT_KV=q8_0 KOBOLDCPP_TEMPERATURE=0.2 KOBOLDCPP_SMARTCACHE=4096 KOBOLDCPP_DEFAULT_GEN_AMT=2048 KOBOLDCPP_REQ_TIMEOUT=600 KOBOLDCPP_BATCH_SIZE=4096 KOBOLDCPP_GPU_LAYERS=-1 KOBOLDCPP_JINJA_TEMPLATE={home}/llama.cpp-codex/qwen3_codex_no_think.jinja CODEX_TEXTGEN_CONTEXT_LIMIT_TOKENS=32768 scripts/run_koboldcpp_gguf.sh",
+          "health_url": "http://127.0.0.1:5000/v1/models",
+          "models_url": "http://127.0.0.1:5000/v1/models",
+          "port": 5000,
+          "startup_timeout_seconds": 900,
+          "notes": "Serves Qwopus3.6-27B-Coder.i1-Q4_K_M.gguf through KoboldCPP with 32k context, CUDA, q8_0 KV cache, context shifting, 4096 smartcache snapshots, 2048 default generation amount, and 600s backend request timeout."
+        },
+        "bridge": {
+          "command": "CODEX_TEXTGEN_CONTEXT_LIMIT_TOKENS=32768 scripts/run_codex_textgen_bridge.sh",
+          "notes": "Codex bridge context limit follows the KoboldCPP Qwopus coder 32k backend profile."
+        }
+      },
+      "description": "KoboldCPP-managed GGUF profile for testing the Qwopus coder GGUF against the current llama.cpp default and EXL3 baseline."
+    }
+  ],
+  "services": [
+    {
+      "name": "textgen",
+      "display_name": "TextGen EXL3 model",
+      "window_name": "textgen",
+      "provider_type": "text-generation backend",
+      "working_dir": "{repo_root}",
+      "command": "scripts/run_textgen_qwen_exl3.sh",
+      "health_url": "http://127.0.0.1:5000/v1/models",
+      "port": 5000,
+      "startup_timeout_seconds": 900,
+      "log_lines": 240,
+      "models_url": "http://127.0.0.1:5000/v1/models",
+      "notes": "Loads qwen36-27Bb through TextGen ExLlamav3."
+    },
+    {
+      "name": "litellm",
+      "display_name": "LiteLLM proxy",
+      "window_name": "litellm",
+      "provider_type": "OpenAI-compatible proxy",
+      "working_dir": "{repo_root}",
+      "pre_start_commands": [
+        "scripts/setup_local_llm_stack.sh"
+      ],
+      "command": "scripts/run_litellm_local_proxy.sh",
+      "health_url": "http://127.0.0.1:4000/v1/models",
+      "port": 4000,
+      "startup_timeout_seconds": 120,
+      "depends_on": [
+        "textgen"
+      ],
+      "log_lines": 220,
+      "models_url": "http://127.0.0.1:4000/v1/models",
+      "notes": "Routes local model calls to the configured upstream backend."
+    },
+    {
+      "name": "bridge",
+      "display_name": "Codex Responses bridge",
+      "window_name": "bridge",
+      "provider_type": "Codex local-provider bridge",
+      "working_dir": "{repo_root}",
+      "command": "scripts/run_codex_textgen_bridge.sh",
+      "health_url": "http://127.0.0.1:1234/v1/models",
+      "status_url": "http://127.0.0.1:1234/__tabby_proxy_status",
+      "port": 1234,
+      "startup_timeout_seconds": 120,
+      "depends_on": [
+        "litellm"
+      ],
+      "log_lines": 220,
+      "models_url": "http://127.0.0.1:1234/v1/models",
+      "notes": "Codex should use this endpoint, not raw TextGen or raw LiteLLM."
+    }
+  ],
+  "provider_profiles": [
+    {
+      "name": "local-qwen-codex",
+      "display_name": "Local Qwen Codex",
+      "type": "local bridge",
+      "base_url": "http://127.0.0.1:1234",
+      "models_url": "http://127.0.0.1:1234/v1/models",
+      "launch_command": "LOCAL_QWEN_CODEX_GOAL_MODE=guarded LOCAL_QWEN_MODEL=qwen-local LOCAL_QWEN_TOOL_OUTPUT_TOKEN_LIMIT=1200 LOCAL_QWEN_CODEX_CONTEXT_WINDOW=65536 LOCAL_QWEN_CODEX_AUTO_COMPACT_LIMIT=56000 LOCAL_QWEN_MODEL_CATALOG_JSON={repo_root}/config/local_llm_stack/qwen_local_model_catalog.json CODEX_TEXTGEN_DUPLICATE_BROAD_READ_GUARD=1 CODEX_TEXTGEN_READ_DUMP_GUARD=1 scripts/run_local_qwen_codex.sh --cwd {project}",
+      "tmux_session": "local-qwen-codex",
+      "window_name": "codex",
+      "open_new_terminal": true,
+      "auto_start_services": true,
+      "requires_services": [
+        "textgen",
+        "litellm",
+        "bridge"
+      ],
+      "secret_env": []
+    },
+    {
+      "name": "normal-codex",
+      "display_name": "Normal Codex",
+      "type": "GPT/OpenAI-compatible provider",
+      "launch_command": "codex -C {project}",
+      "tmux_session": "gpt-codex",
+      "window_name": "codex",
+      "open_new_terminal": true,
+      "auto_start_services": false,
+      "requires_services": [],
+      "secret_env": [
+        "OPENAI_API_KEY"
+      ],
+      "allow_codex_auth_file": true
+    },
+    {
+      "name": "textgen-api",
+      "display_name": "TextGen API",
+      "type": "text-generation backend",
+      "base_url": "http://127.0.0.1:5000",
+      "models_url": "http://127.0.0.1:5000/v1/models",
+      "requires_services": [
+        "textgen"
+      ],
+      "secret_env": []
+    },
+    {
+      "name": "litellm",
+      "display_name": "LiteLLM",
+      "type": "LiteLLM",
+      "base_url": "http://127.0.0.1:4000",
+      "models_url": "http://127.0.0.1:4000/v1/models",
+      "requires_services": [
+        "textgen",
+        "litellm"
+      ],
+      "secret_env": []
+    },
+    {
+      "name": "lmstudio-external",
+      "display_name": "LM Studio or external endpoint",
+      "type": "external OpenAI-compatible endpoint",
+      "base_url_env": "LMSTUDIO_BASE_URL",
+      "models_url_env": "LMSTUDIO_MODELS_URL",
+      "requires_services": [],
+      "secret_env": []
+    }
+  ],
+  "model_profiles": [
+    {
+      "name": "qwen36-27Bb",
+      "provider": "local-qwen-codex",
+      "default": false
+    },
+    {
+      "name": "llmfanq36-27b-tweak-no-mtp",
+      "provider": "local-qwen-codex",
+      "default": false
+    },
+    {
+      "name": "simonycl-qwen3-30b-plateau-6skill-0617-iter399",
+      "provider": "local-qwen-codex",
+      "default": false
+    },
+    {
+      "name": "llmfanq36-27b-qwopus-coder-no-mtp-exl3-4p5bpw-h6",
+      "provider": "local-qwen-codex",
+      "default": false
+    },
+    {
+      "name": "Jackrong-Qwopus3.6-27B-Coder-textonly-nonmtp",
+      "provider": "local-qwen-codex",
+      "default": false
+    },
+    {
+      "name": "Jackrong-Qwopus3.6-27B-Coder-vision-nonmtp",
+      "provider": "local-qwen-codex",
+      "default": false
+    },
+    {
+      "name": "Qwopus3.6-27B-Coder.i1-Q4_K_M",
+      "provider": "local-qwen-codex",
+      "default": false
+    },
+    {
+      "name": "Qwopus3.6-27B-Coder.i1-Q4_K_M-thinking",
+      "provider": "local-qwen-codex",
+      "default": false
+    },
+    {
+      "name": "Qwopus3.6-27B-Coder-heretic-Q4_K_M",
+      "provider": "local-qwen-codex",
+      "default": false
+    },
+    {
+      "name": "Qwopus3.6-27B-Coder-heretic-Q4_K_M-thinking-budget256",
+      "provider": "local-qwen-codex",
+      "default": false
+    },
+    {
+      "name": "Qwopus3.6-27B-Coder-heretic-Q4_K_M-thinking-chat2048",
+      "provider": "local-qwen-codex",
+      "default": false
+    },
+    {
+      "name": "Qwopus3.6-27B-Coder-heretic-Q4_K_M-thinking-unlimited",
+      "provider": "local-qwen-codex",
+      "default": false
+    },
+    {
+      "name": "Qwopus3.6-27B-Coder-heretic-Q4_K_M-nothink",
+      "provider": "local-qwen-codex",
+      "default": true
+    },
+    {
+      "name": "Qwopucode-full-v15-27B-FP8-Block-i1-Q4_K_M",
+      "provider": "local-qwen-codex",
+      "default": false
+    },
+    {
+      "name": "Qwopucode-full-v15-27B-FP8-Block-i1-Q4_K_M-nothink",
+      "provider": "local-qwen-codex",
+      "default": false
+    },
+    {
+      "name": "qwen-local",
+      "provider": "litellm",
+      "default": false
+    }
+  ],
+  "context_presets": [
+    20480,
+    24576,
+    32768,
+    34816,
+    49152,
+    65536,
+    81920,
+    88064,
+    98304
+  ],
+  "active_backend_profile": "qwopus36-coder-heretic-thinking-chat2048-llamacpp-gguf-q4km-32k",
+  "task_prompt_policy": {
+    "mode": "bounded_repo_task_prompts",
+    "notes": "Use named files, Qwendex receipts, and bounded shell commands. Project-specific row or research workflows must be configured by the consuming repository."
+  }
+}

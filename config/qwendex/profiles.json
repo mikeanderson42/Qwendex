@@ -1,0 +1,38 @@
+{
+  "schema_version": "qwendex.profiles.v1",
+  "profiles": {
+    "primary": {
+      "seat": "primary",
+      "model": "gpt-5.5",
+      "use_for": ["architecture", "security", "public release review", "protocol changes"],
+      "acceptance_authority": true
+    },
+    "qwen": {
+      "seat": "qwen",
+      "model": "qwen-local",
+      "use_for": ["read-heavy audits", "docs drafts", "queue work", "bounded patches", "smoke probes"],
+      "acceptance_authority": false,
+      "requires_receipt": true,
+      "requires_gpt_review": true
+    },
+    "audit": {
+      "seat": "audit",
+      "model": "gpt-5.5",
+      "use_for": ["review current changes", "security review", "claim review"],
+      "acceptance_authority": true
+    },
+    "release": {
+      "seat": "release",
+      "model": "gpt-5.5",
+      "use_for": ["release acceptance", "public docs claims", "migration approval"],
+      "acceptance_authority": true
+    },
+    "sandbox": {
+      "seat": "sandbox",
+      "model": "qwen-local",
+      "use_for": ["fresh-home probes", "isolated parser checks", "non-authoritative experiments"],
+      "acceptance_authority": false,
+      "requires_receipt": true
+    }
+  }
+}

@@ -1,0 +1,64 @@
+# Repo reference copy for ~/litellm/config.yaml.
+# Routes LiteLLM to the active local OpenAI-compatible model API.
+model_list:
+  - model_name: qwen-local
+    litellm_params:
+      model: openai/qwen3.6-27b-neo-code-here-2t-ot-iq4nl
+      api_base: http://127.0.0.1:12345/v1
+      api_key: no-key
+  - model_name: qwen3.6-27b-neo-code-here-2t-ot-iq4nl
+    litellm_params:
+      model: openai/qwen3.6-27b-neo-code-here-2t-ot-iq4nl
+      api_base: http://127.0.0.1:12345/v1
+      api_key: no-key
+  - model_name: qwen36-27Bb
+    litellm_params:
+      model: openai/qwen3.6-27b-neo-code-here-2t-ot-iq4nl
+      api_base: http://127.0.0.1:12345/v1
+      api_key: no-key
+  - model_name: qwen3.6-27b-4.26gguf
+    litellm_params:
+      model: openai/qwen3.6-27b-neo-code-here-2t-ot-iq4nl
+      api_base: http://127.0.0.1:12345/v1
+      api_key: no-key
+  - model_name: qwen3.6-27b-mtp-imat
+    litellm_params:
+      model: openai/qwen3.6-27b-neo-code-here-2t-ot-iq4nl
+      api_base: http://127.0.0.1:12345/v1
+      api_key: no-key
+  - model_name: qwen36/qwen3.6-27b-mtp-imat
+    litellm_params:
+      model: openai/qwen3.6-27b-neo-code-here-2t-ot-iq4nl
+      api_base: http://127.0.0.1:12345/v1
+      api_key: no-key
+  - model_name: qwen3.6-27b-neo-code-here-2t-ot-q4km
+    litellm_params:
+      model: openai/qwen3.6-27b-neo-code-here-2t-ot-q4km
+      api_base: http://127.0.0.1:12345/v1
+      api_key: no-key
+  - model_name: qwen3.6-27b-heretic-uncensored
+    litellm_params:
+      model: openai/qwen3.6-27b-heretic-uncensored
+      api_base: http://127.0.0.1:12345/v1
+      api_key: no-key
+  - model_name: qwen3.6-27b-mtp-imat-iq4xs
+    litellm_params:
+      model: openai/qwen3.6-27b-mtp-imat-iq4xs
+      api_base: http://127.0.0.1:12345/v1
+      api_key: no-key
+  - model_name: qwen3.6-27b-uncen-mtp-q4ks
+    litellm_params:
+      model: openai/qwen3.6-27b-uncen-mtp-q4ks
+      api_base: http://127.0.0.1:12345/v1
+      api_key: no-key
+
+litellm_settings:
+  drop_params: true
+  request_timeout: 1800
+  set_verbose: false
+
+general_settings:
+  disable_spend_logs: true
+
+router_settings:
+  routing_strategy: simple-shuffle

@@ -1,0 +1,80 @@
+{# Qwen3/Codex tool template without a seeded think block. #}
+
+{%- set ns = namespace(system_text='') -%}
+{%- for message in messages -%}
+    {%- if message.role == 'system' or message.role == 'developer' -%}
+        {%- if message.content is string -%}
+            {%- set ns.system_text = ns.system_text + '\n' + message.content -%}
+        {%- else -%}
+            {%- set ns.system_text = ns.system_text + '\n' + (message.content | string) -%}
+        {%- endif -%}
+    {%- endif -%}
+{%- endfor -%}
+
+{{- '<|im_start|>system\n' }}
+{%- if ns.system_text | trim -%}
+    {{- ns.system_text | trim + '\n\n' }}
+{%- endif -%}
+{{- 'No hidden reasoning. Do not output <think> tags. Do not reveal chain-of-thought. Give only the final useful answer or tool call. In long contexts, prefer the newest explicit user instruction and latest tool output over stale earlier plans.' }}
+{%- if tools -%}
+    {{- '\n\n# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>' }}
+    {%- for tool in tools -%}
+        {{- '\n' }}
+        {{- tool | tojson }}
+    {%- endfor -%}
+    {{- '\n</tools>\n\nFor each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{"name": <function-name>, "arguments": <args-json-object>}\n</tool_call>' }}
+{%- endif -%}
+{{- '<|im_end|>\n' }}
+
+{%- for message in messages -%}
+    {%- if message.role == 'system' or message.role == 'developer' -%}
+    {%- elif message.role == 'user' -%}
+        {{- '<|im_start|>user\n' }}
+        {%- if message.content is string -%}
+            {{- message.content }}
+        {%- else -%}
+            {{- message.content | string }}
+        {%- endif -%}
+        {{- '<|im_end|>\n' }}
+    {%- elif message.role == 'assistant' -%}
+        {%- set content = message.content if message.content is not none else '' -%}
+        {%- if content is string and '</think>' in content -%}
+            {%- set content = content.split('</think>')[-1].lstrip('\n') -%}
+        {%- endif -%}
+        {{- '<|im_start|>assistant\n' + content }}
+        {%- if message.tool_calls -%}
+            {%- for tool_call in message.tool_calls -%}
+                {%- if (loop.first and content) or (not loop.first) -%}
+                    {{- '\n' }}
+                {%- endif -%}
+                {%- if tool_call.function -%}
+                    {%- set tool_call = tool_call.function -%}
+                {%- endif -%}
+                {{- '<tool_call>\n{"name": "' }}
+                {{- tool_call.name }}
+                {{- '", "arguments": ' }}
+                {%- if tool_call.arguments is string -%}
+                    {{- tool_call.arguments }}
+                {%- else -%}
+                    {{- tool_call.arguments | tojson }}
+                {%- endif -%}
+                {{- '}\n</tool_call>' }}
+            {%- endfor -%}
+        {%- endif -%}
+        {{- '<|im_end|>\n' }}
+    {%- elif message.role == 'tool' -%}
+        {%- if loop.first or (messages[loop.index0 - 1].role != 'tool') -%}
+            {{- '<|im_start|>user' }}
+        {%- endif -%}
+        {{- '\n<tool_response>\n' }}
+        {{- message.content }}
+        {{- '\n</tool_response>' }}
+        {%- if loop.last or (messages[loop.index0 + 1].role != 'tool') -%}
+            {{- '<|im_end|>\n' }}
+        {%- endif -%}
+    {%- endif -%}
+{%- endfor -%}
+
+{%- if add_generation_prompt -%}
+    {{- '<|im_start|>assistant\n' }}
+{%- endif -%}

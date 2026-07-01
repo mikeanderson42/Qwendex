@@ -1,0 +1,102 @@
+{# Qwen3/Codex compatibility template with bounded thinking.
+   - Moves all system/developer content to the first system block.
+   - Preserves Qwen3 <tools>/<tool_call> formatting for llama.cpp tool parsing.
+   - Starts an open think block for the current assistant turn so llama.cpp
+     --reasoning-budget can close and extract bounded reasoning.
+#}
+
+{%- set ns = namespace(system_text='') -%}
+{%- for message in messages -%}
+    {%- if message.role == 'system' or message.role == 'developer' -%}
+        {%- if message.content is string -%}
+            {%- set ns.system_text = ns.system_text + '\n' + message.content -%}
+        {%- else -%}
+            {%- set ns.system_text = ns.system_text + '\n' + (message.content | string) -%}
+        {%- endif -%}
+    {%- endif -%}
+{%- endfor -%}
+
+{{- '<|im_start|>system\n' }}
+{%- if ns.system_text | trim -%}
+    {{- ns.system_text | trim + '\n\n' }}
+{%- endif -%}
+{{- 'Use private reasoning only when it improves correctness. Keep the final answer or tool call concise, valid, and free of raw thinking tags.' }}
+{%- if tools -%}
+    {{- '\n\n# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>' }}
+    {%- for tool in tools -%}
+        {{- '\n' }}
+        {{- tool | tojson }}
+    {%- endfor -%}
+    {{- '\n</tools>\n\nFor each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{"name": <function-name>, "arguments": <args-json-object>}\n</tool_call>' }}
+{%- endif -%}
+{{- '<|im_end|>\n' }}
+
+{%- set state = namespace(multi_step_tool=true, last_query_index=messages|length - 1) -%}
+{%- for message in messages[::-1] -%}
+    {%- set index = (messages|length - 1) - loop.index0 -%}
+    {%- if state.multi_step_tool and message.role == 'user' and not(message.content is string and message.content.startswith('<tool_response>') and message.content.endswith('</tool_response>')) -%}
+        {%- set state.multi_step_tool = false -%}
+        {%- set state.last_query_index = index -%}
+    {%- endif -%}
+{%- endfor -%}
+
+{%- for message in messages -%}
+    {%- if message.role == 'system' or message.role == 'developer' -%}
+    {%- elif message.role == 'user' -%}
+        {{- '<|im_start|>user\n' }}
+        {%- if message.content is string -%}
+            {{- message.content }}
+        {%- else -%}
+            {{- message.content | string }}
+        {%- endif -%}
+        {{- '<|im_end|>\n' }}
+    {%- elif message.role == 'assistant' -%}
+        {%- set content = message.content if message.content is not none else '' -%}
+        {%- set reasoning_content = '' -%}
+        {%- if message.reasoning_content is defined and message.reasoning_content is not none -%}
+            {%- set reasoning_content = message.reasoning_content -%}
+        {%- elif content is string and '</think>' in content -%}
+            {%- set reasoning_content = content.split('</think>')[0].rstrip('\n').split('<think>')[-1].lstrip('\n') -%}
+            {%- set content = content.split('</think>')[-1].lstrip('\n') -%}
+        {%- endif -%}
+        {%- if (preserve_thinking | default(false) or loop.index0 > state.last_query_index) and (loop.last or reasoning_content) -%}
+            {{- '<|im_start|>assistant\n<think>\n' + reasoning_content.strip('\n') + '\n</think>\n\n' + content.lstrip('\n') }}
+        {%- else -%}
+            {{- '<|im_start|>assistant\n' + content }}
+        {%- endif -%}
+        {%- if message.tool_calls -%}
+            {%- for tool_call in message.tool_calls -%}
+                {%- if (loop.first and content) or (not loop.first) -%}
+                    {{- '\n' }}
+                {%- endif -%}
+                {%- if tool_call.function -%}
+                    {%- set tool_call = tool_call.function -%}
+                {%- endif -%}
+                {{- '<tool_call>\n{"name": "' }}
+                {{- tool_call.name }}
+                {{- '", "arguments": ' }}
+                {%- if tool_call.arguments is string -%}
+                    {{- tool_call.arguments }}
+                {%- else -%}
+                    {{- tool_call.arguments | tojson }}
+                {%- endif -%}
+                {{- '}\n</tool_call>' }}
+            {%- endfor -%}
+        {%- endif -%}
+        {{- '<|im_end|>\n' }}
+    {%- elif message.role == 'tool' -%}
+        {%- if loop.first or (messages[loop.index0 - 1].role != 'tool') -%}
+            {{- '<|im_start|>user' }}
+        {%- endif -%}
+        {{- '\n<tool_response>\n' }}
+        {{- message.content }}
+        {{- '\n</tool_response>' }}
+        {%- if loop.last or (messages[loop.index0 + 1].role != 'tool') -%}
+            {{- '<|im_end|>\n' }}
+        {%- endif -%}
+    {%- endif -%}
+{%- endfor -%}
+
+{%- if add_generation_prompt -%}
+    {{- '<|im_start|>assistant\n<think>\n' }}
+{%- endif -%}

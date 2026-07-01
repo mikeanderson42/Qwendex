@@ -1,0 +1,208 @@
+{
+  "schema_version": "qwendex.config.v1",
+  "version": "0.1.0-rc.1",
+  "default_seat": "primary",
+  "routing": {
+    "mode": "token_saver",
+    "prefer_local_qwen_when_available": true,
+    "local_probe_url": "http://127.0.0.1:1234/v1/models",
+    "local_model": "qwen-local",
+    "fallback_seat": "primary",
+    "probe_timeout_seconds": 2,
+    "prefer_for_task_classes": [
+      "exec",
+      "read-heavy audit",
+      "docs draft",
+      "queue workflow",
+      "bounded patch",
+      "smoke probe",
+      "artifact summary"
+    ],
+    "primary_required_for_task_classes": [
+      "release acceptance",
+      "architecture",
+      "security",
+      "public docs claims",
+      "protocol changes"
+    ]
+  },
+  "context": {
+    "compact_limit": 56000,
+    "max_output_tokens": 2048,
+    "tool_output_token_limit": 1200,
+    "reminder_tool_call_threshold": 50,
+    "reminder_repeat_interval": 25,
+    "phase_boundary_labels": [
+      "after-exploration",
+      "before-implementation",
+      "after-milestone",
+      "before-verification",
+      "handoff",
+      "phase-boundary"
+    ]
+  },
+  "guard": {
+    "profile": "balanced",
+    "max_wall_time_seconds": -1,
+    "max_tool_calls": -1,
+    "markers": [
+      "LOCAL_MODEL_TOOL_CALL_TOO_LARGE",
+      "LOCAL_MODEL_TOOL_CALL_TRUNCATED",
+      "LOCAL_MODEL_TOOL_MARKUP_SUPPRESSED",
+      "LOCAL_MODEL_LOOP_DETECTED",
+      "LOCAL_QWEN_VALIDATOR_FAILED"
+    ]
+  },
+  "sandbox": {
+    "mode": "workspace-write",
+    "trusted_roots": ["."]
+  },
+  "receipts": {
+    "dir": "results/qwendex",
+    "ledger": "~/.local/state/qwendex/qwendex.sqlite"
+  },
+  "state": {
+    "db": "~/.local/state/qwendex/qwendex.sqlite"
+  },
+  "eval": {
+    "mode": "offline-first",
+    "default_case": "all",
+    "live_requires_running_stack": true
+  },
+  "learning": {
+    "mode": "stage_only",
+    "default_backend": "mock",
+    "auto_harvest": true,
+    "auto_stage_safe_proposals": true,
+    "codex_budget_requires_approval": true
+  },
+  "orchestration": {
+    "mode": "auto",
+    "manager_only_available": true,
+    "shortcut": "Ctrl+Shift+M",
+    "shortcut_command": "scripts/qwendex manager --mode manager_only --json",
+    "max_subagents": 4,
+    "stale_after_minutes": 30,
+    "local_subagents": {
+      "enabled": true,
+      "shortcut": "Ctrl+Shift+L",
+      "shortcut_command": "scripts/qwendex manager local --toggle --json"
+    },
+    "mode_order": ["auto", "lite", "medium", "heavy", "manager"],
+    "mode_profiles": {
+      "auto": {"label": "Auto", "offload_target": "auto", "max_subagents": 4},
+      "lite": {"label": "Lite", "offload_target": "10-20%", "max_subagents": 2},
+      "medium": {"label": "Medium", "offload_target": "25-45%", "max_subagents": 4},
+      "heavy": {"label": "Heavy", "offload_target": "50-75%", "max_subagents": 6},
+      "manager": {"label": "Manager Mode", "offload_target": "85-95%", "max_subagents": 8}
+    },
+    "estimator": {
+      "enabled": true,
+      "skill": "qwendex-auto-manager-estimator",
+      "model": "gpt-5.5",
+      "reasoning": "medium",
+      "max_input_tokens": 1200,
+      "max_output_tokens": 512
+    },
+    "local_qwen_eligibility": {
+      "allowed_task_classes": [
+        "read-heavy audit",
+        "docs draft",
+        "queue workflow",
+        "bounded patch",
+        "smoke probe",
+        "artifact summary",
+        "review"
+      ],
+      "denied_task_classes": [
+        "architecture",
+        "security",
+        "release acceptance",
+        "public docs claims",
+        "protocol changes"
+      ],
+      "max_risk": "medium"
+    },
+    "escalation_thresholds": {
+      "high": ["architecture", "security", "release", "protocol", "migration", "schema"],
+      "xhigh": ["security release", "credential", "public release acceptance", "protocol migration"]
+    },
+    "stale_session_thresholds_minutes": {
+      "auto": 30,
+      "lite": 45,
+      "medium": 30,
+      "heavy": 20,
+      "manager": 15
+    },
+    "close_stale_policy": "close completed agents immediately; close idle read-only agents after stale_after_minutes; never close an active writer without integrating or stopping it",
+    "auto_deploy_when": [
+      "multiple independent review lanes exist",
+      "task changes both code and public docs",
+      "security or release claims are in scope",
+      "long-running verification can run beside integration work",
+      "dirty worktree integration needs independent audit"
+    ],
+    "manager_responsibilities": [
+      "split lanes with disjoint write surfaces",
+      "keep critical-path fixes local",
+      "integrate subagent findings",
+      "close agents after review"
+    ],
+    "borrowed_patterns": [
+      "LangGraph persistence/memory patterns inform durable state without adding a runtime dependency",
+      "AutoGen teams/termination patterns inform lane stop conditions",
+      "Anthropic effective agents/contextual retrieval patterns inform context packets and review gates",
+      "SWE-agent trajectories and OpenHands-style eval harnesses inform receipts and replayable validation",
+      "SWE-bench Verified, tau-bench, MCP security guidance, and Berkeley function-calling eval ideas inform release checks"
+    ]
+  },
+  "mcp_tools": [
+    "queue workflow",
+    "document section upsert",
+    "bounded report runner",
+    "capped local search",
+    "qwendex status",
+    "receipt lookup",
+    "eval summary",
+    "learning proposal summary"
+  ],
+  "seats": {
+    "primary": {
+      "model": "gpt-5.5",
+      "authority": "release_review",
+      "backend": "codex",
+      "context_window": 200000,
+      "guard_profile": "balanced"
+    },
+    "qwen": {
+      "model": "qwen-local",
+      "authority": "bounded_operator",
+      "backend": "local-responses-adapter",
+      "context_window": 65536,
+      "compact_limit": 56000,
+      "guard_profile": "balanced",
+      "prompt_template": "internal delegate: config/local_llm_stack/qwen3_codex_tool_plain.jinja"
+    },
+    "audit": {
+      "model": "gpt-5.5",
+      "authority": "read_only_review",
+      "backend": "codex",
+      "context_window": 200000,
+      "guard_profile": "max_safety"
+    },
+    "release": {
+      "model": "gpt-5.5",
+      "authority": "public_release_acceptance",
+      "backend": "codex",
+      "context_window": 200000,
+      "guard_profile": "max_safety"
+    },
+    "sandbox": {
+      "model": "qwen-local",
+      "authority": "isolated_probe",
+      "backend": "local-responses-adapter",
+      "context_window": 32768,
+      "guard_profile": "max_safety"
+    }
+  }
+}
