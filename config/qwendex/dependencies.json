@@ -1,0 +1,34 @@
+{
+  "schema_version": "qwendex.dependencies.v1",
+  "required_commands": [
+    "bash",
+    "python3",
+    "git",
+    "rsync",
+    "curl",
+    "codex"
+  ],
+  "validation_python_modules": [
+    "pytest",
+    "ruff"
+  ],
+  "developer_commands": [
+    "cargo",
+    "rustfmt",
+    "rg",
+    "tmux",
+    "gh"
+  ],
+  "codex_source_build_commands": [
+    "cargo",
+    "rustfmt",
+    "git",
+    "curl"
+  ],
+  "notes": [
+    "Qwendex runtime is Python and shell based.",
+    "Patched Codex TUI builds require the Rust toolchain.",
+    "The visible test bench uses tmux.",
+    "GitHub publication uses gh when available."
+  ]
+}

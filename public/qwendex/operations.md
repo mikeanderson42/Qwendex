@@ -1,5 +1,20 @@
 # Operations
 
+## Install And Bootstrap
+
+Qwendex includes a repo-owned dependency installer:
+
+```bash
+scripts/qwendex_install_deps --install
+scripts/qwendex_install_deps --check --json
+```
+
+The installer covers required host commands, validation Python modules, Rust
+tooling for patched Codex builds, `ripgrep`, the Codex CLI when npm is
+available, and testbench/GitHub helpers where the platform package manager can
+provide them. `qwendex-dev bootstrap` records the result in
+`.qwendex-dev/results/meta/install_deps.json`.
+
 ## Daily Checks
 
 ```bash

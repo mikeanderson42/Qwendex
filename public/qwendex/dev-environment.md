@@ -6,6 +6,20 @@ system Codex install available as the fallback execution plane.
 
 ## Create Or Refresh Runtime Wiring
 
+Install or check host dependencies first:
+
+```bash
+scripts/qwendex_install_deps --install
+scripts/qwendex_install_deps --check --json
+```
+
+The installer is best-effort and non-interactive. It installs user-scope Python
+tools (`pytest`, `ruff`), Rust tooling through `rustup`/`cargo`, `ripgrep`, and
+the Codex CLI through npm when available. It also attempts system package
+installs for required host tools such as `git`, `rsync`, `curl`, `python3`, and
+`tmux` when a supported package manager and non-interactive sudo/root access are
+available. Remaining blockers are reported in JSON instead of being hidden.
+
 ```bash
 scripts/qwendex_dev_env sync
 ```
@@ -70,7 +84,8 @@ qwendex-dev stage
 qwendex-dev snapshot
 ```
 
-- `bootstrap` checks required toolchain pieces and writes
+- `bootstrap` runs `scripts/qwendex_install_deps --install --json`, writes
+  `.qwendex-dev/results/meta/install_deps.json`, then writes
   `.qwendex-dev/results/meta/bootstrap.json`.
 - `doctor` writes subsystem readiness to
   `.qwendex-dev/results/meta/dev_status.json`.
@@ -124,6 +139,8 @@ qwendex-dev tools
 ```
 
 This checks `cargo`, `rustfmt`, and the active Codex wrapper.
+
+The dependency manifest lives at `config/qwendex/dependencies.json`.
 
 ## Knowledge Pack
 

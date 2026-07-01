@@ -7,6 +7,7 @@ guarded seats, receipts, routing checks, and offline/live validation.
 ## Quick Start
 
 ```bash
+scripts/qwendex_install_deps --install
 scripts/qwendex check --json
 scripts/qwendex doctor --json
 scripts/qwendex route --seat auto --task-class exec --prefer-local --json

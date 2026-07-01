@@ -333,12 +333,27 @@ def test_qwendex_testbench_public_surface_is_visible_and_sandboxed():
 def test_qwendex_dev_env_public_surface_is_visible_and_isolated():
     script = ROOT / "scripts" / "qwendex_dev_env"
     text = script.read_text(encoding="utf-8")
+    installer = ROOT / "scripts" / "qwendex_install_deps"
+    installer_text = installer.read_text(encoding="utf-8")
+    dependencies = json.loads((ROOT / "config" / "qwendex" / "dependencies.json").read_text(encoding="utf-8"))
 
     assert script.exists()
+    assert installer.exists()
+    assert os.access(installer, os.X_OK)
+    assert dependencies["schema_version"] == "qwendex.dependencies.v1"
+    assert {"bash", "python3", "git", "rsync", "curl", "codex"} <= set(dependencies["required_commands"])
+    assert {"pytest", "ruff"} <= set(dependencies["validation_python_modules"])
+    assert "npm install -g --prefix \"$HOME/.local\" @openai/codex" in installer_text
+    assert "python3 -m pip install --user --upgrade pytest ruff" in installer_text
+    assert "cargo install ripgrep --locked" in installer_text
     assert "QWENDEX_DEV_ROOT" in text
     assert "$HOME/qwendex-dev" in text
     assert "WORK_ROOT=\"$DEV_ROOT/.qwendex-dev\"" in text
+    assert "INSTALL_DEPS_JSON" in text
+    assert "qwendex_install_deps" in text
+    assert "install_deps.json" in text
     assert "$WORK_ROOT/env.sh" in text
+    assert "$HOME/.local/bin" in text
     assert "codex-main" in text
     assert "QWENDEX_DEV_CODEX_BIN" in text
     assert "senior Qwendex product maintainer" in text
@@ -379,6 +394,8 @@ def test_qwendex_dev_env_public_surface_is_visible_and_isolated():
 
     doc = (ROOT / "public" / "qwendex" / "dev-environment.md").read_text(encoding="utf-8")
     assert "scripts/qwendex_dev_env sync" in doc
+    assert "scripts/qwendex_install_deps --install" in doc
+    assert "install_deps.json" in doc
     assert "qwendex-dev bootstrap" in doc
     assert "qwendex-dev doctor" in doc
     assert "qwendex-dev verify --tier release" in doc

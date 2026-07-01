@@ -3,6 +3,11 @@
 Run the offline surface check first:
 
 ```bash
+scripts/qwendex_install_deps --install
+scripts/qwendex_install_deps --check --json
+```
+
+```bash
 scripts/qwendex check --json
 ```
 

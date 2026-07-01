@@ -2,6 +2,7 @@
 set -euo pipefail
 
 SCRIPT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 if [[ -f "$SCRIPT_ROOT/.qwendex-dev/source-root" ]]; then
   DEFAULT_SOURCE_ROOT="$(<"$SCRIPT_ROOT/.qwendex-dev/source-root")"
 else
@@ -19,6 +20,7 @@ STATUS_FILE="$WORK_ROOT/codex_status.json"
 LEDGER_DB="$WORK_ROOT/state/qwendex_ledger.sqlite"
 LOCAL_HARNESS_LEDGER_DB="$WORK_ROOT/state/local_qwen_harness.sqlite"
 BOOTSTRAP_JSON="$META_ROOT/bootstrap.json"
+INSTALL_DEPS_JSON="$META_ROOT/install_deps.json"
 DEV_STATUS_JSON="$META_ROOT/dev_status.json"
 RELEASE_SUMMARY_JSON="$META_ROOT/release_validation_summary.json"
 MAIN_CODEX_BIN="${QWENDEX_MAIN_CODEX_BIN:-$(command -v codex || true)}"
@@ -209,7 +211,7 @@ export LOCAL_QWEN_MODEL_CATALOG_JSON='$DEV_ROOT/config/local_llm_stack/qwen_loca
 export LOCAL_QWEN_LOCAL_HARNESS_MCP='$DEV_ROOT/scripts/artifact_queue_mcp.py'
 export LOCAL_QWEN_LOCAL_HARNESS_TRUSTED_ROOTS='$DEV_ROOT:$SOURCE_ROOT'
 export LOCAL_QWEN_HARNESS_LEDGER_DB='$LOCAL_HARNESS_LEDGER_DB'
-export PATH='$HOME/.cargo/bin':'$DEV_ROOT/bin':'$DEV_ROOT':'$DEV_ROOT/scripts':"\$PATH"
+export PATH='$HOME/.local/bin':'$HOME/.cargo/bin':'$DEV_ROOT/bin':'$DEV_ROOT':'$DEV_ROOT/scripts':"\$PATH"
 EOF
   cat > "$WORK_ROOT/README.md" <<EOF
 # Qwendex Dev Environment
@@ -292,7 +294,7 @@ PY
 }
 
 write_bootstrap_json() {
-  python3 - "$BOOTSTRAP_JSON" "$DEV_ROOT" "$SOURCE_ROOT" "$WORK_ROOT" "$MAIN_CODEX_BIN" "$DEV_CODEX_DEFAULT" <<'PY'
+  python3 - "$BOOTSTRAP_JSON" "$INSTALL_DEPS_JSON" "$DEV_ROOT" "$SOURCE_ROOT" "$WORK_ROOT" "$MAIN_CODEX_BIN" "$DEV_CODEX_DEFAULT" <<'PY'
 import json
 import shutil
 import subprocess
@@ -300,14 +302,15 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-out, dev_root, source_root, work_root, main_codex, dev_codex = map(Path, sys.argv[1:7])
+out, install_deps, dev_root, source_root, work_root, main_codex, dev_codex = map(Path, sys.argv[1:8])
 
 def version(cmd):
     exe = shutil.which(cmd) or (str(cmd) if Path(cmd).exists() else "")
     if not exe:
         return {"available": False, "path": "", "version": ""}
     try:
-        result = subprocess.run([exe, "--version"], text=True, capture_output=True, timeout=15, check=False)
+        args = [exe, "-V"] if Path(exe).name == "tmux" else [exe, "--version"]
+        result = subprocess.run(args, text=True, capture_output=True, timeout=15, check=False)
         raw = (result.stdout or result.stderr).strip().splitlines()[0] if (result.stdout or result.stderr).strip() else ""
         return {"available": result.returncode == 0, "path": exe, "version": raw, "returncode": result.returncode}
     except Exception as exc:
@@ -322,11 +325,19 @@ data = {
     "dev_root": str(dev_root),
     "source_root": str(source_root),
     "work_root": str(work_root),
+    "install_deps_receipt": str(install_deps),
     "tools": tools,
     "missing_required": [name for name in ("python3", "git", "rsync", "codex") if not tools[name]["available"]],
     "missing_optional": [name for name in ("tmux", "cargo", "rustfmt") if not tools[name]["available"]],
 }
-data["status"] = "pass" if not data["missing_required"] else "blocked"
+if install_deps.is_file():
+    try:
+        data["install_deps"] = json.loads(install_deps.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        data["install_deps"] = {"status": "blocked", "error": str(exc)}
+else:
+    data["install_deps"] = {"status": "missing"}
+data["status"] = "pass" if not data["missing_required"] and data["install_deps"].get("status") == "pass" else "blocked"
 out.parent.mkdir(parents=True, exist_ok=True)
 out.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 print(f"bootstrap: {data['status']} - {out}")
@@ -531,7 +542,35 @@ cmd_sync() {
 }
 
 cmd_bootstrap() {
+  local install=1
+  local system=1
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --check|--check-only|--no-install)
+        install=0
+        ;;
+      --no-system)
+        system=0
+        ;;
+      --install-system)
+        system=1
+        ;;
+      *)
+        die "unknown bootstrap option: $1"
+        ;;
+    esac
+    shift
+  done
   prepare
+  if [[ "$install" -eq 1 ]]; then
+    local install_args=(--install --json)
+    if [[ "$system" -eq 0 ]]; then
+      install_args+=(--no-system)
+    fi
+    "$DEV_ROOT/scripts/qwendex_install_deps" "${install_args[@]}" > "$INSTALL_DEPS_JSON" || true
+  else
+    "$DEV_ROOT/scripts/qwendex_install_deps" --check --json > "$INSTALL_DEPS_JSON" || true
+  fi
   if ! command -v cargo >/dev/null 2>&1 && [[ -x "$HOME/.cargo/bin/cargo" ]]; then
     export PATH="$HOME/.cargo/bin:$PATH"
   fi
