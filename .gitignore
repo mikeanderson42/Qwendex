@@ -11,3 +11,5 @@ tmp/
 *.sqlite
 *.sqlite3
 config/local_llm_stack/local_harness.env
+config/local_llm_stack/stack_manager.local.json
+config/local_llm_stack/*.private.json

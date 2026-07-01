@@ -14,6 +14,7 @@ scripts/qwendex context snapshot --task-id task_...
 scripts/qwendex learn dry-run
 scripts/qwendex manager mode --cycle
 scripts/qwendex manager local --toggle
+./llmstack status
 scripts/qwendex eval
 ```
 
@@ -26,6 +27,7 @@ gates.
 
 - [Quickstart](quickstart.md)
 - [Architecture](architecture.md)
+- [LLMStack](llmstack.md)
 - [Configuration](configuration.md)
 - [Operations](operations.md)
 - [Seat Handoff](seat-handoff.md)
@@ -43,6 +45,7 @@ gates.
 | Existing command | Qwendex command |
 | --- | --- |
 | `scripts/llm doctor --json` | `scripts/qwendex doctor --json` |
+| `./llmstack status --json` | `scripts/qwendex llmstack check --json` |
 | `scripts/llm start --json` | `scripts/qwendex up --json` |
 | `scripts/llm stop --json` | `scripts/qwendex down --json` |
 | `scripts/llm harness-eval --json` | `scripts/qwendex eval --json` |

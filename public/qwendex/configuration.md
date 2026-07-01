@@ -39,6 +39,19 @@ QWENDEX_FALLBACK_SEAT=primary
 Do not place credentials in Qwendex config. Use the existing provider-specific
 environment handling outside the public Qwendex config surface.
 
+## LLMStack Config
+
+LLMStack config lives in `config/local_llm_stack/`.
+
+- `stack_manager.json`: public copy-safe default
+- `stack_manager.sample.json`: same default for reset/comparison
+- `profiles.example.json`: backend snippets to copy into local config
+- `stack_manager.local.json`: ignored machine-local override
+- `local_harness.env.sample`: environment override template
+
+The stack loader prefers `stack_manager.local.json` when present. Use
+`QWENDEX_LLMSTACK_CONFIG` to point at another file.
+
 ## State
 
 `state.db` stores Qwendex task, manager-session, context snapshot, handoff,

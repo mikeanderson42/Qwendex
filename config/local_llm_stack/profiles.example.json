@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "backend_profiles": [
+    {
+      "name": "example-textgen-exl3-32k",
+      "display_name": "Example TextGen EXL3 32k",
+      "backend_kind": "textgen",
+      "model_alias": "qwen-local",
+      "model_path": "{home}/Text-Generation-WebUI/user_data/models/example-qwen-coder",
+      "notes": "Set TEXTGEN_MODEL or model_path to your local TextGen model directory.",
+      "service_overrides": {
+        "textgen": {
+          "command": "TEXTGEN_MODEL='example-qwen-coder' TEXTGEN_CTX_SIZE=32768 scripts/run_textgen_qwen_exl3.sh",
+          "health_url": "http://127.0.0.1:5000/v1/models",
+          "models_url": "http://127.0.0.1:5000/v1/models",
+          "port": 5000
+        }
+      }
+    },
+    {
+      "name": "example-llamacpp-qwen-coder-gguf-32k",
+      "display_name": "Example llama.cpp GGUF 32k",
+      "backend_kind": "llamacpp-gguf",
+      "model_alias": "qwen-local",
+      "model_path": "{home}/models/qwen-coder/example-model.gguf",
+      "notes": "Set LLAMACPP_MODEL_PATH to your local GGUF.",
+      "service_overrides": {
+        "textgen": {
+          "command": "LLAMACPP_MODEL_PATH='{home}/models/qwen-coder/example-model.gguf' LLAMACPP_MODEL_ALIAS='qwen-local' LLAMACPP_CTX_SIZE=32768 scripts/run_llamacpp_qwopucode_gguf.sh",
+          "health_url": "http://127.0.0.1:5000/v1/models",
+          "models_url": "http://127.0.0.1:5000/v1/models",
+          "port": 5000
+        }
+      }
+    },
+    {
+      "name": "example-vllm-qwen-coder-gguf-32k",
+      "display_name": "Example vLLM GGUF 32k",
+      "backend_kind": "vllm-gguf",
+      "model_alias": "qwen-local",
+      "model_path": "{home}/models/qwen-coder/example-model.gguf",
+      "notes": "Set VLLM_MODEL_PATH and VLLM_TOKENIZER for your local model.",
+      "service_overrides": {
+        "textgen": {
+          "command": "VLLM_MODEL_PATH='{home}/models/qwen-coder/example-model.gguf' VLLM_TOKENIZER='{home}/models/qwen-coder/tokenizer' VLLM_MODEL_ALIAS='qwen-local' VLLM_MAX_MODEL_LEN=32768 scripts/run_vllm_qwopucode_gguf.sh",
+          "health_url": "http://127.0.0.1:5000/v1/models",
+          "models_url": "http://127.0.0.1:5000/v1/models",
+          "port": 5000
+        }
+      }
+    },
+    {
+      "name": "example-koboldcpp-qwen-coder-gguf-32k",
+      "display_name": "Example KoboldCPP GGUF 32k",
+      "backend_kind": "koboldcpp-gguf",
+      "model_alias": "qwen-local",
+      "model_path": "{home}/models/qwen-coder/example-model.gguf",
+      "notes": "Set KOBOLDCPP_BIN and KOBOLDCPP_MODEL_PATH for your local install.",
+      "service_overrides": {
+        "textgen": {
+          "command": "KOBOLDCPP_MODEL_PATH='{home}/models/qwen-coder/example-model.gguf' KOBOLDCPP_MODEL_ALIAS='qwen-local' KOBOLDCPP_CTX_SIZE=32768 scripts/run_koboldcpp_gguf.sh",
+          "health_url": "http://127.0.0.1:5000/v1/models",
+          "models_url": "http://127.0.0.1:5000/v1/models",
+          "port": 5000
+        }
+      }
+    }
+  ]
+}

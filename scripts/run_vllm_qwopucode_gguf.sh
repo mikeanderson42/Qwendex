@@ -19,9 +19,9 @@ windows_to_wsl_path() {
 
 HOST="${VLLM_HOST:-127.0.0.1}"
 PORT="${VLLM_PORT:-5000}"
-MODEL_ALIAS="${VLLM_MODEL_ALIAS:-Qwopucode-full-v15-27B-FP8-Block-i1-Q4_K_M}"
-MODEL_PATH="$(windows_to_wsl_path "${VLLM_MODEL_PATH:-/mnt/c/Users/Tweak/.lmstudio/models/Qwen36/mradermacherQwopucode-full-v15-27B/Qwopucode-full-v15-27B-FP8-Block.i1-Q4_K_M.gguf}")"
-TOKENIZER="$(windows_to_wsl_path "${VLLM_TOKENIZER:-$HOME/Text-Generation-WebUI/user_data/models/Jackrong-Qwopus3.6-27B-Coder-EXL3-4.5bpw-h6-textonly-nonmtp}")"
+MODEL_ALIAS="${VLLM_MODEL_ALIAS:-qwen-local}"
+MODEL_PATH="$(windows_to_wsl_path "${VLLM_MODEL_PATH:-$HOME/models/qwen-coder/example-model.gguf}")"
+TOKENIZER="$(windows_to_wsl_path "${VLLM_TOKENIZER:-$HOME/models/qwen-coder/tokenizer}")"
 MAX_MODEL_LEN="${VLLM_MAX_MODEL_LEN:-32768}"
 GPU_MEMORY_UTILIZATION="${VLLM_GPU_MEMORY_UTILIZATION:-0.90}"
 DTYPE="${VLLM_DTYPE:-auto}"

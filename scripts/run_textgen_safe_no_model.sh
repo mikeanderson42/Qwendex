@@ -2,13 +2,14 @@
 set -euo pipefail
 
 TEXTGEN_HOME="${TEXTGEN_HOME:-$HOME/Text-Generation-WebUI}"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VENV_PY="$TEXTGEN_HOME/venv/bin/python"
 HOST="${TEXTGEN_HOST:-127.0.0.1}"
 WEB_PORT="${TEXTGEN_WEB_PORT:-7860}"
 API_PORT="${TEXTGEN_API_PORT:-5000}"
-CHAT_TEMPLATE="${TEXTGEN_CHAT_TEMPLATE:-$HOME/llama.cpp-codex/qwen3_codex_no_think.jinja}"
+CHAT_TEMPLATE="${TEXTGEN_CHAT_TEMPLATE:-$ROOT/config/local_llm_stack/qwen3_codex_tool_plain.jinja}"
 MMPROJ="${TEXTGEN_MMPROJ:-}"
-MODEL="${TEXTGEN_MODEL:-qwen36-27Bb}"
+MODEL="${TEXTGEN_MODEL:-example-qwen-coder}"
 LOADER="${TEXTGEN_LOADER:-ExLlamav3}"
 MODEL_DIR="${TEXTGEN_MODEL_DIR:-}"
 MODEL_DRAFT="${TEXTGEN_MODEL_DRAFT:-}"

@@ -1,14 +1,13 @@
-# Persistent TextGen flags for the local qwen36-27Bb EXL3 stack.
+# Persistent TextGen flags for a local example model.
 --api
 --nowebui
 --listen-host 127.0.0.1
 --listen-port 7860
 --api-port 5000
---model qwen36-27Bb
+--model example-qwen-coder
 --loader ExLlamav3
---ctx-size 88064
+--ctx-size 32768
 --cache-type q8
---gpu-split 22
 --top-k 20
 --top-p 0.95
 --min-p 0.05
@@ -16,6 +15,4 @@
 --presence-penalty 1.0
 --frequency-penalty 0.0
 --temperature 0.55
---enable-thinking
---preserve-thinking
 --chat-template-file __QWENDEX_ROOT__/config/local_llm_stack/qwen3_codex_tool_plain.jinja

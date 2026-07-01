@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -72,6 +73,14 @@ def test_qwendex_parser_exposes_public_commands():
     assert parser.parse_args(["manager", "local", "--set", "off"]).action == "local"
     assert parser.parse_args(["manager", "estimate", "--prompt", "Fix a typo"]).action == "estimate"
     assert parser.parse_args(["estimate", "--prompt", "Fix a typo"]).command == "estimate"
+    assert parser.parse_args(["llmstack", "check"]).command == "llmstack"
+    assert parser.parse_args(["llmstack", "check"]).action == "check"
+    assert parser.parse_args(["llmstack", "doctor"]).action == "doctor"
+    assert parser.parse_args(["llmstack", "up", "--dry-run"]).action == "up"
+    assert parser.parse_args(["llmstack", "down", "--dry-run"]).action == "down"
+    restart = parser.parse_args(["llmstack", "restart", "bridge", "--dry-run"])
+    assert restart.action == "restart"
+    assert restart.service == "bridge"
     assert parser.parse_args(["version"]).command == "version"
 
 
@@ -88,6 +97,87 @@ def test_qwendex_check_and_doctor_emit_stable_json(tmp_path):
     assert doctor["data"]["manager_estimate"]["reasoning_policy"]["main_session"]["reasoning_source"] == "user_selected"
     assert 1 <= len(check["data"]["high_value_add"]) <= 2
     assert 1 <= len(doctor["data"]["high_value_add"]) <= 2
+
+
+def test_qwendex_llmstack_public_contract_and_dry_run_json(tmp_path):
+    env = {"QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite")}
+
+    check = json_result("llmstack", "check", "--json", env=env)
+    doctor = json_result("llmstack", "doctor", "--json", env=env)
+    restart = json_result("llmstack", "restart", "bridge", "--dry-run", "--json", env=env)
+
+    assert check["command"] == "llmstack"
+    assert check["status"] == "pass"
+    assert doctor["status"] == "pass"
+    contract = check["data"]["contract"]
+    for key in (
+        "services_configured",
+        "backend_endpoint",
+        "model_alias",
+        "codex_bridge",
+        "guard_config",
+        "receipts_results",
+        "missing_optional_host_programs",
+    ):
+        assert key in contract
+    assert contract["config"]["sample_config"] == "config/local_llm_stack/stack_manager.sample.json"
+    assert contract["config"]["local_config"] == "config/local_llm_stack/stack_manager.local.json"
+    assert contract["config"]["local_config_ignored"] is True
+    assert contract["public_boundary"]["bundles_host_programs"] is False
+    assert contract["public_boundary"]["bundles_model_weights"] is False
+    assert contract["private_hits"] == []
+    assert {"textgen", "litellm", "bridge"} <= set(contract["services_configured"])
+    assert restart["status"] == "pass"
+    assert restart["data"]["delegate"]["status"] == "ready"
+    assert restart["data"]["delegate"]["command"][:3] == [str(ROOT / "scripts" / "llm"), "restart", "bridge"]
+
+
+def test_llmstack_public_configs_are_copy_safe_and_connected():
+    qwendex = load_qwendex()
+    public_paths = [
+        ROOT / "config/local_llm_stack/stack_manager.json",
+        ROOT / "config/local_llm_stack/stack_manager.sample.json",
+        ROOT / "config/local_llm_stack/profiles.example.json",
+        ROOT / "config/local_llm_stack/litellm.local.yaml",
+        ROOT / "config/local_llm_stack/litellm.textgen.local.yaml",
+        ROOT / "config/local_llm_stack/textgen_cmd_flags.txt",
+        ROOT / "scripts/run_textgen_safe_no_model.sh",
+        ROOT / "scripts/run_llamacpp_qwopucode_gguf.sh",
+        ROOT / "scripts/run_vllm_qwopucode_gguf.sh",
+        ROOT / "scripts/run_koboldcpp_gguf.sh",
+        ROOT / "llmstack",
+        ROOT / "scripts/windows/open.ps1",
+    ]
+    forbidden_patterns = (
+        r"/home/tweak",
+        r"/mnt/c/Users/Tweak",
+        r"\bAnderson\b",
+        r"\bSTAR\b",
+        r"\bGTM\b",
+        r"Qwopus",
+        r"Qwopucode",
+        r"Heretic",
+        r"Jackrong",
+        r"llmfan",
+        r"simonycl",
+        r"qwen36-27Bb",
+    )
+
+    for path in public_paths:
+        assert path.exists(), path
+        text = path.read_text(encoding="utf-8")
+        for pattern in forbidden_patterns:
+            assert re.search(pattern, text) is None, f"{pattern} leaked through {path.relative_to(ROOT)}"
+
+    sample = json.loads((ROOT / "config/local_llm_stack/stack_manager.sample.json").read_text(encoding="utf-8"))
+    active = json.loads((ROOT / "config/local_llm_stack/stack_manager.json").read_text(encoding="utf-8"))
+    profiles = json.loads((ROOT / "config/local_llm_stack/profiles.example.json").read_text(encoding="utf-8"))
+
+    assert active == sample
+    assert sample["default_backend_profile"] == "example-llamacpp-qwen-coder-gguf-32k"
+    assert {service["name"] for service in sample["services"]} == {"textgen", "litellm", "bridge"}
+    assert {profile["backend_kind"] for profile in profiles["backend_profiles"]} >= {"textgen", "llamacpp-gguf", "vllm-gguf", "koboldcpp-gguf"}
+    assert qwendex.llmstack_public_contract()["status"] == "pass"
 
 
 def test_qwendex_config_precedence_and_profiles(tmp_path):

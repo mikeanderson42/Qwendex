@@ -16,6 +16,7 @@ scripts/qwendex eval --all --json
 Public docs live under [`public/qwendex`](public/qwendex/README.md):
 
 - [Architecture](public/qwendex/architecture.md)
+- [LLMStack](public/qwendex/llmstack.md)
 - [Configuration](public/qwendex/configuration.md)
 - [Operations](public/qwendex/operations.md)
 - [Manager Mode](public/qwendex/manager-mode.md)

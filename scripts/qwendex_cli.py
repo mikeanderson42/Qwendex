@@ -26,11 +26,16 @@ DEFAULT_PROJECT_CONFIG = CONFIG_DIR / "qwendex.json"
 DEFAULT_USER_CONFIG = Path.home() / ".config" / "qwendex" / "config.json"
 PUBLIC_DOC_DIR = ROOT / "public" / "qwendex"
 DEFAULT_RESULTS_ROOT = ROOT / "results" / "qwendex"
+LLMSTACK_CONFIG_DIR = ROOT / "config" / "local_llm_stack"
+LLMSTACK_PUBLIC_CONFIG = LLMSTACK_CONFIG_DIR / "stack_manager.json"
+LLMSTACK_SAMPLE_CONFIG = LLMSTACK_CONFIG_DIR / "stack_manager.sample.json"
+LLMSTACK_LOCAL_CONFIG = LLMSTACK_CONFIG_DIR / "stack_manager.local.json"
 
 PUBLIC_DOC_FILES = (
     "README.md",
     "quickstart.md",
     "architecture.md",
+    "llmstack.md",
     "configuration.md",
     "operations.md",
     "seat-handoff.md",
@@ -45,9 +50,11 @@ PUBLIC_DOC_FILES = (
 )
 
 REQUIRED_SURFACE_FILES = (
+    "llmstack",
     "scripts/qwendex",
     "scripts/qwendex_cli.py",
     "scripts/llm",
+    "scripts/windows/open.ps1",
     "scripts/run_local_qwen_codex.sh",
     "scripts/local_qwen_harness_eval.py",
     "scripts/local_qwen_harness_gate.py",
@@ -57,6 +64,34 @@ REQUIRED_SURFACE_FILES = (
     "config/qwendex/qwendex.json",
     "config/qwendex/profiles.json",
     "config/qwendex/model-catalog.json",
+    "config/local_llm_stack/stack_manager.json",
+    "config/local_llm_stack/stack_manager.sample.json",
+    "config/local_llm_stack/profiles.example.json",
+)
+
+LLMSTACK_PUBLIC_FILES = (
+    "llmstack",
+    "config/local_llm_stack/stack_manager.json",
+    "config/local_llm_stack/stack_manager.sample.json",
+    "config/local_llm_stack/profiles.example.json",
+    "config/local_llm_stack/litellm.local.yaml",
+    "config/local_llm_stack/litellm.textgen.local.yaml",
+    "config/local_llm_stack/textgen_cmd_flags.txt",
+    "scripts/local_llm_stack.py",
+    "scripts/llm",
+    "scripts/windows/open.ps1",
+    "scripts/run_textgen_safe_no_model.sh",
+    "scripts/run_llamacpp_qwopucode_gguf.sh",
+    "scripts/run_vllm_qwopucode_gguf.sh",
+    "scripts/run_koboldcpp_gguf.sh",
+)
+
+LLMSTACK_PRIVATE_PATTERNS = (
+    re.compile(r"/home/tweak"),
+    re.compile(r"/mnt/c/Users/Tweak", re.IGNORECASE),
+    re.compile(r"\bAnderson\b"),
+    re.compile(r"\bSTAR\b"),
+    re.compile(r"\bGTM\b"),
 )
 
 SECRET_RE = re.compile(
@@ -1572,6 +1607,133 @@ def public_docs_audit(doc_root: Path = PUBLIC_DOC_DIR) -> dict[str, Any]:
     }
 
 
+def json_file_status(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {"path": rel(path), "exists": False, "valid": False, "error": "missing"}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        return {"path": rel(path), "exists": True, "valid": False, "error": str(exc)}
+    return {"path": rel(path), "exists": True, "valid": True, "data": data}
+
+
+def gitignore_mentions(path: str) -> bool:
+    ignore_file = ROOT / ".gitignore"
+    if not ignore_file.exists():
+        return False
+    lines = [
+        line.strip().lstrip("/")
+        for line in ignore_file.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    return path in lines
+
+
+def command_available(name: str) -> bool:
+    result = subprocess.run(
+        ["bash", "-lc", f"command -v {shlex_quote(name)} >/dev/null 2>&1"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=5,
+    )
+    return result.returncode == 0
+
+
+def shlex_quote(value: str) -> str:
+    return "'" + value.replace("'", "'\"'\"'") + "'"
+
+
+def llmstack_private_hits() -> list[str]:
+    hits: list[str] = []
+    for item in LLMSTACK_PUBLIC_FILES:
+        path = ROOT / item
+        if not path.exists():
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for line_no, line in enumerate(text.splitlines(), start=1):
+            for pattern in LLMSTACK_PRIVATE_PATTERNS:
+                if pattern.search(line):
+                    hits.append(f"{item}:{line_no}: {pattern.pattern}")
+    return hits
+
+
+def llmstack_public_contract() -> dict[str, Any]:
+    sample_status = json_file_status(LLMSTACK_SAMPLE_CONFIG)
+    public_status = json_file_status(LLMSTACK_PUBLIC_CONFIG)
+    profiles_status = json_file_status(LLMSTACK_CONFIG_DIR / "profiles.example.json")
+    sample_data = sample_status.get("data") if sample_status.get("valid") else {}
+    public_data = public_status.get("data") if public_status.get("valid") else {}
+    services = sample_data.get("services", []) if isinstance(sample_data, Mapping) else []
+    service_names = [
+        str(item.get("name"))
+        for item in services
+        if isinstance(item, Mapping) and item.get("name")
+    ]
+    backend_profiles = sample_data.get("backend_profiles", []) if isinstance(sample_data, Mapping) else []
+    aliases = [
+        str(item.get("model_alias"))
+        for item in backend_profiles
+        if isinstance(item, Mapping) and item.get("model_alias")
+    ]
+    private_hits = llmstack_private_hits()
+    missing_files = [item for item in LLMSTACK_PUBLIC_FILES if not (ROOT / item).exists()]
+    config_errors: list[str] = []
+    for status in (sample_status, public_status, profiles_status):
+        if not status["valid"]:
+            config_errors.append(f"{status['path']}: {status['error']}")
+    if sample_status.get("valid") and public_status.get("valid") and public_data != sample_data:
+        config_errors.append("config/local_llm_stack/stack_manager.json must match stack_manager.sample.json")
+    required_services = {"textgen", "litellm", "bridge"}
+    missing_services = sorted(required_services - set(service_names))
+    if missing_services:
+        config_errors.append("missing sample services: " + ", ".join(missing_services))
+    status = "pass" if not (private_hits or missing_files or config_errors) else "fail"
+    optional_programs = {
+        "tmux": command_available("tmux"),
+        "powershell.exe": command_available("powershell.exe"),
+        "litellm": command_available("litellm"),
+        "vllm": command_available("vllm"),
+    }
+    return {
+        "status": status,
+        "config": {
+            "public_config": rel(LLMSTACK_PUBLIC_CONFIG),
+            "sample_config": rel(LLMSTACK_SAMPLE_CONFIG),
+            "local_config": rel(LLMSTACK_LOCAL_CONFIG),
+            "local_config_present": LLMSTACK_LOCAL_CONFIG.exists(),
+            "local_config_ignored": gitignore_mentions("config/local_llm_stack/stack_manager.local.json"),
+            "override_env": ["QWENDEX_LLMSTACK_CONFIG", "LOCAL_LLM_STACK_CONFIG"],
+        },
+        "public_boundary": {
+            "module": "qwendex.llmstack",
+            "bundles_host_programs": False,
+            "bundles_model_weights": False,
+            "managed_scope": "configuration, launch wrappers, bridge/proxy, guard markers, receipts, and validation",
+            "private_scope": "model weights, backend installs, credentials, logs, transcripts, and machine-local profiles",
+        },
+        "services_configured": service_names,
+        "backend_endpoint": "http://127.0.0.1:5000/v1",
+        "model_alias": aliases[0] if aliases else "qwen-local",
+        "codex_bridge": "http://127.0.0.1:1234/v1",
+        "guard_config": {
+            "env_file": "config/local_llm_stack/local_harness.env",
+            "sample_env": "config/local_llm_stack/local_harness.env.sample",
+            "markers": list(DEFAULT_CONFIG["guard"]["markers"]),
+        },
+        "receipts_results": {
+            "default_results_root": str(DEFAULT_RESULTS_ROOT.relative_to(ROOT)),
+            "ledger": DEFAULT_CONFIG["receipts"]["ledger"],
+        },
+        "optional_host_programs": optional_programs,
+        "missing_optional_host_programs": [name for name, available in optional_programs.items() if not available],
+        "private_hits": private_hits,
+        "missing_files": missing_files,
+        "config_errors": config_errors,
+    }
+
+
 def command_check(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, Any]:
     surface = required_surface_check()
     artifacts = [path for path in REQUIRED_SURFACE_FILES if (ROOT / path).exists()]
@@ -1694,6 +1856,39 @@ def command_stack(args: argparse.Namespace, config: dict[str, Any]) -> dict[str,
         next_actions=["Run scripts/qwendex check --json"],
         errors=[] if status == "pass" else [data.get("stderr") or data.get("stdout") or "stack command failed"],
         data=data,
+    )
+
+
+def command_llmstack(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, Any]:
+    contract = llmstack_public_contract()
+    if args.action in {"check", "doctor"}:
+        status = contract["status"]
+        summary = "Qwendex LLMStack public contract is ready." if status == "pass" else "Qwendex LLMStack public contract has issues."
+        return stable_envelope(
+            command="llmstack",
+            status=status,
+            summary=summary,
+            artifacts=[item for item in LLMSTACK_PUBLIC_FILES if (ROOT / item).exists()],
+            next_actions=["Run scripts/qwendex llmstack restart bridge --dry-run --json"] if status == "pass" else ["Repair listed LLMStack contract issues."],
+            errors=contract["private_hits"] + contract["missing_files"] + contract["config_errors"],
+            data={"action": args.action, "contract": contract},
+        )
+    action_map = {"up": "start", "down": "stop", "restart": "restart"}
+    delegate = stack_command(action_map[args.action], args.service, args.dry_run)
+    status = "pass" if delegate["status"] in {"pass", "ready"} and contract["status"] == "pass" else "fail"
+    errors = []
+    if contract["status"] != "pass":
+        errors.extend(contract["private_hits"] + contract["missing_files"] + contract["config_errors"])
+    if delegate["status"] not in {"pass", "ready"}:
+        errors.append(delegate.get("stderr") or delegate.get("stdout") or "stack delegate failed")
+    return stable_envelope(
+        command="llmstack",
+        status=status,
+        summary=f"Qwendex LLMStack {args.action} {'dry run is ready' if args.dry_run else delegate['status']}.",
+        artifacts=[],
+        next_actions=["Run scripts/qwendex llmstack check --json"],
+        errors=errors,
+        data={"action": args.action, "service": args.service, "contract": contract, "delegate": delegate},
     )
 
 
@@ -2909,6 +3104,17 @@ def command_line() -> argparse.ArgumentParser:
         command.add_argument("--dry-run", action="store_true")
         command.add_argument("--json", action="store_true")
 
+    llmstack = sub.add_parser("llmstack")
+    llmstack_sub = llmstack.add_subparsers(dest="action", required=True)
+    for name in ("check", "doctor"):
+        command = llmstack_sub.add_parser(name)
+        command.add_argument("--json", action="store_true")
+    for name in ("up", "down", "restart"):
+        command = llmstack_sub.add_parser(name)
+        command.add_argument("service", nargs="?", default="all")
+        command.add_argument("--dry-run", action="store_true")
+        command.add_argument("--json", action="store_true")
+
     exec_parser = sub.add_parser("exec")
     exec_parser.add_argument("prompt", nargs="+")
     exec_parser.add_argument("--seat", choices=["auto", *sorted(DEFAULT_CONFIG["seats"])], default="auto")
@@ -3066,6 +3272,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         return command_doctor(args, config)
     if args.command in {"up", "down", "restart"}:
         return command_stack(args, config)
+    if args.command == "llmstack":
+        return command_llmstack(args, config)
     if args.command == "exec":
         return command_exec(args, config)
     if args.command == "route":

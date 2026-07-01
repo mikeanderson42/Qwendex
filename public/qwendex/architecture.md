@@ -5,6 +5,7 @@ Qwendex has one public boundary and several internal parts.
 | Layer | Role |
 | --- | --- |
 | Runtime | Public CLI, JSON contract, config precedence, receipts |
+| LLMStack | Optional local runtime control plane for backend launchers, LiteLLM, bridge checks, and local receipts |
 | Launcher | Starts, stops, checks, and delegates to the local stack manager |
 | Adapter | Translates Codex-compatible local model traffic and reports status contracts |
 | Tool server | Delegates bounded MCP-backed workflows with trusted-root checks |

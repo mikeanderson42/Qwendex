@@ -1,68 +1,8 @@
-# Repo reference copy for testing TextGen/OpenAI-compatible EXL3 backend.
+# Reference copy for routing LiteLLM to a TextGen/OpenAI-compatible backend.
 model_list:
   - model_name: qwen-local
     litellm_params:
       model: openai/qwen-local
-      api_base: http://127.0.0.1:5000/v1
-      api_key: no-key
-  - model_name: qwen36-27Bb
-    litellm_params:
-      model: openai/qwen36-27Bb
-      api_base: http://127.0.0.1:5000/v1
-      api_key: no-key
-  - model_name: llmfanq36-27b-tweak-no-mtp
-    litellm_params:
-      model: openai/llmfanq36-27b-tweak-no-mtp
-      api_base: http://127.0.0.1:5000/v1
-      api_key: no-key
-  - model_name: simonycl-qwen3-30b-plateau-6skill-0617-iter399
-    litellm_params:
-      model: openai/simonycl-qwen3-30b-plateau-6skill-0617-iter399
-      api_base: http://127.0.0.1:5000/v1
-      api_key: no-key
-  - model_name: llmfanq36-27b-qwopus-coder-no-mtp-exl3-4p5bpw-h6
-    litellm_params:
-      model: openai/llmfanq36-27b-qwopus-coder-no-mtp-exl3-4p5bpw-h6
-      api_base: http://127.0.0.1:5000/v1
-      api_key: no-key
-  - model_name: Jackrong-Qwopus3.6-27B-Coder-textonly-nonmtp
-    litellm_params:
-      model: openai/Jackrong-Qwopus3.6-27B-Coder-textonly-nonmtp
-      api_base: http://127.0.0.1:5000/v1
-      api_key: no-key
-  - model_name: Jackrong-Qwopus3.6-27B-Coder-vision-nonmtp
-    litellm_params:
-      model: openai/Jackrong-Qwopus3.6-27B-Coder-vision-nonmtp
-      api_base: http://127.0.0.1:5000/v1
-      api_key: no-key
-  - model_name: Qwopus3.6-27B-Coder.i1-Q4_K_M
-    litellm_params:
-      model: openai/Qwopus3.6-27B-Coder.i1-Q4_K_M
-      api_base: http://127.0.0.1:5000/v1
-      api_key: no-key
-  - model_name: Qwopus3.6-27B-Coder-heretic-Q4_K_M-thinking-budget256
-    litellm_params:
-      model: openai/Qwopus3.6-27B-Coder-heretic-Q4_K_M-thinking-budget256
-      api_base: http://127.0.0.1:5000/v1
-      api_key: no-key
-  - model_name: Qwopus3.6-27B-Coder-heretic-Q4_K_M-thinking-chat2048
-    litellm_params:
-      model: openai/Qwopus3.6-27B-Coder-heretic-Q4_K_M-thinking-chat2048
-      api_base: http://127.0.0.1:5000/v1
-      api_key: no-key
-  - model_name: Qwopus3.6-27B-Coder-heretic-Q4_K_M-thinking-unlimited
-    litellm_params:
-      model: openai/Qwopus3.6-27B-Coder-heretic-Q4_K_M-thinking-unlimited
-      api_base: http://127.0.0.1:5000/v1
-      api_key: no-key
-  - model_name: Qwen3.6-27B-Anderson-Operator-Uncen-step1400-textonly-nonmtp
-    litellm_params:
-      model: openai/Qwen3.6-27B-Anderson-Operator-Uncen-step1400-textonly-nonmtp
-      api_base: http://127.0.0.1:5000/v1
-      api_key: no-key
-  - model_name: Qwopucode-full-v15-27B-FP8-Block-i1-Q4_K_M
-    litellm_params:
-      model: openai/Qwopucode-full-v15-27B-FP8-Block-i1-Q4_K_M
       api_base: http://127.0.0.1:5000/v1
       api_key: no-key
 

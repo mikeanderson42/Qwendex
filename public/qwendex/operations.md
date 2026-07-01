@@ -11,15 +11,19 @@ scripts/qwendex eval --json
 ## Stack Control
 
 ```bash
+./llmstack
+./llmstack status --json
 scripts/qwendex up --json
 scripts/qwendex down --json
 scripts/qwendex restart --json
+scripts/qwendex llmstack check --json
 ```
 
 Use `--dry-run` before changing a running stack:
 
 ```bash
 scripts/qwendex restart bridge --dry-run --json
+scripts/qwendex llmstack restart bridge --dry-run --json
 ```
 
 ## Token-Saver Routing
