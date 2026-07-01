@@ -24,9 +24,14 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_CONFIG = ROOT / "config" / "local_llm_stack" / "stack_manager.json"
+CONFIG_DIR = ROOT / "config" / "local_llm_stack"
+PUBLIC_CONFIG = CONFIG_DIR / "stack_manager.json"
+SAMPLE_CONFIG = CONFIG_DIR / "stack_manager.sample.json"
+LOCAL_CONFIG = CONFIG_DIR / "stack_manager.local.json"
+DEFAULT_CONFIG = PUBLIC_CONFIG
 CODEX_AUTH_FILE = Path.home() / ".codex" / "auth.json"
 WINDOWS_LAUNCHER = r"C:\Windows\System32\open.ps1"
+REPO_WINDOWS_LAUNCHER = ROOT / "scripts" / "windows" / "open.ps1"
 
 
 class StackError(RuntimeError):
@@ -227,7 +232,17 @@ def expand_obj(obj: Any, cfg_vars: dict[str, str]) -> Any:
     return obj
 
 
-def load_config(path: Path = DEFAULT_CONFIG) -> StackConfig:
+def default_config_path() -> Path:
+    override = os.environ.get("QWENDEX_LLMSTACK_CONFIG") or os.environ.get("LOCAL_LLM_STACK_CONFIG")
+    if override:
+        return Path(override).expanduser()
+    if LOCAL_CONFIG.exists():
+        return LOCAL_CONFIG
+    return PUBLIC_CONFIG
+
+
+def load_config(path: Path | None = None) -> StackConfig:
+    path = path or default_config_path()
     data = json.loads(path.read_text())
     cfg_vars = {"repo_root": str(ROOT), "home": str(Path.home())}
     data = expand_obj(data, cfg_vars)
@@ -1035,25 +1050,14 @@ def current_gpu_summary() -> dict[str, Any]:
 
 
 def model_role_hint(profile: BackendProfile) -> str:
-    hints = {
-        "textgen-exl3-q8": "conservative EXL3 fallback, steady core stages",
-        "llmfanq36-27b-tweak-no-mtp-q8-96k-no-vision": "ctx 96k, Vision off, long-context repo-agent fallback",
-        "jackrong-qwopus36-coder-exl3-4p5bpw-h6-textonly-nonmtp": "official Jackrong coder fallback, text-only, benchmark target",
-        "jackrong-qwopus36-coder-exl3-4p5bpw-h6-vision-nonmtp": "official Jackrong coder fallback, vision-preserved",
-        "qwopucode-full-v15-27b-vllm-gguf-q4km-32k": "vLLM GGUF, ctx 32k, user-supplied Qwopucode 27B",
-        "qwopucode-full-v15-27b-llamacpp-gguf-q4km-32k": "llama.cpp GGUF, ctx 32k, explicit KV/prompt cache",
-        "qwopucode-full-v15-27b-nothink-llamacpp-gguf-q4km-32k": "staged Qwopucode no-thinking comparison, cloned from Qwopus/Heretic default, ctx 32k",
-        "qwopus36-coder-llamacpp-gguf-q4km-32k": "fast coder/headroom fallback, llama.cpp GGUF, ctx 32k, q8 KV/prompt cache",
-        "qwopus36-coder-thinking-llamacpp-gguf-q4km-32k": "staged preserve-thinking baseline, Qwen3-Coder template, ctx 32k, q8 KV/prompt cache",
-        "qwopus36-coder-heretic-llamacpp-gguf-q4km-32k": "staged Heretic preserve-thinking candidate, ctx 32k, q8 KV/prompt cache",
-        "qwopus36-coder-heretic-thinking-budget256-llamacpp-gguf-q4km-32k": "staged Heretic budgeted-thinking candidate, 256 reasoning tokens, ctx 32k, q8 KV/prompt cache",
-        "qwopus36-coder-heretic-thinking-chat2048-llamacpp-gguf-q4km-32k": "Open WebUI Heretic chat-thinking profile, 2048 reasoning tokens, 4096 predict cap, ctx 64k, q8 KV/prompt cache",
-        "qwopus36-coder-heretic-thinking-unlimited-llamacpp-gguf-q4km-32k": "Open WebUI Heretic unlimited-thinking chat profile, ctx 32k, q8 KV/prompt cache",
-        "qwopus36-coder-heretic-nothink-llamacpp-gguf-q4km-32k": "winner: fast Heretic no-thinking default, cloned from Qwopus default, ctx 32k, q8 KV/prompt cache",
-        "qwopucode-full-v15-27b-koboldcpp-gguf-q4km-32k": "broad high-reasoning cache profile, KoboldCPP SmartCache, MRoPE disables context shift",
-        "qwopus36-coder-koboldcpp-gguf-q4km-32k": "cache-preference alternative, KoboldCPP SmartCache, ctx 32k, Qwopus coder",
+    kind_hints = {
+        "textgen": "TextGen/OpenAI-compatible backend profile",
+        "textgen-exl3": "TextGen EXL3 backend profile",
+        "llamacpp-gguf": "llama.cpp GGUF backend profile",
+        "vllm-gguf": "vLLM GGUF backend profile",
+        "koboldcpp-gguf": "KoboldCPP GGUF backend profile",
     }
-    return hints.get(profile.name, "")
+    return kind_hints.get(profile.backend_kind, "")
 
 
 def backend_profile_vision_flag(profile: BackendProfile) -> str:
@@ -1988,6 +1992,7 @@ def profile_audit_to_dict(cfg: StackConfig) -> dict[str, Any]:
         "repo_root": str(cfg.repo_root),
         "config": str(cfg.raw_path),
         "canonical_launcher": WINDOWS_LAUNCHER,
+        "repo_launcher": str(REPO_WINDOWS_LAUNCHER),
         "tmux": {"session": cfg.tmux_session, "exists": session.exists, "duplicates": session.duplicate_sessions},
         "active_backend_profile": backend_profile_to_dict(active_profile, active=True, cfg=cfg),
         "default_backend_profile": backend_profile_to_dict(default_profile, active=default_profile.name == active_profile.name, cfg=cfg),
@@ -2007,6 +2012,7 @@ def profile_audit_to_dict(cfg: StackConfig) -> dict[str, Any]:
         "warnings": config_errors(cfg),
         "recommended_commands": [
             WINDOWS_LAUNCHER,
+            str(REPO_WINDOWS_LAUNCHER),
             f"{WINDOWS_LAUNCHER} status",
             f"{WINDOWS_LAUNCHER} doctor",
             f"{WINDOWS_LAUNCHER} model-list",
@@ -2650,15 +2656,15 @@ def print_help(cfg: StackConfig) -> None:
         print("  chat interfaces:")
         for name, interface in cfg.chat_interfaces.items():
             print(f"    {name}: {interface.get('url', '')} -> {interface.get('backend_url', '')}")
-    print("\nGTM prompt policy:")
-    print("  Reuse existing repo templates; the stack console does not invent GTM lane gates.")
+    print("\nPrompt policy:")
+    print("  Reuse existing repo templates; the stack console does not invent project-specific lane gates.")
     print("\nAttach/detach:")
     print("  Ctrl-b d detaches from tmux and leaves services running.")
 
 
 def command_line() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Local LLM stack operator console")
-    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    parser.add_argument("--config", type=Path, default=None)
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("ui")
     status = sub.add_parser("status")

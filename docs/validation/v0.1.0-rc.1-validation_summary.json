@@ -83,20 +83,20 @@
   "manager_posture": {
     "final_active_subagents": 0,
     "final_label": "Manager Mode",
-    "final_local_indicator": "(Ctrl+Shift+L) Local: [Y]",
+    "final_local_indicator": "(Alt+L) Local: [Y]",
     "final_mode": "manager",
     "final_stale_sessions": 0,
     "high_risk_model": "gpt-5.5",
     "high_risk_reasoning": "high",
     "initial_active_subagents": 0,
     "initial_label": "Manager Mode",
-    "initial_local_indicator": "(Ctrl+Shift+L) Local: [Y]",
+    "initial_local_indicator": "(Alt+L) Local: [Y]",
     "initial_mode": "manager",
     "initial_stale_sessions": 0,
     "local_subagents": {
       "available": true,
       "enabled": true,
-      "indicator": "(Ctrl+Shift+L) Local: [Y]",
+      "indicator": "(Alt+L) Local: [Y]",
       "model": "qwen-local",
       "probe": {
         "available": true,

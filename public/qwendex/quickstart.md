@@ -3,6 +3,11 @@
 Run the offline surface check first:
 
 ```bash
+scripts/qwendex_install_deps --install
+scripts/qwendex_install_deps --check --json
+```
+
+```bash
 scripts/qwendex check --json
 ```
 
@@ -47,6 +52,61 @@ Inspect the latest receipt:
 ```bash
 scripts/qwendex receipt latest --json
 ```
+
+## Dev Root
+
+Create or refresh a standalone development copy:
+
+```bash
+scripts/qwendex_dev_env sync
+source ~/qwendex-dev/.qwendex-dev/env.sh
+qwendex-dev bootstrap
+qwendex-dev doctor
+qwendex-dev status
+```
+
+From there, bare `qwendex-dev` starts Codex in `~/qwendex-dev` with the current
+Codex yolo-equivalent flag, `--dangerously-bypass-approvals-and-sandbox`.
+`qwendex-dev open` starts the same Qwendex dev wiring without yolo mode. The
+dev-local `codex` wrapper uses a patched/dev Codex binary when one is configured
+and falls back to the current main Codex install otherwise.
+
+Development loop:
+
+```bash
+qwendex-dev verify --tier quick
+qwendex-dev diff
+qwendex-dev stage
+```
+
+For release-adjacent work, use:
+
+```bash
+qwendex-dev verify --tier full
+qwendex-dev verify --tier release
+qwendex-dev snapshot
+```
+
+## Visible Test Bench
+
+To test Qwendex against a project folder with both local and full Codex panes:
+
+```bash
+scripts/qwendex_testbench init
+scripts/qwendex_testbench codex-preflight
+scripts/qwendex_testbench tmux
+```
+
+The tmux session starts a Qwendex console plus `qwendex-local` and
+`qwendex-full` Codex panes. Each Codex pane launches with a visible banner:
+
+```text
+>_ OpenAI Codex (v0.142.4) /w Qwendex
+```
+
+`codex-preflight` detects the installed Codex CLI version and checks it against
+the Qwendex TUI patch manifest before a patched footer/hotkey build is treated
+as connected.
 
 ## Example Workflows
 
@@ -98,8 +158,11 @@ prior receipt by itself.
 Manager mode:
 
 ```bash
-scripts/qwendex manager --mode manager_only --json
+scripts/qwendex manager mode --toggle --json
+scripts/qwendex manager local --toggle --json
 ```
 
-Bind `Ctrl+Shift+M` in your host terminal or UI to that command if you want a
-shortcut for full-time orchestration.
+Patched Codex TUI builds bind those toggles through the Qwendex patch contract.
+Use `scripts/qwendex codex-patch apply --source /path/to/codex --json` only
+against a supported Codex source checkout; unknown versions and moved anchors
+block before writing.

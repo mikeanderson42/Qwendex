@@ -7,6 +7,8 @@ python3 -m py_compile scripts/qwendex_cli.py tests/smoke/test_qwendex_cli.py
 python3 -m pytest tests/smoke/test_qwendex_cli.py -q
 scripts/qwendex check --json
 scripts/qwendex doctor --json
+scripts/qwendex llmstack check --json
+scripts/qwendex llmstack restart bridge --dry-run --json
 scripts/qwendex eval --json
 ```
 

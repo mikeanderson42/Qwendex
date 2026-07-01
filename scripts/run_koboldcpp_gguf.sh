@@ -19,8 +19,8 @@ windows_to_wsl_path() {
 BIN="${KOBOLDCPP_BIN:-$DEFAULT_BIN}"
 HOST="${KOBOLDCPP_HOST:-127.0.0.1}"
 PORT="${KOBOLDCPP_PORT:-5000}"
-MODEL_ALIAS="${KOBOLDCPP_MODEL_ALIAS:-Qwopus3.6-27B-Coder.i1-Q4_K_M}"
-MODEL_PATH="$(windows_to_wsl_path "${KOBOLDCPP_MODEL_PATH:-/mnt/c/Users/Tweak/.lmstudio/models/Qwen36/mradermacherQwopus3.6-27B-Coder-i1-GGUF/Qwopus3.6-27B-Coder.i1-Q4_K_M.gguf}")"
+MODEL_ALIAS="${KOBOLDCPP_MODEL_ALIAS:-qwen-local}"
+MODEL_PATH="$(windows_to_wsl_path "${KOBOLDCPP_MODEL_PATH:-$HOME/models/qwen-coder/example-model.gguf}")"
 JINJA_TEMPLATE="$(windows_to_wsl_path "${KOBOLDCPP_JINJA_TEMPLATE:-}")"
 JINJA_KWARGS="${KOBOLDCPP_JINJA_KWARGS:-}"
 if [[ -z "$JINJA_KWARGS" ]]; then

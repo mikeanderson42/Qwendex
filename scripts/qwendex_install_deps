@@ -1,0 +1,266 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+MODE="install"
+INSTALL_SYSTEM=1
+INSTALL_USER=1
+JSON=0
+ASSUME_YES=1
+
+usage() {
+  cat <<'EOF'
+Usage: scripts/qwendex_install_deps [--check|--install] [--no-system] [--no-user] [--json]
+
+Installs or checks the host tools Qwendex needs for the current public harness:
+bash, python3, git, rsync, curl, Codex CLI, pytest, ruff, Rust/cargo/rustfmt,
+ripgrep, tmux, and GitHub CLI where available.
+
+System package installation is best-effort and non-interactive. User-scope
+installs use python3 -m pip --user, rustup, cargo install, and npm with a
+~/.local prefix when needed.
+EOF
+}
+
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --check)
+      MODE="check"
+      ;;
+    --install)
+      MODE="install"
+      ;;
+    --no-system)
+      INSTALL_SYSTEM=0
+      ;;
+    --no-user)
+      INSTALL_USER=0
+      ;;
+    --json)
+      JSON=1
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    *)
+      printf 'unknown option: %s\n' "$1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+  shift
+done
+
+export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+
+have() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+record() {
+  printf '%s\n' "$*" >> "$LOG_FILE"
+}
+
+run_logged() {
+  record "+ $*"
+  "$@" >> "$LOG_FILE" 2>&1
+}
+
+system_install() {
+  [[ "$MODE" == "install" && "$INSTALL_SYSTEM" -eq 1 ]] || return 0
+  local packages=("$@")
+  [[ "${#packages[@]}" -gt 0 ]] || return 0
+
+  if have apt-get; then
+    if [[ "$(id -u)" -eq 0 ]]; then
+      run_logged apt-get update
+      run_logged apt-get install -y "${packages[@]}"
+    elif have sudo && sudo -n true >/dev/null 2>&1; then
+      run_logged sudo apt-get update
+      run_logged sudo apt-get install -y "${packages[@]}"
+    else
+      record "system install skipped: sudo is not available non-interactively"
+    fi
+  elif have dnf; then
+    if [[ "$(id -u)" -eq 0 ]]; then
+      run_logged dnf install -y "${packages[@]}"
+    elif have sudo && sudo -n true >/dev/null 2>&1; then
+      run_logged sudo dnf install -y "${packages[@]}"
+    else
+      record "system install skipped: sudo is not available non-interactively"
+    fi
+  elif have pacman; then
+    if [[ "$(id -u)" -eq 0 ]]; then
+      run_logged pacman -Sy --noconfirm --needed "${packages[@]}"
+    elif have sudo && sudo -n true >/dev/null 2>&1; then
+      run_logged sudo pacman -Sy --noconfirm --needed "${packages[@]}"
+    else
+      record "system install skipped: sudo is not available non-interactively"
+    fi
+  elif have brew; then
+    run_logged brew install "${packages[@]}"
+  else
+    record "system install skipped: no supported package manager found"
+  fi
+}
+
+install_system_basics() {
+  local missing=()
+  have git || missing+=(git)
+  have rsync || missing+=(rsync)
+  have curl || missing+=(curl)
+  have tmux || missing+=(tmux)
+
+  if have apt-get; then
+    have python3 || missing+=(python3)
+    python3 -m pip --version >/dev/null 2>&1 || missing+=(python3-pip python3-venv)
+    have npm || missing+=(npm nodejs)
+    have cargo || missing+=(cargo rustc)
+    system_install "${missing[@]}"
+  elif have dnf; then
+    have python3 || missing+=(python3)
+    python3 -m pip --version >/dev/null 2>&1 || missing+=(python3-pip)
+    have npm || missing+=(npm nodejs)
+    have cargo || missing+=(cargo rust)
+    system_install "${missing[@]}"
+  elif have pacman; then
+    have python3 || missing+=(python)
+    python3 -m pip --version >/dev/null 2>&1 || missing+=(python-pip)
+    have npm || missing+=(npm nodejs)
+    have cargo || missing+=(rust)
+    system_install "${missing[@]}"
+  elif have brew; then
+    have python3 || missing+=(python)
+    have npm || missing+=(node)
+    have cargo || missing+=(rust)
+    system_install "${missing[@]}"
+  else
+    system_install "${missing[@]}"
+  fi
+}
+
+install_python_tools() {
+  [[ "$MODE" == "install" && "$INSTALL_USER" -eq 1 ]] || return 0
+  have python3 || return 0
+  if ! python3 -m pip --version >/dev/null 2>&1; then
+    python3 -m ensurepip --user >> "$LOG_FILE" 2>&1 || true
+  fi
+  if python3 -m pip --version >/dev/null 2>&1; then
+    run_logged python3 -m pip install --user --upgrade pytest ruff
+  fi
+}
+
+install_rust_tools() {
+  [[ "$MODE" == "install" && "$INSTALL_USER" -eq 1 ]] || return 0
+  if ! have cargo; then
+    if have rustup; then
+      run_logged rustup toolchain install stable
+    elif have curl; then
+      record "+ rustup installer"
+      curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal >> "$LOG_FILE" 2>&1 || true
+      export PATH="$HOME/.cargo/bin:$PATH"
+    fi
+  fi
+  if have rustup && ! have rustfmt; then
+    run_logged rustup component add rustfmt
+  fi
+  if have cargo && ! have rg; then
+    run_logged cargo install ripgrep --locked
+  fi
+}
+
+install_codex() {
+  [[ "$MODE" == "install" && "$INSTALL_USER" -eq 1 ]] || return 0
+  have codex && return 0
+  if have npm; then
+    mkdir -p "$HOME/.local"
+    run_logged npm install -g --prefix "$HOME/.local" @openai/codex
+  else
+    record "codex install skipped: npm is unavailable"
+  fi
+}
+
+tool_json() {
+  python3 - "$LOG_FILE" <<'PY'
+import json
+import shutil
+import subprocess
+import sys
+from datetime import UTC, datetime
+from pathlib import Path
+
+log_file = Path(sys.argv[1])
+
+def version(cmd: str) -> dict[str, object]:
+    path = shutil.which(cmd)
+    if not path:
+        return {"available": False, "path": "", "version": ""}
+    try:
+        args = [path, "-V"] if cmd == "tmux" else [path, "--version"]
+        result = subprocess.run(args, text=True, capture_output=True, timeout=15, check=False)
+        raw = (result.stdout or result.stderr).strip().splitlines()
+        return {
+            "available": result.returncode == 0,
+            "path": path,
+            "version": raw[0] if raw else "",
+            "returncode": result.returncode,
+        }
+    except Exception as exc:
+        return {"available": False, "path": path, "version": "", "error": str(exc)}
+
+def module_available(name: str) -> bool:
+    return subprocess.run(
+        [sys.executable, "-m", name, "--version"],
+        text=True,
+        capture_output=True,
+        timeout=15,
+        check=False,
+    ).returncode == 0
+
+commands = ["bash", "python3", "git", "rsync", "curl", "codex", "cargo", "rustfmt", "rg", "tmux", "gh", "npm"]
+tools = {name: version(name) for name in commands}
+python_modules = {name: module_available(name) for name in ["pytest", "ruff"]}
+required = ["bash", "python3", "git", "rsync", "curl", "codex"]
+developer = ["cargo", "rustfmt", "rg", "tmux"]
+missing_required = [name for name in required if not tools[name]["available"]]
+missing_python = [name for name, available in python_modules.items() if not available]
+missing_developer = [name for name in developer if not tools[name]["available"]]
+data = {
+    "schema_version": "qwendex.install_deps.v1",
+    "generated_at": datetime.now(UTC).isoformat(),
+    "status": "pass" if not missing_required and not missing_python else "blocked",
+    "tools": tools,
+    "python_modules": python_modules,
+    "missing_required": missing_required,
+    "missing_python_modules": missing_python,
+    "missing_developer": missing_developer,
+    "log_file": str(log_file),
+}
+print(json.dumps(data, indent=2, sort_keys=True))
+sys.exit(0 if data["status"] == "pass" else 1)
+PY
+}
+
+LOG_FILE="${QWENDEX_INSTALL_LOG:-${TMPDIR:-/tmp}/qwendex_install_deps.$$.log}"
+: > "$LOG_FILE"
+
+if [[ "$MODE" == "install" ]]; then
+  install_system_basics
+  export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+  install_python_tools
+  install_rust_tools
+  install_codex
+fi
+
+if [[ "$JSON" -eq 1 ]]; then
+  tool_json
+else
+  if tool_json > "$LOG_FILE.json"; then
+    printf 'qwendex install deps: pass\n'
+    cat "$LOG_FILE.json"
+  else
+    printf 'qwendex install deps: blocked\n' >&2
+    cat "$LOG_FILE.json" >&2
+    exit 1
+  fi
+fi

@@ -1,6 +1,8 @@
 import importlib.util
 import json
 import os
+import re
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -57,6 +59,7 @@ def test_qwendex_parser_exposes_public_commands():
     assert parser.parse_args(["doctor"]).command == "doctor"
     assert parser.parse_args(["exec", "Reply exactly QWENDEX_OK"]).command == "exec"
     assert parser.parse_args(["exec", "Reply exactly QWENDEX_OK", "--seat", "auto"]).seat == "auto"
+    assert parser.parse_args(["exec", "Reply exactly QWENDEX_OK", "--cwd", "/tmp/qwendex-project"]).cwd == "/tmp/qwendex-project"
     assert parser.parse_args(["eval", "--case", "exact_marker"]).command == "eval"
     assert parser.parse_args(["receipt", "latest"]).command == "receipt"
     assert parser.parse_args(["route"]).command == "route"
@@ -69,9 +72,22 @@ def test_qwendex_parser_exposes_public_commands():
     assert parser.parse_args(["learn", "dry-run", "--backend", "mock"]).command == "learn"
     assert parser.parse_args(["manager", "--mode", "manager_only"]).command == "manager"
     assert parser.parse_args(["manager", "mode", "--set", "auto"]).action == "mode"
+    assert parser.parse_args(["manager", "mode", "--toggle"]).toggle is True
+    assert parser.parse_args(["manager", "kaveman", "--toggle"]).action == "kaveman"
     assert parser.parse_args(["manager", "local", "--set", "off"]).action == "local"
     assert parser.parse_args(["manager", "estimate", "--prompt", "Fix a typo"]).action == "estimate"
+    assert parser.parse_args(["codex-status", "--write", "/tmp/qwendex-status.json"]).command == "codex-status"
+    assert parser.parse_args(["codex-patch", "preflight", "--codex-bin", "codex"]).command == "codex-patch"
+    assert parser.parse_args(["codex-patch", "apply", "--source", "/tmp/codex", "--dry-run"]).dry_run is True
     assert parser.parse_args(["estimate", "--prompt", "Fix a typo"]).command == "estimate"
+    assert parser.parse_args(["llmstack", "check"]).command == "llmstack"
+    assert parser.parse_args(["llmstack", "check"]).action == "check"
+    assert parser.parse_args(["llmstack", "doctor"]).action == "doctor"
+    assert parser.parse_args(["llmstack", "up", "--dry-run"]).action == "up"
+    assert parser.parse_args(["llmstack", "down", "--dry-run"]).action == "down"
+    restart = parser.parse_args(["llmstack", "restart", "bridge", "--dry-run"])
+    assert restart.action == "restart"
+    assert restart.service == "bridge"
     assert parser.parse_args(["version"]).command == "version"
 
 
@@ -88,6 +104,89 @@ def test_qwendex_check_and_doctor_emit_stable_json(tmp_path):
     assert doctor["data"]["manager_estimate"]["reasoning_policy"]["main_session"]["reasoning_source"] == "user_selected"
     assert 1 <= len(check["data"]["high_value_add"]) <= 2
     assert 1 <= len(doctor["data"]["high_value_add"]) <= 2
+
+
+def test_qwendex_llmstack_public_contract_and_dry_run_json(tmp_path):
+    env = {"QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite")}
+
+    check = json_result("llmstack", "check", "--json", env=env)
+    doctor = json_result("llmstack", "doctor", "--json", env=env)
+    restart = json_result("llmstack", "restart", "bridge", "--dry-run", "--json", env=env)
+
+    assert check["command"] == "llmstack"
+    assert check["status"] == "pass"
+    assert doctor["status"] == "pass"
+    contract = check["data"]["contract"]
+    for key in (
+        "services_configured",
+        "backend_endpoint",
+        "model_alias",
+        "codex_bridge",
+        "guard_config",
+        "receipts_results",
+        "missing_optional_host_programs",
+    ):
+        assert key in contract
+    assert contract["config"]["sample_config"] == "config/local_llm_stack/stack_manager.sample.json"
+    assert contract["config"]["local_config"] == "config/local_llm_stack/stack_manager.local.json"
+    assert contract["config"]["local_config_ignored"] is True
+    assert contract["public_boundary"]["bundles_host_programs"] is False
+    assert contract["public_boundary"]["bundles_model_weights"] is False
+    assert contract["private_hits"] == []
+    assert {"textgen", "litellm", "bridge"} <= set(contract["services_configured"])
+    assert restart["status"] == "pass"
+    assert restart["data"]["delegate"]["status"] == "ready"
+    assert restart["data"]["delegate"]["command"][:3] == [str(ROOT / "scripts" / "llm"), "restart", "bridge"]
+
+
+def test_llmstack_public_configs_are_copy_safe_and_connected():
+    qwendex = load_qwendex()
+    public_paths = [
+        ROOT / "config/local_llm_stack/stack_manager.json",
+        ROOT / "config/local_llm_stack/stack_manager.sample.json",
+        ROOT / "config/local_llm_stack/profiles.example.json",
+        ROOT / "config/local_llm_stack/litellm.local.yaml",
+        ROOT / "config/local_llm_stack/litellm.textgen.local.yaml",
+        ROOT / "config/local_llm_stack/textgen_cmd_flags.txt",
+        ROOT / "scripts/run_textgen_safe_no_model.sh",
+        ROOT / "scripts/run_llamacpp_qwopucode_gguf.sh",
+        ROOT / "scripts/run_vllm_qwopucode_gguf.sh",
+        ROOT / "scripts/run_koboldcpp_gguf.sh",
+        ROOT / "scripts/qwendex_testbench",
+        ROOT / "public/qwendex/testbench.md",
+        ROOT / "llmstack",
+        ROOT / "scripts/windows/open.ps1",
+    ]
+    forbidden_patterns = (
+        r"/home/tweak",
+        r"/mnt/c/Users/Tweak",
+        r"\bAnderson\b",
+        r"\bSTAR\b",
+        r"\bGTM\b",
+        r"Qwopus",
+        r"Qwopucode",
+        r"Heretic",
+        r"Jackrong",
+        r"llmfan",
+        r"simonycl",
+        r"qwen36-27Bb",
+    )
+
+    for path in public_paths:
+        assert path.exists(), path
+        text = path.read_text(encoding="utf-8")
+        for pattern in forbidden_patterns:
+            assert re.search(pattern, text) is None, f"{pattern} leaked through {path.relative_to(ROOT)}"
+
+    sample = json.loads((ROOT / "config/local_llm_stack/stack_manager.sample.json").read_text(encoding="utf-8"))
+    active = json.loads((ROOT / "config/local_llm_stack/stack_manager.json").read_text(encoding="utf-8"))
+    profiles = json.loads((ROOT / "config/local_llm_stack/profiles.example.json").read_text(encoding="utf-8"))
+
+    assert active == sample
+    assert sample["default_backend_profile"] == "example-llamacpp-qwen-coder-gguf-32k"
+    assert {service["name"] for service in sample["services"]} == {"textgen", "litellm", "bridge"}
+    assert {profile["backend_kind"] for profile in profiles["backend_profiles"]} >= {"textgen", "llamacpp-gguf", "vllm-gguf", "koboldcpp-gguf"}
+    assert qwendex.llmstack_public_contract()["status"] == "pass"
 
 
 def test_qwendex_config_precedence_and_profiles(tmp_path):
@@ -162,6 +261,403 @@ def test_qwendex_exact_exec_and_qwen_seat_write_reviewable_receipts(tmp_path):
     assert "guard" in exec_receipt["effective_policy"]
 
 
+def test_qwendex_exec_dry_run_respects_cwd_and_mcp_override(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    env = {
+        "QWENDEX_RESULTS_ROOT": str(tmp_path / "receipts"),
+        "QWENDEX_MCP_TRUSTED_ROOTS": f"{ROOT}:{project}",
+        "QWENDEX_FORCE_LOCAL_QWEN_AVAILABLE": "1",
+    }
+
+    primary = json_result(
+        "exec",
+        "Summarize the project.",
+        "--seat",
+        "primary",
+        "--cwd",
+        str(project),
+        "--dry-run",
+        "--json",
+        env=env,
+    )
+    qwen = json_result(
+        "exec",
+        "Summarize the project.",
+        "--seat",
+        "qwen",
+        "--cwd",
+        str(project),
+        "--dry-run",
+        "--json",
+        env=env,
+    )
+
+    primary_cmd = primary["data"]["command"]
+    qwen_cmd = qwen["data"]["command"]
+
+    assert primary["data"]["seat"] == "primary"
+    assert qwen["data"]["seat"] == "qwen"
+    assert primary_cmd[primary_cmd.index("-C") + 1] == str(project)
+    assert 'mcp_servers.local-harness.command="python3"' in " ".join(primary_cmd)
+    assert "mcp_servers.local-harness.args" in " ".join(primary_cmd)
+    assert str(ROOT / "scripts" / "artifact_queue_mcp.py") in " ".join(primary_cmd)
+    assert f"{ROOT}:{project}" in " ".join(primary_cmd)
+    assert qwen_cmd[qwen_cmd.index("--cwd") + 1] == str(project)
+    assert "--minimal" in qwen_cmd
+    assert "--ephemeral" in qwen_cmd
+
+
+def test_qwendex_testbench_public_surface_is_visible_and_sandboxed():
+    script = ROOT / "scripts" / "qwendex_testbench"
+    text = script.read_text(encoding="utf-8")
+
+    assert script.exists()
+    assert ">_ OpenAI Codex (v%s) /w Qwendex" in text
+    assert "--no-alt-screen" in text
+    assert "qwendex-local" in text
+    assert "qwendex-full" in text
+    assert "$BENCH_ROOT/bin" in text
+    assert "qwendex-bench" in text
+    assert "qwebdex-bench is a typo" in text
+    assert "llmstack" in text
+    assert "QWENDEX_BENCH_PROJECT" in text
+    assert "QWENDEX_BENCH_ROOT" in text
+    assert "QWENDEX_CODEX_STATUS_FILE" in text
+    assert "QWENDEX_MCP_TRUSTED_ROOTS" in text
+    assert "codex-patch preflight" in text
+    assert "codex-status --write" in text
+    assert "'$BENCH_CMD' env" in text
+    assert "exec bash" in text
+
+
+def test_qwendex_dev_env_public_surface_is_visible_and_isolated():
+    script = ROOT / "scripts" / "qwendex_dev_env"
+    text = script.read_text(encoding="utf-8")
+    installer = ROOT / "scripts" / "qwendex_install_deps"
+    installer_text = installer.read_text(encoding="utf-8")
+    dependencies = json.loads((ROOT / "config" / "qwendex" / "dependencies.json").read_text(encoding="utf-8"))
+
+    assert script.exists()
+    assert installer.exists()
+    assert os.access(installer, os.X_OK)
+    assert dependencies["schema_version"] == "qwendex.dependencies.v1"
+    assert {"bash", "python3", "git", "rsync", "curl", "codex"} <= set(dependencies["required_commands"])
+    assert {"pytest", "ruff"} <= set(dependencies["validation_python_modules"])
+    assert "npm install -g --prefix \"$HOME/.local\" @openai/codex" in installer_text
+    assert "python3 -m pip install --user --upgrade pytest ruff" in installer_text
+    assert "cargo install ripgrep --locked" in installer_text
+    assert "QWENDEX_DEV_ROOT" in text
+    assert "$HOME/qwendex-dev" in text
+    assert "WORK_ROOT=\"$DEV_ROOT/.qwendex-dev\"" in text
+    assert "INSTALL_DEPS_JSON" in text
+    assert "qwendex_install_deps" in text
+    assert "install_deps.json" in text
+    assert "$WORK_ROOT/env.sh" in text
+    assert "$HOME/.local/bin" in text
+    assert "codex-main" in text
+    assert "QWENDEX_DEV_CODEX_BIN" in text
+    assert "senior Qwendex product maintainer" in text
+    assert "cmd_verify" in text
+    assert "cmd_bootstrap" in text
+    assert "cmd_doctor" in text
+    assert "cmd_status_json" in text
+    assert "hook_source_count" in text
+    assert "active dev CODEX_HOME has no hooks" in text
+    assert "cmd_codex_source" in text
+    assert "cmd_clean" in text
+    assert "cmd_repair_copy" in text
+    assert "cmd_promote" in text
+    assert "cmd_stage" in text
+    assert "cmd_snapshot" in text
+    assert "cmd_open_yolo" in text
+    assert "QWENDEX_CODEX_YOLO_FLAG" in text
+    assert "--dangerously-bypass-approvals-and-sandbox" in text
+    assert "verify --tier quick|full|live|release" in text
+    assert "QWENDEX_LEDGER_DB" in text
+    assert "LOCAL_QWEN_HARNESS_LEDGER_DB" in text
+    assert "dev_status.json" in text
+    assert "release_validation_summary.json" in text
+    assert "contract_marker_counts" in text
+    assert "expected_marker_counts" in text
+    assert "llmstack_check.json" in text
+    assert "path.resolve() == out.resolve()" in text
+    assert "codex-patch apply" in text
+    assert "cargo build --release -p codex-cli --bin codex" in text
+    assert "status_line = [\"model-with-reasoning\", \"current-dir\", \"qwendex-manager\"]" in text
+    assert "qwendex_toggle_manager = \"alt-m\"" in text
+    assert "qwendex_toggle_kaveman = \"alt-k\"" in text
+    assert "qwendex_toggle_local = \"alt-l\"" in text
+    assert "codex-source sync|patch|build|preflight" in text
+    assert "open.ps1" in text
+    assert "--exclude '.git/'" in text
+    assert "--exclude 'results/'" in text
+    assert "--exclude '/bin/'" in text
+    assert "git -C \"$DEV_ROOT\" add -A" in text
+
+    doc = (ROOT / "public" / "qwendex" / "dev-environment.md").read_text(encoding="utf-8")
+    assert "scripts/qwendex_dev_env sync" in doc
+    assert "scripts/qwendex_install_deps --install" in doc
+    assert "install_deps.json" in doc
+    assert "qwendex-dev bootstrap" in doc
+    assert "qwendex-dev doctor" in doc
+    assert "qwendex-dev verify --tier release" in doc
+    assert "qwendex-dev stage" in doc
+    assert "qwendex-dev codex-source patch" in doc
+    assert "Bare `qwendex-dev` opens Codex" in doc
+    assert "--dangerously-bypass-approvals-and-sandbox" in doc
+    assert "repair-copy" in doc
+    assert "~/qwendex-dev" in doc
+    assert "fallback execution plane" in doc
+
+    agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    assert "Connectedness Rule" in agents
+    assert "state source or config field" in agents
+    assert "Stop and repair" in agents
+
+    startup = (ROOT / "QWENDEX_STARTUP.md").read_text(encoding="utf-8")
+    assert "Connectedness Check" in startup
+    assert "patched Codex build" in startup
+    assert "Bare `qwendex-dev` opens Codex" in startup
+
+    maintainer_skill = (ROOT / ".codex" / "skills" / "qwendex-dev-maintainer" / "SKILL.md").read_text(encoding="utf-8")
+    assert "connectedness chain" in maintainer_skill
+    assert "Stop-The-Line Conditions" in maintainer_skill
+
+    gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
+    assert ".qwendex-dev/" in gitignore
+
+    for rel in (
+        "docs/development/architecture-map.md",
+        "docs/development/failure-modes.md",
+        "docs/development/release-runbook.md",
+        "docs/development/contribution-workflow.md",
+        "docs/development/decision-log.md",
+        ".codex/skills/qwendex-dev-maintainer/SKILL.md",
+        ".codex/skills/qwendex-release-gate/SKILL.md",
+        ".codex/skills/qwendex-local-bridge-triage/SKILL.md",
+        ".codex/skills/qwendex-codex-patch/SKILL.md",
+    ):
+        assert (ROOT / rel).exists(), rel
+
+
+def test_qwendex_dev_default_launches_repo_with_yolo_codex(tmp_path):
+    fake_home = tmp_path / "home"
+    dev_root = tmp_path / "qwendex-dev"
+    fake_bin = tmp_path / "bin"
+    fake_codex = fake_bin / "codex"
+    args_file = tmp_path / "codex-args.json"
+    cwd_file = tmp_path / "codex-cwd.txt"
+
+    fake_bin.mkdir()
+    fake_home.mkdir()
+    (fake_home / ".codex").mkdir()
+    (fake_home / ".codex" / "hooks.json").write_text('{"hooks":{"PreToolUse":[]}}\n', encoding="utf-8")
+    fake_codex.write_text(
+        """#!/usr/bin/env python3
+import json
+import os
+import sys
+from pathlib import Path
+
+if sys.argv[1:] == ["--version"]:
+    print("codex-cli 0.142.4")
+    raise SystemExit(0)
+
+Path(os.environ["QWENDEX_FAKE_CODEX_ARGS"]).write_text(json.dumps(sys.argv[1:]), encoding="utf-8")
+Path(os.environ["QWENDEX_FAKE_CODEX_CWD"]).write_text(os.getcwd(), encoding="utf-8")
+""",
+        encoding="utf-8",
+    )
+    fake_codex.chmod(0o755)
+
+    env = {
+        **os.environ,
+        "HOME": str(fake_home),
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "QWENDEX_DEV_ROOT": str(dev_root),
+        "QWENDEX_DEV_SOURCE_ROOT": str(ROOT),
+        "QWENDEX_MAIN_CODEX_BIN": str(fake_codex),
+        "QWENDEX_DEV_CODEX_BIN": str(fake_codex),
+        "QWENDEX_FAKE_CODEX_ARGS": str(args_file),
+        "QWENDEX_FAKE_CODEX_CWD": str(cwd_file),
+    }
+
+    sync = subprocess.run(
+        [str(ROOT / "scripts" / "qwendex_dev_env"), "sync"],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=60,
+    )
+    assert sync.returncode == 0, sync.stderr or sync.stdout
+
+    launched = subprocess.run(
+        [str(ROOT / "scripts" / "qwendex_dev_env")],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=60,
+    )
+
+    assert launched.returncode == 0, launched.stderr or launched.stdout
+    args = json.loads(args_file.read_text(encoding="utf-8"))
+    config = (dev_root / ".qwendex-dev" / "codex_home" / "config.toml").read_text(encoding="utf-8")
+    assert cwd_file.read_text(encoding="utf-8") == str(dev_root)
+    assert args[:2] == ["--no-alt-screen", "--dangerously-bypass-approvals-and-sandbox"]
+    assert args[args.index("-C") + 1] == str(dev_root)
+    assert "qwendex-manager" in config
+    assert "qwendex_toggle_manager = \"alt-m\"" in config
+    assert "qwendex_toggle_kaveman = \"alt-k\"" in config
+    assert "qwendex_toggle_local = \"alt-l\"" in config
+    dev_status = json.loads((dev_root / ".qwendex-dev" / "results" / "meta" / "dev_status.json").read_text(encoding="utf-8"))
+    assert dev_status["codex"]["hook_source_count"] == 0
+    assert dev_status["codex"]["global_hook_source_count"] == 1
+    assert "active dev CODEX_HOME has no hooks" in " ".join(dev_status["warnings"])
+
+
+def test_qwendex_codex_status_tracks_manager_state_and_writes_surface_file(tmp_path):
+    status_file = tmp_path / "codex_status.json"
+    env = {
+        "QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite"),
+        "QWENDEX_CODEX_STATUS_FILE": str(status_file),
+        "QWENDEX_FORCE_LOCAL_QWEN_AVAILABLE": "1",
+    }
+
+    blocked_mode = run_qwendex("manager", "mode", "--set", "manager", "--json", env=env)
+    blocked_mode_data = parse_json_result(blocked_mode)
+    assert blocked_mode.returncode == 0
+    assert blocked_mode_data["status"] == "pass"
+    assert blocked_mode_data["data"]["deployment_contract"]["status"] == "blocked"
+    json_result(
+        "manager",
+        "assign",
+        "--agent-id",
+        "agent-footer",
+        "--lane",
+        "footer-status",
+        "--task-id",
+        "footer-status",
+        "--objective",
+        "Keep Manager Mode footer status connected to an active lane",
+        "--json",
+        env=env,
+    )
+    json_result("manager", "local", "--set", "on", "--json", env=env)
+    status = json_result("codex-status", "--write", str(status_file), "--json", env=env)
+    plain = run_qwendex("codex-status", "--plain", env=env)
+
+    assert status["data"]["text"] == "{Qwendex} Agent Manager: [Manager Mode] | Kaveman: [N] | Local: [Y] (Alt+M/K/L)"
+    assert plain.stdout.strip() == "{Qwendex} Agent Manager: [Manager Mode] | Kaveman: [N] | Local: [Y] (Alt+M/K/L)"
+    written = json.loads(status_file.read_text(encoding="utf-8"))
+    assert written["text"] == "{Qwendex} Agent Manager: [Manager Mode] | Kaveman: [N] | Local: [Y] (Alt+M/K/L)"
+    assert written["kaveman_enabled"] is False
+    assert written["local_usable"] is True
+
+    kaveman = json_result("manager", "kaveman", "--toggle", "--json", env=env)
+    assert kaveman["data"]["kaveman_enabled"] is True
+    written_after_kaveman = json.loads(status_file.read_text(encoding="utf-8"))
+    assert written_after_kaveman["text"] == "{Qwendex} Agent Manager: [Manager Mode] | Kaveman: [Y] | Local: [Y] (Alt+M/K/L)"
+    assert written_after_kaveman["kaveman_directive"]
+
+    toggled = json_result("manager", "mode", "--toggle", "--json", env=env)
+    assert toggled["data"]["mode"] == "off"
+    written_after_toggle = json.loads(status_file.read_text(encoding="utf-8"))
+    assert written_after_toggle["text"] == "{Qwendex} Agent Manager: [Off] | Kaveman: [Y] | Local: [Y] (Alt+M/K/L)"
+
+
+def test_qwendex_codex_status_disables_unusable_local_state(tmp_path):
+    status_file = tmp_path / "codex_status.json"
+    env = {
+        "QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite"),
+        "QWENDEX_CODEX_STATUS_FILE": str(status_file),
+        "QWENDEX_FORCE_LOCAL_QWEN_AVAILABLE": "0",
+    }
+
+    json_result("manager", "local", "--set", "on", "--json", env=env)
+    status = json_result("codex-status", "--write", str(status_file), "--json", env=env)
+    manager = json_result("manager", "status", "--json", env=env)
+
+    assert status["data"]["text"] == "{Qwendex} Agent Manager: [Auto] | Kaveman: [N] | Local: [N] (Alt+M/K/L)"
+    assert status["data"]["local_enabled"] is False
+    assert status["data"]["local_usable"] is False
+    assert manager["data"]["local_subagents"]["enabled"] is False
+
+
+def test_qwendex_codex_patch_preflight_version_manifest(tmp_path):
+    fake_codex = tmp_path / "codex"
+    fake_codex.write_text("#!/usr/bin/env bash\nprintf 'codex-cli 0.142.4\\n'\n", encoding="utf-8")
+    fake_codex.chmod(0o755)
+
+    data = json_result("codex-patch", "preflight", "--codex-bin", str(fake_codex), "--json")
+
+    assert data["status"] == "pass"
+    assert data["data"]["version"]["version"] == "0.142.4"
+    assert data["data"]["supported"] is True
+    assert data["data"]["manifest"]["status_line_item"] == "qwendex-manager"
+    assert "qwendex_toggle_manager" in data["data"]["manifest"]["keymap_actions"]
+    assert "qwendex_toggle_kaveman" in data["data"]["manifest"]["keymap_actions"]
+    assert "qwendex_toggle_local" in data["data"]["manifest"]["keymap_actions"]
+
+
+def test_qwendex_codex_patch_apply_updates_supported_source_checkout(tmp_path):
+    qwendex = load_qwendex()
+    source = tmp_path / "codex"
+    anchors_by_path = {
+        str(spec["path"]): "\n".join(str(anchor) for anchor in spec["anchors"])
+        for spec in qwendex.CODEX_PATCH_MANIFESTS["0.142.4"]["source_anchors"]
+    }
+    for spec in qwendex.codex_source_patch_specs("0.142.4"):
+        rel = str(spec["path"])
+        path = source / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        old_fragments = "\n".join(old for old, _new in spec["replacements"])
+        path.write_text(f"{anchors_by_path.get(rel, '')}\n{old_fragments}\n", encoding="utf-8")
+
+    fake_codex = tmp_path / "codex-bin"
+    fake_codex.write_text("#!/usr/bin/env bash\nprintf 'codex-cli 0.142.4\\n'\n", encoding="utf-8")
+    fake_codex.chmod(0o755)
+
+    applied = json_result("codex-patch", "apply", "--codex-bin", str(fake_codex), "--source", str(source), "--json")
+    preflight = json_result(
+        "codex-patch",
+        "preflight",
+        "--codex-bin",
+        str(fake_codex),
+        "--source",
+        str(source),
+        "--require-applied",
+        "--json",
+    )
+    reapplied = json_result("codex-patch", "apply", "--codex-bin", str(fake_codex), "--source", str(source), "--json")
+
+    assert applied["status"] == "pass"
+    assert applied["data"]["apply"]["changed"] is True
+    assert preflight["status"] == "pass"
+    assert preflight["data"]["applied"] is True
+    assert reapplied["status"] == "pass"
+    assert reapplied["data"]["apply"]["changed"] is False
+    assert qwendex.QWENDEX_CODEX_PATCH_MARKER in (
+        source / "codex-rs/tui/src/app/input.rs"
+    ).read_text(encoding="utf-8")
+    assert "qwendex_toggle_manager" in (
+        source / "codex-rs/tui/src/keymap.rs"
+    ).read_text(encoding="utf-8")
+    assert "qwendex_toggle_kaveman" in (
+        source / "codex-rs/tui/src/keymap.rs"
+    ).read_text(encoding="utf-8")
+    terminal_instructions = (
+        source / "codex-rs/tui/src/terminal_visualization_instructions.rs"
+    ).read_text(encoding="utf-8")
+    assert "qwendex_kaveman_directive" in terminal_instructions
+    assert "QWENDEX_CODEX_STATUS_FILE" in terminal_instructions
+    assert "Qwendex Kaveman directive" in terminal_instructions
+
+
 def test_qwendex_route_command_and_auto_exec_prefer_local_qwen_when_available(tmp_path):
     env = {"QWENDEX_RESULTS_ROOT": str(tmp_path), "QWENDEX_FORCE_LOCAL_QWEN_AVAILABLE": "1"}
 
@@ -204,13 +700,13 @@ def test_qwendex_route_force_available_false_falls_back_to_primary(tmp_path):
     local = json_result("manager", "local", "--set", "on", "--json", env=env)
     route = json_result("route", "--task-class", "artifact summary", "--prefer-local", "--json", env=env)
 
-    assert local["data"]["local_subagents"]["enabled"] is True
+    assert local["data"]["local_subagents"]["enabled"] is False
     assert local["data"]["local_subagents"]["available"] is False
     assert route["data"]["seat"] == "primary"
-    assert route["data"]["local_qwen"]["available"] is False
-    assert route["data"]["local_qwen"]["reason"] == "forced_unavailable"
+    assert route["data"]["local_qwen"]["available"] is None
+    assert route["data"]["local_qwen"]["reason"] == "local_subagents_disabled"
     assert route["data"]["token_saver_used"] is False
-    assert route["data"]["local_qwen_eligible"] is True
+    assert route["data"]["local_qwen_eligible"] is False
 
 
 def test_qwendex_route_prefer_local_respects_local_toggle_off(tmp_path):
@@ -369,12 +865,27 @@ def test_qwendex_manager_mode_cycles_status_and_legacy_alias(tmp_path):
     auto = json_result("manager", "mode", "--set", "auto", "--json", env=env)
     cycled = json_result("manager", "mode", "--cycle", "--json", env=env)
     status = json_result("manager", "status", "--json", env=env)
-    legacy = json_result("manager", "--mode", "manager_only", "--max-subagents", "6", "--stale-after-minutes", "45", "--shortcut", "--json", env=env)
+    legacy_result = run_qwendex("manager", "--mode", "manager_only", "--max-subagents", "6", "--stale-after-minutes", "45", "--shortcut", "--json", env=env)
+    legacy = parse_json_result(legacy_result)
+    disabled = json_result(
+        "manager",
+        "--mode",
+        "manager_only",
+        "--max-subagents",
+        "10",
+        "--stale-after-minutes",
+        "45",
+        "--shortcut",
+        "--json",
+        env={**env, "QWENDEX_MANAGER_DEPLOY_POLICY": "disabled"},
+    )
 
     assert auto["data"]["mode"] == "auto"
     assert auto["data"]["label"] == "Auto"
-    assert auto["data"]["ui_indicator"] == "(Ctrl+Shift+M) Subagent Management: [ Auto ]"
-    assert auto["data"]["local_indicator"] == "(Ctrl+Shift+L) Local: [Y]"
+    assert auto["data"]["ui_indicator"] == "(Alt+M) Agent Manager: [ Auto ]"
+    assert auto["data"]["kaveman_indicator"] == "(Alt+K) Kaveman: [N]"
+    assert auto["data"]["kaveman_enabled"] is False
+    assert auto["data"]["local_indicator"] == "(Alt+L) Local: [Y]"
     assert auto["data"]["offload_target"] == "auto"
     assert cycled["data"]["mode"] == "lite"
     assert status["data"]["mode"] == "lite"
@@ -382,16 +893,49 @@ def test_qwendex_manager_mode_cycles_status_and_legacy_alias(tmp_path):
     assert status["data"]["stale_sessions"]["count"] == 0
     assert len(status["data"]["high_value_add"]) <= 2
 
-    assert legacy["status"] == "pass"
+    assert legacy_result.returncode != 0
+    assert legacy["status"] == "blocked"
     assert legacy["data"]["mode"] == "manager"
     assert legacy["data"]["legacy_mode"] == "manager_only"
     assert legacy["data"]["label"] == "Manager Mode"
-    assert legacy["data"]["shortcut"] == "Ctrl+Shift+M"
-    assert legacy["data"]["shortcut_command"] == "scripts/qwendex manager --mode manager_only --json"
+    assert legacy["data"]["manager_deploy_policy"] == "auto"
+    assert legacy["data"]["deployment_contract"]["required"] is True
+    assert legacy["data"]["deployment_contract"]["healthy"] is False
+    assert legacy["data"]["shortcut"] == "Alt+M"
+    assert legacy["data"]["shortcut_command"] == "scripts/qwendex manager mode --toggle --json"
+    assert legacy["data"]["kaveman_shortcut"] == "Alt+K"
+    assert legacy["data"]["kaveman_shortcut_command"] == "scripts/qwendex manager kaveman --toggle --json"
     assert legacy["data"]["max_subagents"] == 6
     assert legacy["data"]["stale_after_minutes"] == 45
     assert "LangGraph persistence" in " ".join(legacy["data"]["borrowed_patterns"])
     assert {"selected_model", "selected_reasoning", "reasoning_source", "escalation_reason", "token_saver_used", "local_qwen_eligible"} <= set(legacy["data"]["lane_template"][0])
+
+    assert disabled["status"] == "pass"
+    assert disabled["data"]["manager_deploy_policy"] == "disabled"
+    assert disabled["data"]["deployment_contract"]["required"] is False
+    assert disabled["data"]["deployment_contract"]["healthy"] is True
+    assert disabled["data"]["max_subagents"] == 10
+
+
+def test_qwendex_manager_mode_toggle_cycles_full_duty_order(tmp_path):
+    env = {"QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite")}
+
+    json_result("manager", "mode", "--set", "off", "--json", env=env)
+    seen = []
+    for _ in range(6):
+        result = run_qwendex("manager", "mode", "--toggle", "--json", env=env)
+        toggled = parse_json_result(result)
+        assert result.returncode == 0
+        assert toggled["status"] == "pass"
+        seen.append(toggled["data"]["mode"])
+
+    assert seen == ["auto", "lite", "medium", "heavy", "manager", "off"]
+
+    status_result = run_qwendex("manager", "status", "--json", env=env)
+    status = parse_json_result(status_result)
+    assert status_result.returncode == 0
+    assert status["data"]["mode"] == "off"
+    assert status["data"]["deployment_contract"]["status"] == "pass"
 
 
 def test_qwendex_manager_local_toggle_controls_local_lane_eligibility(tmp_path):
@@ -405,13 +949,13 @@ def test_qwendex_manager_local_toggle_controls_local_lane_eligibility(tmp_path):
     on = json_result("manager", "local", "--toggle", "--json", env=env)
     estimate_on = json_result("manager", "estimate", "--prompt", "Summarize receipts from results/qwendex.", "--json", env=env)
 
-    assert off["data"]["local_indicator"] == "(Ctrl+Shift+L) Local: [N]"
+    assert off["data"]["local_indicator"] == "(Alt+L) Local: [N]"
     assert off["data"]["local_subagents"]["enabled"] is False
     assert estimate_off["data"]["local_subagents"]["usable"] is False
     assert estimate_off["data"]["estimate"]["higher_reasoning_lanes"] == []
     assert estimate_off["data"]["reasoning_policy"]["default_lane"]["local_qwen_eligible"] is False
 
-    assert on["data"]["local_indicator"] == "(Ctrl+Shift+L) Local: [Y]"
+    assert on["data"]["local_indicator"] == "(Alt+L) Local: [Y]"
     assert on["data"]["local_subagents"]["enabled"] is True
     assert estimate_on["data"]["local_subagents"]["usable"] is True
     assert estimate_on["data"]["reasoning_policy"]["default_lane"]["local_qwen_eligible"] is True
@@ -507,8 +1051,63 @@ def test_qwendex_manager_assign_generates_context_packet_and_routing(tmp_path):
 
     status = json_result("manager", "status", "--json", env=env)
     assert status["data"]["active_subagents"]["count"] == 1
+    assert status["data"]["deployment_contract"]["status"] == "pass"
     assert status["data"]["subagent_state"]["receipts"] == ["results/qwendex/security-review.json"]
     assert status["data"]["subagent_state"]["validation_status"]["pending"] == 1
+
+
+def test_qwendex_manager_reconciles_stale_read_only_and_blocks_stale_writers(tmp_path):
+    state_db = tmp_path / "qwendex.sqlite"
+    env = {
+        "QWENDEX_STATE_DB": str(state_db),
+        "QWENDEX_MANAGER_DEPLOY_POLICY": "disabled",
+    }
+
+    json_result(
+        "manager",
+        "assign",
+        "--agent-id",
+        "stale-reader",
+        "--lane",
+        "review",
+        "--write-surface",
+        "read-only",
+        "--json",
+        env=env,
+    )
+    json_result(
+        "manager",
+        "assign",
+        "--agent-id",
+        "stale-writer",
+        "--lane",
+        "implementation",
+        "--write-surface",
+        "scripts",
+        "--json",
+        env=env,
+    )
+    with sqlite3.connect(state_db) as conn:
+        conn.execute("UPDATE qwendex_agent_sessions SET heartbeat_at = '2000-01-01T00:00:00Z'")
+
+    status_result = run_qwendex("manager", "status", "--stale-after-minutes", "5", "--json", env=env)
+    status = parse_json_result(status_result)
+    assert status_result.returncode != 0
+    assert status["data"]["stale_reconciliation"]["closed_count"] == 1
+    assert status["data"]["stale_reconciliation"]["closed"][0]["agent_id"] == "stale-reader"
+    assert status["data"]["stale_reconciliation"]["skipped_writer_count"] == 1
+    assert status["data"]["active_subagents"]["count"] == 0
+    assert status["data"]["stale_writer_sessions"]["count"] == 1
+    assert "stale writer lane" in " ".join(status["data"]["subagent_state"]["blockers"])
+
+    closed = json_result("manager", "close", "--agent-id", "stale-writer", "--reason", "integrated", "--json", env=env)
+    closed_session = closed["data"]["agent_session"]
+    assert closed_session["status"] == "closed"
+    assert closed_session["stop_reason"] == "integrated"
+    assert closed_session["close_receipt"]
+
+    cleared = json_result("manager", "status", "--stale-after-minutes", "5", "--json", env=env)
+    assert cleared["data"]["stale_writer_sessions"]["count"] == 0
 
 
 def test_qwendex_auto_manager_estimator_skill_contract():

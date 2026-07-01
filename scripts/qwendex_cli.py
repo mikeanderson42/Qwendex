@@ -9,6 +9,7 @@ import importlib.util
 import json
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -20,22 +21,30 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.1.0-rc.1"
+VERSION = "0.1.0-rc.2"
 CONFIG_DIR = ROOT / "config" / "qwendex"
 DEFAULT_PROJECT_CONFIG = CONFIG_DIR / "qwendex.json"
 DEFAULT_USER_CONFIG = Path.home() / ".config" / "qwendex" / "config.json"
 PUBLIC_DOC_DIR = ROOT / "public" / "qwendex"
 DEFAULT_RESULTS_ROOT = ROOT / "results" / "qwendex"
+LLMSTACK_CONFIG_DIR = ROOT / "config" / "local_llm_stack"
+LLMSTACK_PUBLIC_CONFIG = LLMSTACK_CONFIG_DIR / "stack_manager.json"
+LLMSTACK_SAMPLE_CONFIG = LLMSTACK_CONFIG_DIR / "stack_manager.sample.json"
+LLMSTACK_LOCAL_CONFIG = LLMSTACK_CONFIG_DIR / "stack_manager.local.json"
 
 PUBLIC_DOC_FILES = (
     "README.md",
     "quickstart.md",
     "architecture.md",
+    "llmstack.md",
     "configuration.md",
     "operations.md",
     "seat-handoff.md",
     "learning-loop.md",
     "manager-mode.md",
+    "codex-patching.md",
+    "dev-environment.md",
+    "testbench.md",
     "tool-server.md",
     "security.md",
     "verification.md",
@@ -45,9 +54,14 @@ PUBLIC_DOC_FILES = (
 )
 
 REQUIRED_SURFACE_FILES = (
+    "llmstack",
     "scripts/qwendex",
     "scripts/qwendex_cli.py",
+    "scripts/qwendex_install_deps",
+    "scripts/qwendex_dev_env",
+    "scripts/qwendex_testbench",
     "scripts/llm",
+    "scripts/windows/open.ps1",
     "scripts/run_local_qwen_codex.sh",
     "scripts/local_qwen_harness_eval.py",
     "scripts/local_qwen_harness_gate.py",
@@ -55,8 +69,37 @@ REQUIRED_SURFACE_FILES = (
     "scripts/local_qwen_skillopt_wrapper.py",
     "config/qwendex/qwendex.schema.json",
     "config/qwendex/qwendex.json",
+    "config/qwendex/dependencies.json",
     "config/qwendex/profiles.json",
     "config/qwendex/model-catalog.json",
+    "config/local_llm_stack/stack_manager.json",
+    "config/local_llm_stack/stack_manager.sample.json",
+    "config/local_llm_stack/profiles.example.json",
+)
+
+LLMSTACK_PUBLIC_FILES = (
+    "llmstack",
+    "config/local_llm_stack/stack_manager.json",
+    "config/local_llm_stack/stack_manager.sample.json",
+    "config/local_llm_stack/profiles.example.json",
+    "config/local_llm_stack/litellm.local.yaml",
+    "config/local_llm_stack/litellm.textgen.local.yaml",
+    "config/local_llm_stack/textgen_cmd_flags.txt",
+    "scripts/local_llm_stack.py",
+    "scripts/llm",
+    "scripts/windows/open.ps1",
+    "scripts/run_textgen_safe_no_model.sh",
+    "scripts/run_llamacpp_qwopucode_gguf.sh",
+    "scripts/run_vllm_qwopucode_gguf.sh",
+    "scripts/run_koboldcpp_gguf.sh",
+)
+
+LLMSTACK_PRIVATE_PATTERNS = (
+    re.compile(r"/home/tweak"),
+    re.compile(r"/mnt/c/Users/Tweak", re.IGNORECASE),
+    re.compile(r"\bAnderson\b"),
+    re.compile(r"\bSTAR\b"),
+    re.compile(r"\bGTM\b"),
 )
 
 SECRET_RE = re.compile(
@@ -71,9 +114,11 @@ PUBLIC_NAMING_PATTERNS = (
     (re.compile(r"\bCodex/Qwen bridge\b", re.IGNORECASE), "Use Qwendex product language."),
 )
 
-MANAGER_MODE_ORDER = ("auto", "lite", "medium", "heavy", "manager")
+MANAGER_MODE_ORDER = ("off", "auto", "lite", "medium", "heavy", "manager")
 MANAGER_MODE_ALIASES = {
     "": "",
+    "off": "off",
+    "disabled": "off",
     "auto": "auto",
     "lite": "lite",
     "medium": "medium",
@@ -85,6 +130,7 @@ MANAGER_MODE_ALIASES = {
     "manual": "lite",
 }
 MANAGER_MODE_LABELS = {
+    "off": "Off",
     "auto": "Auto",
     "lite": "Lite",
     "medium": "Medium",
@@ -92,6 +138,68 @@ MANAGER_MODE_LABELS = {
     "manager": "Manager Mode",
 }
 MANAGER_REASONING_LEVELS = {"low", "medium", "high", "xhigh"}
+MANAGER_DEPLOY_POLICIES = {"auto", "disabled"}
+MANAGER_MAX_SUBAGENTS_LIMIT = 10
+QWENDEX_CODEX_PATCH_MARKER = "QWENDEX_CODEX_TUI_PATCH_V1"
+QWENDEX_CODEX_STATUS_ITEM_ID = "qwendex-manager"
+QWENDEX_CODEX_STATUS_FILE_ENV = "QWENDEX_CODEX_STATUS_FILE"
+CODEX_PATCH_MANIFESTS: dict[str, dict[str, Any]] = {
+    "0.142.4": {
+        "codex_tag": "rust-v0.142.4",
+        "patch_marker": QWENDEX_CODEX_PATCH_MARKER,
+        "status_line_item": QWENDEX_CODEX_STATUS_ITEM_ID,
+        "status_file_env": QWENDEX_CODEX_STATUS_FILE_ENV,
+        "keymap_actions": ["qwendex_toggle_manager", "qwendex_toggle_kaveman", "qwendex_toggle_local"],
+        "toggle_commands": {
+            "manager": "qwendex manager mode --toggle --json",
+            "kaveman": "qwendex manager kaveman --toggle --json",
+            "local": "qwendex manager local --toggle --json",
+        },
+        "source_anchors": [
+            {
+                "path": "codex-rs/tui/src/bottom_pane/status_line_setup.rs",
+                "anchors": ["pub(crate) enum StatusLineItem", "TaskProgress"],
+            },
+            {
+                "path": "codex-rs/tui/src/chatwidget/status_surfaces.rs",
+                "anchors": ["status_line_value_for_item", "StatusLineItem::TaskProgress"],
+            },
+            {
+                "path": "codex-rs/tui/src/bottom_pane/status_line_style.rs",
+                "anchors": ["impl StatusLineAccent", "StatusLineItem::TaskProgress"],
+            },
+            {
+                "path": "codex-rs/tui/src/bottom_pane/status_surface_preview.rs",
+                "anchors": ["pub(crate) enum StatusSurfacePreviewItem", "StatusSurfacePreviewItem::TaskProgress"],
+            },
+            {
+                "path": "codex-rs/config/src/tui_keymap.rs",
+                "anchors": ["pub struct TuiGlobalKeymap", "toggle_raw_output"],
+            },
+            {
+                "path": "codex-rs/tui/src/keymap.rs",
+                "anchors": ["pub(crate) struct AppKeymap", "toggle_raw_output"],
+            },
+            {
+                "path": "codex-rs/tui/src/app/input.rs",
+                "anchors": ["app_keymap_shortcuts_available", "toggle_raw_output"],
+            },
+            {
+                "path": "codex-rs/tui/src/terminal_visualization_instructions.rs",
+                "anchors": ["with_terminal_visualization_instructions", "TERMINAL_VISUALIZATION_INSTRUCTIONS"],
+            },
+        ],
+        "required_source_edits": [
+            "Add StatusLineItem::QwendexManager serialized as qwendex-manager.",
+            "Render qwendex-manager from QWENDEX_CODEX_STATUS_FILE JSON text.",
+            "Add qwendex-manager to status preview and styling surfaces.",
+            "Add global keymap actions qwendex_toggle_manager, qwendex_toggle_kaveman, and qwendex_toggle_local.",
+            "Dispatch those actions before generic composer input handling.",
+            "After each action, call the configured Qwendex toggle command and refresh status surfaces.",
+            "Append the active Kaveman directive from QWENDEX_CODEX_STATUS_FILE to TUI developer instructions.",
+        ],
+    },
+}
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "schema_version": "qwendex.config.v1",
@@ -174,22 +282,30 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "orchestration": {
         "mode": "auto",
         "manager_only_available": True,
-        "shortcut": "Ctrl+Shift+M",
-        "shortcut_command": "scripts/qwendex manager --mode manager_only --json",
+        "shortcut": "Alt+M",
+        "shortcut_command": "scripts/qwendex manager mode --toggle --json",
+        "manager_deploy_policy": "auto",
         "max_subagents": 4,
         "stale_after_minutes": 30,
         "local_subagents": {
             "enabled": True,
-            "shortcut": "Ctrl+Shift+L",
+            "shortcut": "Alt+L",
             "shortcut_command": "scripts/qwendex manager local --toggle --json",
+        },
+        "kaveman": {
+            "enabled": False,
+            "shortcut": "Alt+K",
+            "shortcut_command": "scripts/qwendex manager kaveman --toggle --json",
+            "directive": "Use terse output: short, direct, minimal prose, no optional explanation unless asked.",
         },
         "mode_order": list(MANAGER_MODE_ORDER),
         "mode_profiles": {
+            "off": {"label": "Off", "offload_target": "0%", "max_subagents": 1},
             "auto": {"label": "Auto", "offload_target": "auto", "max_subagents": 4},
             "lite": {"label": "Lite", "offload_target": "10-20%", "max_subagents": 2},
             "medium": {"label": "Medium", "offload_target": "25-45%", "max_subagents": 4},
             "heavy": {"label": "Heavy", "offload_target": "50-75%", "max_subagents": 6},
-            "manager": {"label": "Manager Mode", "offload_target": "85-95%", "max_subagents": 8},
+            "manager": {"label": "Manager Mode", "offload_target": "85-95%", "max_subagents": 10},
         },
         "estimator": {
             "enabled": True,
@@ -223,6 +339,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "xhigh": ["security release", "credential", "public release acceptance", "protocol migration"],
         },
         "stale_session_thresholds_minutes": {
+            "off": 30,
             "auto": 30,
             "lite": 45,
             "medium": 30,
@@ -410,14 +527,34 @@ def manager_mode_profile(config: Mapping[str, Any], mode: str) -> dict[str, Any]
 
 def manager_ui_indicator(config: Mapping[str, Any], mode: str) -> str:
     profile = manager_mode_profile(config, mode)
-    shortcut = config.get("orchestration", {}).get("shortcut", "Ctrl+Shift+M")
-    return f"({shortcut}) Subagent Management: [ {profile['label']} ]"
+    shortcut = config.get("orchestration", {}).get("shortcut", "Alt+M")
+    return f"({shortcut}) Agent Manager: [ {profile['label']} ]"
 
 
 def local_indicator(config: Mapping[str, Any], enabled: bool) -> str:
     local_cfg = config.get("orchestration", {}).get("local_subagents", {})
-    shortcut = local_cfg.get("shortcut", "Ctrl+Shift+L") if isinstance(local_cfg, Mapping) else "Ctrl+Shift+L"
+    shortcut = local_cfg.get("shortcut", "Alt+L") if isinstance(local_cfg, Mapping) else "Alt+L"
     return f"({shortcut}) Local: [{'Y' if enabled else 'N'}]"
+
+
+def kaveman_default_enabled(config: Mapping[str, Any]) -> bool:
+    kaveman = config.get("orchestration", {}).get("kaveman", {})
+    if isinstance(kaveman, Mapping) and isinstance(kaveman.get("enabled"), bool):
+        return bool(kaveman["enabled"])
+    return False
+
+
+def kaveman_indicator(config: Mapping[str, Any], enabled: bool) -> str:
+    kaveman = config.get("orchestration", {}).get("kaveman", {})
+    shortcut = kaveman.get("shortcut", "Alt+K") if isinstance(kaveman, Mapping) else "Alt+K"
+    return f"({shortcut}) Kaveman: [{'Y' if enabled else 'N'}]"
+
+
+def kaveman_directive(config: Mapping[str, Any]) -> str:
+    kaveman = config.get("orchestration", {}).get("kaveman", {})
+    if isinstance(kaveman, Mapping) and isinstance(kaveman.get("directive"), str):
+        return kaveman["directive"]
+    return "Use terse output: short, direct, minimal prose, no optional explanation unless asked."
 
 
 def estimator_config(config: Mapping[str, Any]) -> dict[str, Any]:
@@ -439,6 +576,8 @@ def env_config(env: Mapping[str, str] | None = None) -> dict[str, Any]:
         data["default_seat"] = source["QWENDEX_DEFAULT_SEAT"]
     if source.get("QWENDEX_RESULTS_ROOT"):
         data["receipts"] = {"dir": source["QWENDEX_RESULTS_ROOT"]}
+    if source.get("QWENDEX_LEDGER_DB"):
+        data.setdefault("receipts", {})["ledger"] = source["QWENDEX_LEDGER_DB"]
     if source.get("QWENDEX_STATE_DB"):
         data["state"] = {"db": source["QWENDEX_STATE_DB"]}
     if source.get("QWENDEX_GUARD_PROFILE"):
@@ -450,6 +589,8 @@ def env_config(env: Mapping[str, str] | None = None) -> dict[str, Any]:
         orchestration["mode"] = source["QWENDEX_ORCHESTRATION_MODE"]
     if source.get("QWENDEX_MANAGER_MODE"):
         orchestration["mode"] = source["QWENDEX_MANAGER_MODE"]
+    if source.get("QWENDEX_MANAGER_DEPLOY_POLICY"):
+        orchestration["manager_deploy_policy"] = source["QWENDEX_MANAGER_DEPLOY_POLICY"]
     estimator: dict[str, Any] = {}
     if source.get("QWENDEX_ESTIMATOR_MODEL"):
         estimator["model"] = source["QWENDEX_ESTIMATOR_MODEL"]
@@ -460,6 +601,9 @@ def env_config(env: Mapping[str, str] | None = None) -> dict[str, Any]:
     local_enabled = normalize_local_toggle(source.get("QWENDEX_LOCAL_SUBAGENTS"))
     if local_enabled is not None:
         orchestration["local_subagents"] = {"enabled": local_enabled}
+    kaveman_enabled = normalize_local_toggle(source.get("QWENDEX_KAVEMAN"))
+    if kaveman_enabled is not None:
+        orchestration["kaveman"] = {"enabled": kaveman_enabled}
     if orchestration:
         data["orchestration"] = orchestration
     routing: dict[str, Any] = {}
@@ -523,8 +667,10 @@ def validate_qwendex_config(config: Mapping[str, Any]) -> list[str]:
     if normalize_manager_mode(orchestration.get("mode")) not in set(MANAGER_MODE_ORDER):
         failures.append(f"invalid orchestration.mode: {config.get('orchestration', {}).get('mode')}")
     max_subagents = orchestration.get("max_subagents", 0)
-    if not isinstance(max_subagents, int) or max_subagents < 1 or max_subagents > 8:
+    if not isinstance(max_subagents, int) or max_subagents < 1 or max_subagents > MANAGER_MAX_SUBAGENTS_LIMIT:
         failures.append(f"invalid orchestration.max_subagents: {max_subagents}")
+    if orchestration.get("manager_deploy_policy", "auto") not in MANAGER_DEPLOY_POLICIES:
+        failures.append(f"invalid orchestration.manager_deploy_policy: {orchestration.get('manager_deploy_policy')}")
     stale_after = orchestration.get("stale_after_minutes", 0)
     if not isinstance(stale_after, int) or stale_after < 5 or stale_after > 240:
         failures.append(f"invalid orchestration.stale_after_minutes: {stale_after}")
@@ -538,6 +684,18 @@ def validate_qwendex_config(config: Mapping[str, Any]) -> list[str]:
             failures.append(f"invalid orchestration.local_subagents.shortcut: {local_subagents.get('shortcut')}")
         if not isinstance(local_subagents.get("shortcut_command"), str) or not local_subagents.get("shortcut_command"):
             failures.append(f"invalid orchestration.local_subagents.shortcut_command: {local_subagents.get('shortcut_command')}")
+    kaveman = orchestration.get("kaveman", {})
+    if not isinstance(kaveman, Mapping):
+        failures.append("invalid orchestration.kaveman")
+    else:
+        if not isinstance(kaveman.get("enabled"), bool):
+            failures.append(f"invalid orchestration.kaveman.enabled: {kaveman.get('enabled')}")
+        if not isinstance(kaveman.get("shortcut"), str) or not kaveman.get("shortcut"):
+            failures.append(f"invalid orchestration.kaveman.shortcut: {kaveman.get('shortcut')}")
+        if not isinstance(kaveman.get("shortcut_command"), str) or not kaveman.get("shortcut_command"):
+            failures.append(f"invalid orchestration.kaveman.shortcut_command: {kaveman.get('shortcut_command')}")
+        if not isinstance(kaveman.get("directive"), str) or not kaveman.get("directive"):
+            failures.append(f"invalid orchestration.kaveman.directive: {kaveman.get('directive')}")
     mode_order = orchestration.get("mode_order", list(MANAGER_MODE_ORDER))
     if [normalize_manager_mode(item) for item in mode_order] != list(MANAGER_MODE_ORDER):
         failures.append(f"invalid orchestration.mode_order: {mode_order}")
@@ -555,7 +713,7 @@ def validate_qwendex_config(config: Mapping[str, Any]) -> list[str]:
             if not isinstance(profile.get("offload_target"), str) or not profile.get("offload_target"):
                 failures.append(f"invalid orchestration.mode_profiles.{mode}.offload_target")
             profile_max = profile.get("max_subagents", max_subagents)
-            if not isinstance(profile_max, int) or profile_max < 1 or profile_max > 8:
+            if not isinstance(profile_max, int) or profile_max < 1 or profile_max > MANAGER_MAX_SUBAGENTS_LIMIT:
                 failures.append(f"invalid orchestration.mode_profiles.{mode}.max_subagents: {profile_max}")
     estimator = orchestration.get("estimator", {})
     if not isinstance(estimator, Mapping):
@@ -1210,6 +1368,12 @@ def current_local_enabled(config: Mapping[str, Any], conn: sqlite3.Connection) -
     return local_subagents_default_enabled(config) if parsed is None else parsed
 
 
+def current_kaveman_enabled(config: Mapping[str, Any], conn: sqlite3.Connection) -> bool:
+    stored = get_manager_setting(conn, "kaveman_enabled", None)
+    parsed = normalize_local_toggle(stored)
+    return kaveman_default_enabled(config) if parsed is None else parsed
+
+
 def stale_age_seconds(row: Mapping[str, Any]) -> float:
     try:
         return (datetime.now(UTC) - parse_utc(str(row["heartbeat_at"]))).total_seconds()
@@ -1217,41 +1381,88 @@ def stale_age_seconds(row: Mapping[str, Any]) -> float:
         return 0.0
 
 
+def manager_session_is_stale(session: Mapping[str, Any], *, stale_after_minutes: int) -> bool:
+    return stale_age_seconds(session) >= stale_after_minutes * 60
+
+
+def manager_session_is_read_only(session: Mapping[str, Any]) -> bool:
+    return str(session.get("write_surface") or "").strip().lower() in {"read-only", "readonly"}
+
+
+def reconcile_stale_manager_sessions(
+    conn: sqlite3.Connection,
+    *,
+    stale_after_minutes: int,
+    now: str,
+) -> dict[str, Any]:
+    rows = conn.execute("SELECT * FROM qwendex_agent_sessions WHERE status = 'active'").fetchall()
+    closed: list[dict[str, Any]] = []
+    skipped_writers: list[dict[str, Any]] = []
+    for row in rows:
+        session = row_to_agent_session(row)
+        if not session or not manager_session_is_stale(session, stale_after_minutes=stale_after_minutes):
+            continue
+        if not manager_session_is_read_only(session):
+            skipped_writers.append(session)
+            continue
+        close_receipt = make_id("close")
+        conn.execute(
+            "UPDATE qwendex_agent_sessions SET status = 'closed', updated_at = ?, stop_reason = 'stale', close_receipt = ? WHERE agent_id = ?",
+            (now, close_receipt, session["agent_id"]),
+        )
+        updated = conn.execute("SELECT * FROM qwendex_agent_sessions WHERE agent_id = ?", (session["agent_id"],)).fetchone()
+        closed.append(row_to_agent_session(updated) or {})
+    conn.commit()
+    return {
+        "closed_count": len(closed),
+        "closed": closed,
+        "skipped_writer_count": len(skipped_writers),
+        "skipped_writers": skipped_writers,
+        "stale_after_minutes": max(stale_after_minutes, 5),
+    }
+
+
 def summarize_agent_sessions(
     sessions: list[dict[str, Any]],
     *,
     stale_after_minutes: int,
 ) -> dict[str, Any]:
-    active = [session for session in sessions if session.get("status") == "active"]
+    active_all = [session for session in sessions if session.get("status") == "active"]
     stale = [
         session
-        for session in active
-        if stale_age_seconds(session) >= stale_after_minutes * 60
+        for session in active_all
+        if manager_session_is_stale(session, stale_after_minutes=stale_after_minutes)
     ]
+    stale_ids = {session.get("agent_id") for session in stale}
+    active = [session for session in active_all if session.get("agent_id") not in stale_ids]
+    stale_writers = [session for session in stale if not manager_session_is_read_only(session)]
+    open_sessions = [session for session in sessions if session.get("status") != "closed"]
     receipts = [
         session.get("context_packet", {}).get("receipt_path", "")
-        for session in sessions
+        for session in open_sessions
         if session.get("context_packet", {}).get("receipt_path")
     ]
     files_touched = sorted({
         path
-        for session in sessions
+        for session in open_sessions
         for path in session.get("context_packet", {}).get("exact_files", [])
     })
     blockers = [
         session.get("stop_reason", "")
-        for session in sessions
+        for session in open_sessions
         if session.get("stop_reason") and session.get("status") != "closed"
     ]
+    blockers.extend(f"stale writer lane: {session.get('lane') or session.get('agent_id')}" for session in stale_writers)
     validation_counts = {"pending": 0, "pass": 0, "fail": 0}
-    for session in sessions:
+    for session in open_sessions:
         status = str(session.get("validation_status") or "pending")
         validation_counts[status] = validation_counts.get(status, 0) + 1
     return {
         "active_subagents": {"count": len(active), "agents": active},
         "stale_sessions": {"count": len(stale), "agents": stale},
+        "stale_writer_sessions": {"count": len(stale_writers), "agents": stale_writers},
         "subagent_state": {
-            "context_used": sum(int(session.get("context_packet", {}).get("context_budget") or 0) for session in sessions),
+            "context_used": sum(int(session.get("context_packet", {}).get("context_budget") or 0) for session in open_sessions),
             "files_touched": files_touched,
             "blockers": blockers,
             "receipts": receipts,
@@ -1265,13 +1476,55 @@ def summarize_agent_sessions(
     }
 
 
+def manager_deploy_policy(config: Mapping[str, Any]) -> str:
+    raw = str(config.get("orchestration", {}).get("manager_deploy_policy", "auto")).strip().lower()
+    return raw if raw in MANAGER_DEPLOY_POLICIES else "auto"
+
+
+def manager_deployment_contract(mode: str, policy: str, active_count: int) -> dict[str, Any]:
+    required = normalize_manager_mode(mode) == "manager" and policy == "auto"
+    healthy = not required or active_count > 0
+    return {
+        "policy": policy,
+        "required": required,
+        "active_count": active_count,
+        "healthy": healthy,
+        "status": "pass" if healthy else "blocked",
+        "summary": (
+            "Manager Mode has active agent lanes."
+            if required and healthy
+            else "Manager deployment is disabled by policy."
+            if policy == "disabled"
+            else "Manager deployment is not required for this mode."
+            if not required
+            else "Manager Mode requires at least one active agent lane."
+        ),
+    }
+
+
+def manager_health_issues(config: Mapping[str, Any], sessions: list[dict[str, Any]], *, mode: str, stale_after_minutes: int) -> list[str]:
+    summary = summarize_agent_sessions(sessions, stale_after_minutes=stale_after_minutes)
+    contract = manager_deployment_contract(
+        normalize_manager_mode(mode),
+        manager_deploy_policy(config),
+        int(summary["active_subagents"]["count"]),
+    )
+    issues: list[str] = []
+    if summary["stale_writer_sessions"]["count"]:
+        ids = ", ".join(str(session.get("agent_id")) for session in summary["stale_writer_sessions"]["agents"])
+        issues.append(f"stale manager writer sessions require integration or explicit stop: {ids}")
+    if contract["status"] != "pass":
+        issues.append(contract["summary"])
+    return issues
+
+
 def high_value_add_lines(local_status: Mapping[str, Any], *, release_risk: str = "medium") -> list[str]:
     lines: list[str] = []
     if local_status.get("enabled"):
         suffix = "local Qwen is available." if local_status.get("usable") else "local Qwen is enabled but not confirmed live."
         lines.append(f"High-value add: run qwendex eval --live --json before release; {suffix}")
     else:
-        lines.append("High-value add: local subagents are toggled off; use Ctrl+Shift+L before delegating bounded receipt work.")
+        lines.append("High-value add: local subagents are toggled off; use Alt+L before delegating bounded receipt work.")
     if release_risk in {"medium", "high"}:
         lines.append("High-value add: escalate only the security-review lane to high; main session can stay user-selected.")
     return lines[:2]
@@ -1364,6 +1617,7 @@ def manager_mode_payload(
     local_status: Mapping[str, Any],
     max_subagents: int,
     stale_after_minutes: int,
+    kaveman_enabled: bool = False,
     legacy_mode: str = "",
     sessions: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
@@ -1374,15 +1628,21 @@ def manager_mode_payload(
         "label": profile["label"],
         "legacy_mode": legacy_mode,
         "ui_indicator": manager_ui_indicator(config, profile["mode"]),
+        "kaveman_indicator": kaveman_indicator(config, kaveman_enabled),
+        "kaveman_enabled": kaveman_enabled,
+        "kaveman_directive": kaveman_directive(config) if kaveman_enabled else "",
         "local_indicator": local_status["indicator"],
         "local_subagents": local_status,
         "offload_target": profile["offload_target"],
         "shortcut": config["orchestration"]["shortcut"],
         "shortcut_command": config["orchestration"]["shortcut_command"],
-        "local_shortcut": config["orchestration"].get("local_subagents", {}).get("shortcut", "Ctrl+Shift+L"),
+        "local_shortcut": config["orchestration"].get("local_subagents", {}).get("shortcut", "Alt+L"),
         "local_shortcut_command": config["orchestration"].get("local_subagents", {}).get("shortcut_command", "scripts/qwendex manager local --toggle --json"),
+        "kaveman_shortcut": config["orchestration"].get("kaveman", {}).get("shortcut", "Alt+K"),
+        "kaveman_shortcut_command": config["orchestration"].get("kaveman", {}).get("shortcut_command", "scripts/qwendex manager kaveman --toggle --json"),
         "shortcut_note": "Bind shortcuts in the terminal or host UI; a non-interactive CLI cannot globally capture keyboard chords.",
         "manager_only_available": config["orchestration"]["manager_only_available"],
+        "manager_deploy_policy": manager_deploy_policy(config),
         "max_subagents": max_subagents,
         "stale_after_minutes": stale_after_minutes,
         "close_stale_policy": config["orchestration"]["close_stale_policy"],
@@ -1412,6 +1672,18 @@ def manager_mode_payload(
             **lane_model_reasoning(config, task_class=task_class, lane=lane, risk=risk, local_status=local_status),
         })
     data.update(summary)
+    data["deployment_contract"] = manager_deployment_contract(
+        profile["mode"],
+        data["manager_deploy_policy"],
+        int(data["active_subagents"]["count"]),
+    )
+    if data["stale_writer_sessions"]["count"]:
+        data["deployment_contract"] = {
+            **data["deployment_contract"],
+            "healthy": False,
+            "status": "blocked",
+            "summary": "Stale manager writer sessions require integration or explicit stop.",
+        }
     data["manager_estimate"] = manager_self_estimate(
         config,
         mode=profile["mode"],
@@ -1419,6 +1691,782 @@ def manager_mode_payload(
         stale_pressure="high" if data["stale_sessions"]["count"] else "none",
     )
     return data
+
+
+def manager_status_surface_text(label: str, local_enabled: bool, kaveman_enabled: bool) -> str:
+    return (
+        f"{{Qwendex}} Agent Manager: [{label}] | Kaveman: [{'Y' if kaveman_enabled else 'N'}] "
+        f"| Local: [{'Y' if local_enabled else 'N'}] (Alt+M/K/L)"
+    )
+
+
+def codex_status_payload(config: Mapping[str, Any], *, write_path: Path | None = None) -> dict[str, Any]:
+    with connect_state(config) as conn:
+        mode = current_manager_mode(config, conn)
+        stale_after = mode_stale_after_minutes(config, mode)
+        reconcile_stale_manager_sessions(conn, stale_after_minutes=stale_after, now=utc_now())
+        local_enabled = current_local_enabled(config, conn)
+        kaveman_enabled = current_kaveman_enabled(config, conn)
+        local_status = local_subagent_status(config, enabled=local_enabled, env=os.environ, probe=True)
+        if local_enabled and not local_status.get("usable"):
+            set_manager_setting(conn, "local_subagents_enabled", False)
+            conn.commit()
+            local_status = local_subagent_status(config, enabled=False, env=os.environ, probe=False)
+    profile = manager_mode_profile(config, mode)
+    text = manager_status_surface_text(
+        profile["label"],
+        bool(local_status.get("enabled")) and bool(local_status.get("usable")),
+        kaveman_enabled,
+    )
+    data = {
+        "text": text,
+        "mode": profile["mode"],
+        "label": profile["label"],
+        "kaveman": "Y" if kaveman_enabled else "N",
+        "kaveman_enabled": kaveman_enabled,
+        "kaveman_directive": kaveman_directive(config) if kaveman_enabled else "",
+        "local": "Y" if local_status.get("enabled") else "N",
+        "local_enabled": bool(local_status.get("enabled")),
+        "local_available": local_status.get("available"),
+        "local_usable": bool(local_status.get("usable")),
+        "state_db": str(state_db_path(config)),
+        "status_file_env": QWENDEX_CODEX_STATUS_FILE_ENV,
+    }
+    if write_path is not None:
+        target = write_path.expanduser()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        data["status_file"] = str(target)
+    return data
+
+
+def sync_codex_status_file_from_env(config: Mapping[str, Any]) -> str:
+    raw = os.environ.get(QWENDEX_CODEX_STATUS_FILE_ENV, "").strip()
+    if not raw:
+        return ""
+    return str(codex_status_payload(config, write_path=Path(raw)).get("status_file") or "")
+
+
+def parse_codex_version_output(output: str) -> str:
+    match = re.search(r"(\d+\.\d+\.\d+)", output)
+    return match.group(1) if match else ""
+
+
+def detect_codex_version(codex_bin: str) -> dict[str, Any]:
+    path = shutil.which(codex_bin) or (codex_bin if Path(codex_bin).exists() else "")
+    try:
+        result = subprocess.run(
+            [codex_bin, "--version"],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {
+            "codex_bin": codex_bin,
+            "path": path,
+            "raw": "",
+            "version": "",
+            "returncode": 127,
+            "error": redact_text(str(exc)),
+        }
+    raw = (result.stdout or result.stderr).strip()
+    return {
+        "codex_bin": codex_bin,
+        "path": path,
+        "raw": raw,
+        "version": parse_codex_version_output(raw),
+        "returncode": result.returncode,
+        "error": redact_text(result.stderr.strip()) if result.returncode else "",
+    }
+
+
+def codex_source_patch_state(source: Path, manifest: Mapping[str, Any]) -> dict[str, Any]:
+    root = source.expanduser().resolve()
+    files: list[dict[str, Any]] = []
+    missing_files: list[str] = []
+    missing_anchors: list[str] = []
+    marker_hits: list[str] = []
+    for spec in manifest.get("source_anchors", []):
+        rel = str(spec.get("path") or "")
+        path = root / rel
+        if not path.is_file():
+            missing_files.append(rel)
+            files.append({"path": rel, "exists": False, "anchors_ok": False, "patched": False})
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        anchors = [str(anchor) for anchor in spec.get("anchors", [])]
+        absent = [anchor for anchor in anchors if anchor not in text]
+        missing_anchors.extend(f"{rel}: {anchor}" for anchor in absent)
+        patched = QWENDEX_CODEX_PATCH_MARKER in text or QWENDEX_CODEX_STATUS_ITEM_ID in text
+        if patched:
+            marker_hits.append(rel)
+        files.append({
+            "path": rel,
+            "exists": True,
+            "anchors_ok": not absent,
+            "patched": patched,
+            "missing_anchors": absent,
+        })
+    return {
+        "root": str(root),
+        "files": files,
+        "missing_files": missing_files,
+        "missing_anchors": missing_anchors,
+        "patch_marker_hits": marker_hits,
+        "anchors_ok": not missing_files and not missing_anchors,
+        "applied": bool(marker_hits),
+    }
+
+
+def codex_source_patch_specs(version: str) -> list[dict[str, Any]]:
+    marker = f"// {QWENDEX_CODEX_PATCH_MARKER}"
+    if version != "0.142.4":
+        return []
+    return [
+        {
+            "path": "codex-rs/tui/src/bottom_pane/status_line_setup.rs",
+            "replacements": [
+                (
+                    """    /// Latest checklist task progress from `update_plan` (if available).
+    TaskProgress,
+""",
+                    f"""    /// Latest checklist task progress from `update_plan` (if available).
+    TaskProgress,
+
+    {marker}
+    /// Qwendex manager, Kaveman, and local routing state.
+    #[strum(to_string = "qwendex-manager")]
+    QwendexManager,
+""",
+                ),
+                (
+                    """            StatusLineItem::TaskProgress => {
+                "Latest task progress from update_plan (omitted until available)"
+            }
+""",
+                    """            StatusLineItem::TaskProgress => {
+                "Latest task progress from update_plan (omitted until available)"
+            },
+            StatusLineItem::QwendexManager => "Qwendex manager mode, Kaveman, and local routing state",
+""",
+                ),
+                (
+                    """            StatusLineItem::TaskProgress => StatusSurfacePreviewItem::TaskProgress,
+""",
+                    """            StatusLineItem::TaskProgress => StatusSurfacePreviewItem::TaskProgress,
+            StatusLineItem::QwendexManager => StatusSurfacePreviewItem::QwendexManager,
+""",
+                ),
+            ],
+        },
+        {
+            "path": "codex-rs/tui/src/chatwidget/status_surfaces.rs",
+            "replacements": [
+                (
+                    """impl ChatWidget {
+""",
+                    f"""{marker}
+fn qwendex_status_line_text() -> Option<String> {{
+    let status_file = std::env::var("QWENDEX_CODEX_STATUS_FILE").ok()?;
+    let raw = std::fs::read_to_string(status_file).ok()?;
+    let value = serde_json::from_str::<serde_json::Value>(&raw).ok()?;
+    value
+        .get("text")
+        .and_then(|text| text.as_str())
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(ToOwned::to_owned)
+}}
+
+impl ChatWidget {{
+""",
+                ),
+                (
+                    """            StatusLineItem::RawOutput => self.raw_output_mode().then(|| "raw output".to_string()),
+""",
+                    """            StatusLineItem::RawOutput => self.raw_output_mode().then(|| "raw output".to_string()),
+            StatusLineItem::QwendexManager => qwendex_status_line_text(),
+""",
+                ),
+                (
+                    """            StatusSurfacePreviewItem::RawOutput => StatusLineItem::RawOutput,
+""",
+                    """            StatusSurfacePreviewItem::RawOutput => StatusLineItem::RawOutput,
+            StatusSurfacePreviewItem::QwendexManager => StatusLineItem::QwendexManager,
+""",
+                ),
+            ],
+        },
+        {
+            "path": "codex-rs/tui/src/bottom_pane/status_line_style.rs",
+            "replacements": [
+                (
+                    """            StatusLineItem::FastMode | StatusLineItem::RawOutput => Self::Mode,
+""",
+                    f"""            {marker}
+            StatusLineItem::FastMode | StatusLineItem::RawOutput | StatusLineItem::QwendexManager => Self::Mode,
+""",
+                ),
+            ],
+        },
+        {
+            "path": "codex-rs/tui/src/bottom_pane/status_surface_preview.rs",
+            "replacements": [
+                (
+                    """    TaskProgress,
+}
+""",
+                    f"""    TaskProgress,
+    {marker}
+    QwendexManager,
+}}
+""",
+                ),
+                (
+                    """            StatusSurfacePreviewItem::TaskProgress => "Tasks 0/0",
+""",
+                    """            StatusSurfacePreviewItem::TaskProgress => "Tasks 0/0",
+            StatusSurfacePreviewItem::QwendexManager => "{Qwendex} Agent Manager: [Manager Mode] | Kaveman: [N] | Local: [Y] (Alt+M/K/L)",
+""",
+                ),
+                (
+                    """            Self::TaskProgress,
+        ]
+""",
+                    """            Self::TaskProgress,
+            Self::QwendexManager,
+        ]
+""",
+                ),
+            ],
+        },
+        {
+            "path": "codex-rs/config/src/tui_keymap.rs",
+            "replacements": [
+                (
+                    """    /// Toggle raw scrollback mode for copy-friendly transcript selection.
+    pub toggle_raw_output: Option<KeybindingsSpec>,
+}
+""",
+                    f"""    /// Toggle raw scrollback mode for copy-friendly transcript selection.
+    pub toggle_raw_output: Option<KeybindingsSpec>,
+    {marker}
+    /// Toggle Qwendex Manager Mode.
+    pub qwendex_toggle_manager: Option<KeybindingsSpec>,
+    /// Toggle Qwendex Kaveman output mode.
+    pub qwendex_toggle_kaveman: Option<KeybindingsSpec>,
+    /// Toggle Qwendex local routing.
+    pub qwendex_toggle_local: Option<KeybindingsSpec>,
+}}
+""",
+                ),
+            ],
+        },
+        {
+            "path": "codex-rs/tui/src/keymap.rs",
+            "replacements": [
+                (
+                    """    /// Toggle raw scrollback mode for copy-friendly transcript selection.
+    pub(crate) toggle_raw_output: Vec<KeyBinding>,
+}
+""",
+                    f"""    /// Toggle raw scrollback mode for copy-friendly transcript selection.
+    pub(crate) toggle_raw_output: Vec<KeyBinding>,
+    {marker}
+    /// Toggle Qwendex Manager Mode.
+    pub(crate) qwendex_toggle_manager: Vec<KeyBinding>,
+    /// Toggle Qwendex Kaveman output mode.
+    pub(crate) qwendex_toggle_kaveman: Vec<KeyBinding>,
+    /// Toggle Qwendex local routing.
+    pub(crate) qwendex_toggle_local: Vec<KeyBinding>,
+}}
+""",
+                ),
+                (
+                    """            toggle_raw_output: resolve_bindings(
+                keymap.global.toggle_raw_output.as_ref(),
+                &defaults.app.toggle_raw_output,
+                "tui.keymap.global.toggle_raw_output",
+            )?,
+""",
+                    """            toggle_raw_output: resolve_bindings(
+                keymap.global.toggle_raw_output.as_ref(),
+                &defaults.app.toggle_raw_output,
+                "tui.keymap.global.toggle_raw_output",
+            )?,
+            qwendex_toggle_manager: resolve_bindings(
+                keymap.global.qwendex_toggle_manager.as_ref(),
+                &defaults.app.qwendex_toggle_manager,
+                "tui.keymap.global.qwendex_toggle_manager",
+            )?,
+            qwendex_toggle_kaveman: resolve_bindings(
+                keymap.global.qwendex_toggle_kaveman.as_ref(),
+                &defaults.app.qwendex_toggle_kaveman,
+                "tui.keymap.global.qwendex_toggle_kaveman",
+            )?,
+            qwendex_toggle_local: resolve_bindings(
+                keymap.global.qwendex_toggle_local.as_ref(),
+                &defaults.app.qwendex_toggle_local,
+                "tui.keymap.global.qwendex_toggle_local",
+            )?,
+""",
+                ),
+                (
+                    """            (
+                keymap.global.toggle_raw_output.as_ref(),
+                app.toggle_raw_output.as_slice(),
+            ),
+""",
+                    """            (
+                keymap.global.toggle_raw_output.as_ref(),
+                app.toggle_raw_output.as_slice(),
+            ),
+            (
+                keymap.global.qwendex_toggle_manager.as_ref(),
+                app.qwendex_toggle_manager.as_slice(),
+            ),
+            (
+                keymap.global.qwendex_toggle_kaveman.as_ref(),
+                app.qwendex_toggle_kaveman.as_slice(),
+            ),
+            (
+                keymap.global.qwendex_toggle_local.as_ref(),
+                app.qwendex_toggle_local.as_slice(),
+            ),
+""",
+                ),
+                (
+                    """                toggle_raw_output: default_bindings![alt(KeyCode::Char('r'))],
+            },
+""",
+                    """                toggle_raw_output: default_bindings![alt(KeyCode::Char('r'))],
+                qwendex_toggle_manager: default_bindings![alt(KeyCode::Char('m'))],
+                qwendex_toggle_kaveman: default_bindings![alt(KeyCode::Char('k'))],
+                qwendex_toggle_local: default_bindings![alt(KeyCode::Char('l'))],
+            },
+""",
+                ),
+                (
+                    """                ("toggle_fast_mode", self.app.toggle_fast_mode.as_slice()),
+                ("toggle_raw_output", self.app.toggle_raw_output.as_slice()),
+                ("chat.interrupt_turn", self.chat.interrupt_turn.as_slice()),
+""",
+                    """                ("toggle_fast_mode", self.app.toggle_fast_mode.as_slice()),
+                ("toggle_raw_output", self.app.toggle_raw_output.as_slice()),
+                ("qwendex_toggle_manager", self.app.qwendex_toggle_manager.as_slice()),
+                ("qwendex_toggle_kaveman", self.app.qwendex_toggle_kaveman.as_slice()),
+                ("qwendex_toggle_local", self.app.qwendex_toggle_local.as_slice()),
+                ("chat.interrupt_turn", self.chat.interrupt_turn.as_slice()),
+""",
+                ),
+                (
+                    """                ("toggle_fast_mode", self.app.toggle_fast_mode.as_slice()),
+                ("toggle_raw_output", self.app.toggle_raw_output.as_slice()),
+            ],
+            [
+""",
+                    """                ("toggle_fast_mode", self.app.toggle_fast_mode.as_slice()),
+                ("toggle_raw_output", self.app.toggle_raw_output.as_slice()),
+                ("qwendex_toggle_manager", self.app.qwendex_toggle_manager.as_slice()),
+                ("qwendex_toggle_kaveman", self.app.qwendex_toggle_kaveman.as_slice()),
+                ("qwendex_toggle_local", self.app.qwendex_toggle_local.as_slice()),
+            ],
+            [
+""",
+                ),
+                (
+                    """                ("toggle_vim_mode", self.app.toggle_vim_mode.as_slice()),
+                ("toggle_fast_mode", self.app.toggle_fast_mode.as_slice()),
+                ("toggle_raw_output", self.app.toggle_raw_output.as_slice()),
+                (
+                    "composer.history_search_previous",
+""",
+                    """                ("toggle_vim_mode", self.app.toggle_vim_mode.as_slice()),
+                ("toggle_fast_mode", self.app.toggle_fast_mode.as_slice()),
+                ("toggle_raw_output", self.app.toggle_raw_output.as_slice()),
+                ("qwendex_toggle_manager", self.app.qwendex_toggle_manager.as_slice()),
+                ("qwendex_toggle_kaveman", self.app.qwendex_toggle_kaveman.as_slice()),
+                ("qwendex_toggle_local", self.app.qwendex_toggle_local.as_slice()),
+                (
+                    "composer.history_search_previous",
+""",
+                ),
+            ],
+        },
+        {
+            "path": "codex-rs/tui/src/app/input.rs",
+            "replacements": [
+                (
+                    """    pub(super) async fn handle_key_event(
+""",
+                    f"""    {marker}
+    fn run_qwendex_toggle_command(&mut self, tui: &mut tui::Tui, label: &str, args: &[&str]) {{
+        let output = std::process::Command::new("qwendex").args(args).output();
+        match output {{
+            Ok(output) if output.status.success() => {{
+                self.chat_widget.add_to_history(history_cell::new_info_event(
+                    format!("Qwendex {{label}} toggled."),
+                    None,
+                ));
+            }}
+            Ok(output) => {{
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                self.chat_widget.add_to_history(history_cell::new_error_event(format!(
+                    "Qwendex {{label}} toggle failed: {{stderr}}"
+                )));
+            }}
+            Err(err) => {{
+                self.chat_widget.add_to_history(history_cell::new_error_event(format!(
+                    "Qwendex {{label}} toggle failed: {{err}}"
+                )));
+            }}
+        }}
+        self.refresh_status_line();
+        tui.frame_requester().schedule_frame();
+    }}
+
+    pub(super) async fn handle_key_event(
+""",
+                ),
+                (
+                    """        if app_keymap_shortcuts_available && self.keymap.app.toggle_raw_output.is_pressed(key_event)
+        {
+            let enabled = !self.chat_widget.raw_output_mode();
+            self.apply_raw_output_mode(tui, enabled, /*notify*/ false);
+            return;
+        }
+""",
+                    """        if app_keymap_shortcuts_available
+            && self.keymap.app.qwendex_toggle_manager.is_pressed(key_event)
+        {
+            self.run_qwendex_toggle_command(
+                tui,
+                "manager mode",
+                &["manager", "mode", "--toggle", "--json"],
+            );
+            return;
+        }
+
+        if app_keymap_shortcuts_available
+            && self.keymap.app.qwendex_toggle_kaveman.is_pressed(key_event)
+        {
+            self.run_qwendex_toggle_command(
+                tui,
+                "Kaveman mode",
+                &["manager", "kaveman", "--toggle", "--json"],
+            );
+            return;
+        }
+
+        if app_keymap_shortcuts_available
+            && self.keymap.app.qwendex_toggle_local.is_pressed(key_event)
+        {
+            self.run_qwendex_toggle_command(
+                tui,
+                "local routing",
+                &["manager", "local", "--toggle", "--json"],
+            );
+            return;
+        }
+
+        if app_keymap_shortcuts_available && self.keymap.app.toggle_raw_output.is_pressed(key_event)
+        {
+            let enabled = !self.chat_widget.raw_output_mode();
+            self.apply_raw_output_mode(tui, enabled, /*notify*/ false);
+            return;
+        }
+""",
+                ),
+            ],
+        },
+        {
+            "path": "codex-rs/tui/src/terminal_visualization_instructions.rs",
+            "replacements": [
+                (
+                    """pub(crate) fn with_terminal_visualization_instructions(
+    config: &Config,
+    control_instructions: Option<String>,
+) -> Option<String> {
+    if !config
+        .features
+        .enabled(Feature::TerminalVisualizationInstructions)
+    {
+        return control_instructions;
+    }
+
+    let existing_instructions =
+        control_instructions.or_else(|| config.developer_instructions.clone());
+    Some(match existing_instructions.as_deref() {
+        Some(existing) if !existing.trim().is_empty() => {
+            format!("{existing}\\n\\n{TERMINAL_VISUALIZATION_INSTRUCTIONS}")
+        }
+        _ => TERMINAL_VISUALIZATION_INSTRUCTIONS.to_string(),
+    })
+}
+""",
+                    f"""{marker}
+fn qwendex_kaveman_directive() -> Option<String> {{
+    let status_file = std::env::var("QWENDEX_CODEX_STATUS_FILE").ok()?;
+    let raw = std::fs::read_to_string(status_file).ok()?;
+    let value = serde_json::from_str::<serde_json::Value>(&raw).ok()?;
+    if !value
+        .get("kaveman_enabled")
+        .and_then(|enabled| enabled.as_bool())
+        .unwrap_or(false)
+    {{
+        return None;
+    }}
+    value
+        .get("kaveman_directive")
+        .and_then(|directive| directive.as_str())
+        .map(str::trim)
+        .filter(|directive| !directive.is_empty())
+        .map(|directive| format!("Qwendex Kaveman directive: {{directive}}"))
+}}
+
+pub(crate) fn with_terminal_visualization_instructions(
+    config: &Config,
+    control_instructions: Option<String>,
+) -> Option<String> {{
+    let mut blocks = Vec::new();
+    if let Some(existing) = control_instructions.or_else(|| config.developer_instructions.clone()) {{
+        if !existing.trim().is_empty() {{
+            blocks.push(existing);
+        }}
+    }}
+    if config
+        .features
+        .enabled(Feature::TerminalVisualizationInstructions)
+    {{
+        blocks.push(TERMINAL_VISUALIZATION_INSTRUCTIONS.to_string());
+    }}
+    if let Some(directive) = qwendex_kaveman_directive() {{
+        blocks.push(directive);
+    }}
+    (!blocks.is_empty()).then(|| blocks.join("\\n\\n"))
+}}
+""",
+                ),
+            ],
+        },
+    ]
+
+
+def apply_codex_source_patch(source: Path, version: str, *, dry_run: bool = False) -> dict[str, Any]:
+    root = source.expanduser().resolve()
+    changes: list[dict[str, Any]] = []
+    errors: list[str] = []
+    specs = codex_source_patch_specs(version)
+    if not specs:
+        return {"changed": False, "changes": changes, "errors": [f"no source patch is available for Codex {version}"]}
+    for spec in specs:
+        rel = str(spec["path"])
+        path = root / rel
+        if not path.is_file():
+            errors.append(f"missing file: {rel}")
+            changes.append({"path": rel, "changed": False, "replacements": 0, "error": "missing file"})
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        updated = text
+        replacements = 0
+        missing: list[str] = []
+        for old, new in spec["replacements"]:
+            if new in updated:
+                continue
+            if old not in updated:
+                missing.append(old.splitlines()[0] if old.splitlines() else old[:80])
+                continue
+            updated = updated.replace(old, new)
+            replacements += 1
+        if missing:
+            errors.extend(f"{rel}: missing replacement anchor: {item}" for item in missing)
+        changed = updated != text
+        if changed and not dry_run:
+            path.write_text(updated, encoding="utf-8")
+        changes.append({
+            "path": rel,
+            "changed": changed,
+            "replacements": replacements,
+            "dry_run": dry_run,
+            "missing": missing,
+        })
+    return {"changed": any(change["changed"] for change in changes), "changes": changes, "errors": errors}
+
+
+def codex_patch_payload(args: argparse.Namespace) -> dict[str, Any]:
+    version_info = detect_codex_version(args.codex_bin)
+    version = version_info.get("version") or ""
+    manifest = CODEX_PATCH_MANIFESTS.get(version)
+    source_state = codex_source_patch_state(Path(args.source), manifest) if args.source and manifest else None
+    supported = manifest is not None
+    applied = bool(source_state and source_state.get("applied"))
+    anchors_ok = bool(source_state.get("anchors_ok")) if source_state else None
+    data = {
+        "version": version_info,
+        "supported": supported,
+        "applied": applied,
+        "source": source_state,
+        "manifest": manifest or {},
+        "known_versions": sorted(CODEX_PATCH_MANIFESTS),
+        "runtime_contract": {
+            "status_file_env": QWENDEX_CODEX_STATUS_FILE_ENV,
+            "status_line_item": QWENDEX_CODEX_STATUS_ITEM_ID,
+            "status_command": "qwendex codex-status --write \"$QWENDEX_CODEX_STATUS_FILE\" --json",
+            "manager_toggle": "qwendex manager mode --toggle --json",
+            "kaveman_toggle": "qwendex manager kaveman --toggle --json",
+            "local_toggle": "qwendex manager local --toggle --json",
+        },
+    }
+    if version_info.get("returncode") != 0 or not version:
+        return stable_envelope(
+            command="codex-patch",
+            status="blocked",
+            summary="Could not determine the installed Codex CLI version.",
+            errors=[version_info.get("error") or version_info.get("raw") or "codex --version failed"],
+            data=data,
+        )
+    if not supported:
+        return stable_envelope(
+            command="codex-patch",
+            status="blocked",
+            summary=f"Codex {version} is not in the Qwendex patch manifest.",
+            errors=[f"unknown Codex version: {version}"],
+            next_actions=["Run qwendex codex-patch locations --json and refresh the source anchors for this Codex version."],
+            data=data,
+        )
+    if source_state and not anchors_ok:
+        return stable_envelope(
+            command="codex-patch",
+            status="blocked",
+            summary=f"Codex {version} is supported, but the supplied source checkout no longer matches the patch anchors.",
+            errors=list(source_state.get("missing_files", [])) + list(source_state.get("missing_anchors", [])),
+            next_actions=["Refresh the version manifest before applying the Qwendex TUI patch."],
+            data=data,
+        )
+    if args.require_applied and not applied:
+        return stable_envelope(
+            command="codex-patch",
+            status="blocked",
+            summary=f"Codex {version} is supported, but the Qwendex TUI patch is not applied to the checked source.",
+            errors=["patch marker not found"],
+            next_actions=["Apply the Qwendex Codex TUI source patch, rebuild Codex, then rerun preflight with --source."],
+            data=data,
+        )
+    summary = f"Codex {version} is supported by the Qwendex patch manifest."
+    if source_state:
+        summary += " Source patch marker is present." if applied else " Source anchors are ready; patch marker is not present yet."
+    else:
+        summary += " No source checkout was supplied, so installed-binary patch state was not asserted."
+    return stable_envelope(
+        command="codex-patch",
+        status="pass",
+        summary=summary,
+        next_actions=[] if applied else ["Use a source checkout when you want preflight to assert the Qwendex TUI patch is applied."],
+        data=data,
+    )
+
+
+def codex_patch_apply_payload(args: argparse.Namespace) -> dict[str, Any]:
+    version_info = detect_codex_version(args.codex_bin)
+    version = version_info.get("version") or ""
+    manifest = CODEX_PATCH_MANIFESTS.get(version)
+    source = Path(args.source).expanduser() if args.source else None
+    source_state = codex_source_patch_state(source, manifest) if source and manifest else None
+    data: dict[str, Any] = {
+        "action": "apply",
+        "dry_run": bool(args.dry_run),
+        "version": version_info,
+        "supported": manifest is not None,
+        "source": source_state,
+        "manifest": manifest or {},
+        "known_versions": sorted(CODEX_PATCH_MANIFESTS),
+        "runtime_contract": {
+            "status_file_env": QWENDEX_CODEX_STATUS_FILE_ENV,
+            "status_line_item": QWENDEX_CODEX_STATUS_ITEM_ID,
+            "status_command": "qwendex codex-status --write \"$QWENDEX_CODEX_STATUS_FILE\" --json",
+            "manager_toggle": "qwendex manager mode --toggle --json",
+            "kaveman_toggle": "qwendex manager kaveman --toggle --json",
+            "local_toggle": "qwendex manager local --toggle --json",
+        },
+    }
+    if version_info.get("returncode") != 0 or not version:
+        return stable_envelope(
+            command="codex-patch",
+            status="blocked",
+            summary="Could not determine the installed Codex CLI version.",
+            errors=[version_info.get("error") or version_info.get("raw") or "codex --version failed"],
+            data=data,
+        )
+    if not manifest:
+        return stable_envelope(
+            command="codex-patch",
+            status="blocked",
+            summary=f"Codex {version} is not in the Qwendex patch manifest.",
+            errors=[f"unknown Codex version: {version}"],
+            next_actions=["Run qwendex codex-patch locations --json and refresh the source anchors for this Codex version."],
+            data=data,
+        )
+    if not source:
+        return stable_envelope(
+            command="codex-patch",
+            status="blocked",
+            summary="A Codex source checkout is required before Qwendex can apply the TUI patch.",
+            errors=["missing --source"],
+            next_actions=[f"Check out Codex {manifest.get('codex_tag')} source, then rerun with --source /path/to/codex."],
+            data=data,
+        )
+    if source_state and not source_state.get("anchors_ok"):
+        return stable_envelope(
+            command="codex-patch",
+            status="blocked",
+            summary=f"Codex {version} is supported, but the supplied source checkout no longer matches the patch anchors.",
+            errors=list(source_state.get("missing_files", [])) + list(source_state.get("missing_anchors", [])),
+            next_actions=["Refresh the version manifest before applying the Qwendex TUI patch."],
+            data=data,
+        )
+    apply_result = apply_codex_source_patch(source, version, dry_run=bool(args.dry_run))
+    after_state = codex_source_patch_state(source, manifest)
+    data["apply"] = apply_result
+    data["source_after"] = after_state
+    if apply_result.get("errors"):
+        return stable_envelope(
+            command="codex-patch",
+            status="blocked",
+            summary="Qwendex could not apply the Codex TUI source patch cleanly.",
+            errors=list(apply_result.get("errors", [])),
+            next_actions=["Review the missing anchors, refresh the manifest if Codex changed, then rerun preflight."],
+            data=data,
+        )
+    if args.dry_run:
+        summary = f"Codex {version} source patch dry-run completed."
+        summary += " Patch is already present." if source_state and source_state.get("applied") else " Patch can be applied."
+        return stable_envelope(
+            command="codex-patch",
+            status="pass",
+            summary=summary,
+            next_actions=[] if source_state and source_state.get("applied") else ["Rerun without --dry-run to apply the source patch."],
+            data=data,
+        )
+    if not after_state.get("applied"):
+        return stable_envelope(
+            command="codex-patch",
+            status="blocked",
+            summary="Qwendex applied edits, but post-apply preflight did not find the patch marker.",
+            errors=["patch marker not found after apply"],
+            next_actions=["Inspect the source checkout before rebuilding Codex."],
+            data=data,
+        )
+    changed = bool(apply_result.get("changed"))
+    return stable_envelope(
+        command="codex-patch",
+        status="pass",
+        summary=f"Codex {version} source patch {'applied' if changed else 'is already applied'} and preflight passed.",
+        next_actions=["Rebuild/install Codex from this source checkout, then run qwendex codex-patch preflight --source <checkout> --require-applied --json."],
+        data=data,
+    )
 
 
 def sha256_file(path: Path) -> str:
@@ -1572,13 +2620,148 @@ def public_docs_audit(doc_root: Path = PUBLIC_DOC_DIR) -> dict[str, Any]:
     }
 
 
+def json_file_status(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {"path": rel(path), "exists": False, "valid": False, "error": "missing"}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        return {"path": rel(path), "exists": True, "valid": False, "error": str(exc)}
+    return {"path": rel(path), "exists": True, "valid": True, "data": data}
+
+
+def gitignore_mentions(path: str) -> bool:
+    ignore_file = ROOT / ".gitignore"
+    if not ignore_file.exists():
+        return False
+    lines = [
+        line.strip().lstrip("/")
+        for line in ignore_file.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    return path in lines
+
+
+def command_available(name: str) -> bool:
+    result = subprocess.run(
+        ["bash", "-lc", f"command -v {shlex_quote(name)} >/dev/null 2>&1"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=5,
+    )
+    return result.returncode == 0
+
+
+def shlex_quote(value: str) -> str:
+    return "'" + value.replace("'", "'\"'\"'") + "'"
+
+
+def llmstack_private_hits() -> list[str]:
+    hits: list[str] = []
+    for item in LLMSTACK_PUBLIC_FILES:
+        path = ROOT / item
+        if not path.exists():
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for line_no, line in enumerate(text.splitlines(), start=1):
+            for pattern in LLMSTACK_PRIVATE_PATTERNS:
+                if pattern.search(line):
+                    hits.append(f"{item}:{line_no}: {pattern.pattern}")
+    return hits
+
+
+def llmstack_public_contract() -> dict[str, Any]:
+    sample_status = json_file_status(LLMSTACK_SAMPLE_CONFIG)
+    public_status = json_file_status(LLMSTACK_PUBLIC_CONFIG)
+    profiles_status = json_file_status(LLMSTACK_CONFIG_DIR / "profiles.example.json")
+    sample_data = sample_status.get("data") if sample_status.get("valid") else {}
+    public_data = public_status.get("data") if public_status.get("valid") else {}
+    services = sample_data.get("services", []) if isinstance(sample_data, Mapping) else []
+    service_names = [
+        str(item.get("name"))
+        for item in services
+        if isinstance(item, Mapping) and item.get("name")
+    ]
+    backend_profiles = sample_data.get("backend_profiles", []) if isinstance(sample_data, Mapping) else []
+    aliases = [
+        str(item.get("model_alias"))
+        for item in backend_profiles
+        if isinstance(item, Mapping) and item.get("model_alias")
+    ]
+    private_hits = llmstack_private_hits()
+    missing_files = [item for item in LLMSTACK_PUBLIC_FILES if not (ROOT / item).exists()]
+    config_errors: list[str] = []
+    for status in (sample_status, public_status, profiles_status):
+        if not status["valid"]:
+            config_errors.append(f"{status['path']}: {status['error']}")
+    if sample_status.get("valid") and public_status.get("valid") and public_data != sample_data:
+        config_errors.append("config/local_llm_stack/stack_manager.json must match stack_manager.sample.json")
+    required_services = {"textgen", "litellm", "bridge"}
+    missing_services = sorted(required_services - set(service_names))
+    if missing_services:
+        config_errors.append("missing sample services: " + ", ".join(missing_services))
+    status = "pass" if not (private_hits or missing_files or config_errors) else "fail"
+    optional_programs = {
+        "tmux": command_available("tmux"),
+        "powershell.exe": command_available("powershell.exe"),
+        "litellm": command_available("litellm"),
+        "vllm": command_available("vllm"),
+    }
+    return {
+        "status": status,
+        "config": {
+            "public_config": rel(LLMSTACK_PUBLIC_CONFIG),
+            "sample_config": rel(LLMSTACK_SAMPLE_CONFIG),
+            "local_config": rel(LLMSTACK_LOCAL_CONFIG),
+            "local_config_present": LLMSTACK_LOCAL_CONFIG.exists(),
+            "local_config_ignored": gitignore_mentions("config/local_llm_stack/stack_manager.local.json"),
+            "override_env": ["QWENDEX_LLMSTACK_CONFIG", "LOCAL_LLM_STACK_CONFIG"],
+        },
+        "public_boundary": {
+            "module": "qwendex.llmstack",
+            "bundles_host_programs": False,
+            "bundles_model_weights": False,
+            "managed_scope": "configuration, launch wrappers, bridge/proxy, guard markers, receipts, and validation",
+            "private_scope": "model weights, backend installs, credentials, logs, transcripts, and machine-local profiles",
+        },
+        "services_configured": service_names,
+        "backend_endpoint": "http://127.0.0.1:5000/v1",
+        "model_alias": aliases[0] if aliases else "qwen-local",
+        "codex_bridge": "http://127.0.0.1:1234/v1",
+        "guard_config": {
+            "env_file": "config/local_llm_stack/local_harness.env",
+            "sample_env": "config/local_llm_stack/local_harness.env.sample",
+            "markers": list(DEFAULT_CONFIG["guard"]["markers"]),
+        },
+        "receipts_results": {
+            "default_results_root": str(DEFAULT_RESULTS_ROOT.relative_to(ROOT)),
+            "ledger": DEFAULT_CONFIG["receipts"]["ledger"],
+        },
+        "optional_host_programs": optional_programs,
+        "missing_optional_host_programs": [name for name, available in optional_programs.items() if not available],
+        "private_hits": private_hits,
+        "missing_files": missing_files,
+        "config_errors": config_errors,
+    }
+
+
 def command_check(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, Any]:
     surface = required_surface_check()
     artifacts = [path for path in REQUIRED_SURFACE_FILES if (ROOT / path).exists()]
     status = "pass" if surface["status"] == "pass" else "fail"
+    manager_issues: list[str] = []
     with connect_state(config) as conn:
         mode = current_manager_mode(config, conn)
         local_status = local_subagent_status(config, enabled=current_local_enabled(config, conn), env=os.environ, probe=False)
+        stale_after = mode_stale_after_minutes(config, mode)
+        reconcile_stale_manager_sessions(conn, stale_after_minutes=stale_after, now=utc_now())
+        rows = conn.execute("SELECT * FROM qwendex_agent_sessions ORDER BY updated_at DESC").fetchall()
+        sessions = [session for row in rows if (session := row_to_agent_session(row))]
+        manager_issues = manager_health_issues(config, sessions, mode=mode, stale_after_minutes=stale_after)
+    if manager_issues:
+        status = "fail"
     manager_estimate = manager_self_estimate(
         config,
         mode=mode,
@@ -1592,9 +2775,10 @@ def command_check(args: argparse.Namespace, config: dict[str, Any]) -> dict[str,
         summary="Qwendex surface is ready." if status == "pass" else "Qwendex surface is incomplete.",
         artifacts=artifacts,
         next_actions=[] if status == "pass" else ["Run scripts/qwendex doctor --json"],
-        errors=surface["missing"],
+        errors=[*surface["missing"], *manager_issues],
         data={
             "surface": surface,
+            "manager_health_issues": manager_issues,
             "default_seat": config["default_seat"],
             "routing": routing_policy(config),
             "manager_estimate": manager_estimate,
@@ -1616,9 +2800,17 @@ def command_doctor(args: argparse.Namespace, config: dict[str, Any]) -> dict[str
     artifacts = [f"public/qwendex/{name}" for name in docs["files"]]
     artifacts.extend(path for path in REQUIRED_SURFACE_FILES if (ROOT / path).exists())
     status = "pass" if not critical else "fail"
+    manager_issues: list[str] = []
     with connect_state(config) as conn:
         mode = current_manager_mode(config, conn)
         local_status = local_subagent_status(config, enabled=current_local_enabled(config, conn), env=os.environ, probe=False)
+        stale_after = mode_stale_after_minutes(config, mode)
+        reconcile_stale_manager_sessions(conn, stale_after_minutes=stale_after, now=utc_now())
+        rows = conn.execute("SELECT * FROM qwendex_agent_sessions ORDER BY updated_at DESC").fetchall()
+        sessions = [session for row in rows if (session := row_to_agent_session(row))]
+        manager_issues = manager_health_issues(config, sessions, mode=mode, stale_after_minutes=stale_after)
+    critical.extend(manager_issues)
+    status = "pass" if not critical else "fail"
     manager_estimate = manager_self_estimate(
         config,
         mode=mode,
@@ -1635,6 +2827,7 @@ def command_doctor(args: argparse.Namespace, config: dict[str, Any]) -> dict[str
         errors=critical,
         data={
             "critical_issues": critical,
+            "manager_health_issues": manager_issues,
             "surface": surface,
             "public_docs": docs,
             "config": {
@@ -1697,6 +2890,39 @@ def command_stack(args: argparse.Namespace, config: dict[str, Any]) -> dict[str,
     )
 
 
+def command_llmstack(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, Any]:
+    contract = llmstack_public_contract()
+    if args.action in {"check", "doctor"}:
+        status = contract["status"]
+        summary = "Qwendex LLMStack public contract is ready." if status == "pass" else "Qwendex LLMStack public contract has issues."
+        return stable_envelope(
+            command="llmstack",
+            status=status,
+            summary=summary,
+            artifacts=[item for item in LLMSTACK_PUBLIC_FILES if (ROOT / item).exists()],
+            next_actions=["Run scripts/qwendex llmstack restart bridge --dry-run --json"] if status == "pass" else ["Repair listed LLMStack contract issues."],
+            errors=contract["private_hits"] + contract["missing_files"] + contract["config_errors"],
+            data={"action": args.action, "contract": contract},
+        )
+    action_map = {"up": "start", "down": "stop", "restart": "restart"}
+    delegate = stack_command(action_map[args.action], args.service, args.dry_run)
+    status = "pass" if delegate["status"] in {"pass", "ready"} and contract["status"] == "pass" else "fail"
+    errors = []
+    if contract["status"] != "pass":
+        errors.extend(contract["private_hits"] + contract["missing_files"] + contract["config_errors"])
+    if delegate["status"] not in {"pass", "ready"}:
+        errors.append(delegate.get("stderr") or delegate.get("stdout") or "stack delegate failed")
+    return stable_envelope(
+        command="llmstack",
+        status=status,
+        summary=f"Qwendex LLMStack {args.action} {'dry run is ready' if args.dry_run else delegate['status']}.",
+        artifacts=[],
+        next_actions=["Run scripts/qwendex llmstack check --json"],
+        errors=errors,
+        data={"action": args.action, "service": args.service, "contract": contract, "delegate": delegate},
+    )
+
+
 def is_exact_qwendex_ok(prompt: str) -> bool:
     normalized = " ".join(prompt.strip().split()).lower()
     return normalized in {
@@ -1707,10 +2933,40 @@ def is_exact_qwendex_ok(prompt: str) -> bool:
     }
 
 
-def exec_command_for_seat(seat: str, seat_config: Mapping[str, Any], prompt: str) -> list[str]:
+def qwendex_exec_cwd(raw: str = "") -> Path:
+    value = (raw or os.environ.get("QWENDEX_EXEC_CWD", "")).strip()
+    if not value:
+        return ROOT
+    return Path(value).expanduser().resolve()
+
+
+def codex_mcp_override_args(exec_cwd: Path) -> list[str]:
+    trusted_roots = os.environ.get("QWENDEX_MCP_TRUSTED_ROOTS", "").strip()
+    if not trusted_roots:
+        trusted_roots = f"{ROOT}:{exec_cwd}"
+    local_harness = ROOT / "scripts" / "artifact_queue_mcp.py"
+    return [
+        "-c",
+        'mcp_servers.local-harness.command="python3"',
+        "-c",
+        f"mcp_servers.local-harness.args=[{json.dumps(str(local_harness))}]",
+        "-c",
+        f"mcp_servers.local-harness.cwd={json.dumps(str(ROOT))}",
+        "-c",
+        "mcp_servers.local-harness.env.ARTIFACT_QUEUE_MCP_TRUSTED_ROOTS="
+        + json.dumps(trusted_roots),
+        "-c",
+        'mcp_servers.local-harness.env.SEARXNG_URL="http://127.0.0.1:6060"',
+    ]
+
+
+def exec_command_for_seat(seat: str, seat_config: Mapping[str, Any], prompt: str, *, cwd: Path | None = None) -> list[str]:
+    exec_cwd = cwd or qwendex_exec_cwd()
     if seat in {"qwen", "sandbox"}:
         return [
             str(ROOT / "scripts" / "run_local_qwen_codex.sh"),
+            "--cwd",
+            str(exec_cwd),
             "--minimal",
             "--ephemeral",
             "--exec",
@@ -1721,16 +2977,18 @@ def exec_command_for_seat(seat: str, seat_config: Mapping[str, Any], prompt: str
         "exec",
         "--sandbox",
         "workspace-write",
+        *codex_mcp_override_args(exec_cwd),
         "-m",
         str(seat_config.get("model", "gpt-5.5")),
         "-C",
-        str(ROOT),
+        str(exec_cwd),
         prompt,
     ]
 
 
 def command_exec(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, Any]:
     prompt = " ".join(args.prompt).strip()
+    exec_cwd = qwendex_exec_cwd(args.cwd)
     with connect_state(config) as conn:
         local_enabled = current_local_enabled(config, conn)
     route = resolve_route(
@@ -1771,7 +3029,7 @@ def command_exec(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, 
             next_actions=["Run scripts/qwendex receipt latest --json"],
             data={"seat": seat, "model": seat_config.get("model", ""), "output": "QWENDEX_OK", "routing": route},
         )
-    cmd = exec_command_for_seat(seat, seat_config, prompt)
+    cmd = exec_command_for_seat(seat, seat_config, prompt, cwd=exec_cwd)
     if args.dry_run:
         data = {"status": "ready", "command": cmd, "seat": seat, "model": seat_config.get("model"), "routing": route}
         return stable_envelope(
@@ -2402,8 +3660,17 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
         stale_after = mode_stale_after_minutes(config, mode, args.stale_after_minutes)
         max_subagents = args.max_subagents or manager_mode_profile(config, mode)["max_subagents"]
         local_status = local_subagent_status(config, enabled=current_local_enabled(config, conn), env=os.environ, probe=True)
+        kaveman_enabled = current_kaveman_enabled(config, conn)
+        reconciliation = {"closed_count": 0, "closed": [], "skipped_writer_count": 0, "skipped_writers": [], "stale_after_minutes": max(stale_after, 5)}
+        if args.action in {"kaveman", "local", "estimate", "status"}:
+            reconciliation = reconcile_stale_manager_sessions(conn, stale_after_minutes=stale_after, now=now)
         if args.action == "mode":
-            if args.cycle:
+            if args.toggle:
+                index = MANAGER_MODE_ORDER.index(mode) if mode in MANAGER_MODE_ORDER else 0
+                mode = MANAGER_MODE_ORDER[(index + 1) % len(MANAGER_MODE_ORDER)]
+                set_manager_setting(conn, "selected_mode", mode)
+                conn.commit()
+            elif args.cycle:
                 index = MANAGER_MODE_ORDER.index(mode) if mode in MANAGER_MODE_ORDER else 0
                 mode = MANAGER_MODE_ORDER[(index + 1) % len(MANAGER_MODE_ORDER)]
                 set_manager_setting(conn, "selected_mode", mode)
@@ -2415,6 +3682,8 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
                 mode = requested
                 set_manager_setting(conn, "selected_mode", mode)
                 conn.commit()
+            stale_after = mode_stale_after_minutes(config, mode, args.stale_after_minutes)
+            reconciliation = reconcile_stale_manager_sessions(conn, stale_after_minutes=stale_after, now=now)
             rows = conn.execute("SELECT * FROM qwendex_agent_sessions ORDER BY updated_at DESC LIMIT ?", (args.limit,)).fetchall()
             sessions = [row_to_agent_session(row) for row in rows]
             data = manager_mode_payload(
@@ -2423,13 +3692,60 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
                 local_status=local_status,
                 max_subagents=args.max_subagents or manager_mode_profile(config, mode)["max_subagents"],
                 stale_after_minutes=mode_stale_after_minutes(config, mode, args.stale_after_minutes),
+                kaveman_enabled=kaveman_enabled,
                 sessions=[session for session in sessions if session],
             )
             data["state_db"] = str(state_db_path(config))
+            data["codex_status_file"] = sync_codex_status_file_from_env(config)
+            data["stale_reconciliation"] = reconciliation
+            contract_status = data["deployment_contract"]["status"]
+            mode_changed = bool(args.toggle or args.cycle or args.set)
+            status = "pass" if mode_changed else contract_status
+            return stable_envelope(
+                command="manager",
+                status=status,
+                summary=(
+                    f"Qwendex manager mode changed to {data['label']}."
+                    if mode_changed
+                    else f"Qwendex manager mode is {data['label']}."
+                ),
+                next_actions=(
+                    ["Spawn/register at least one manager lane or set orchestration.manager_deploy_policy to disabled."]
+                    if contract_status == "blocked"
+                    else data["next_actions"]
+                ),
+                data=data,
+            )
+        if args.action == "kaveman":
+            enabled = kaveman_enabled
+            if args.toggle:
+                enabled = not enabled
+            elif args.set:
+                parsed = normalize_local_toggle(args.set)
+                if parsed is None:
+                    return stable_envelope(command="manager", status="blocked", summary=f"Unknown Kaveman toggle: {args.set}", errors=[args.set])
+                enabled = parsed
+            set_manager_setting(conn, "kaveman_enabled", enabled)
+            conn.commit()
+            kaveman_enabled = enabled
+            rows = conn.execute("SELECT * FROM qwendex_agent_sessions ORDER BY updated_at DESC LIMIT ?", (args.limit,)).fetchall()
+            sessions = [row_to_agent_session(row) for row in rows]
+            data = manager_mode_payload(
+                config,
+                mode=mode,
+                local_status=local_status,
+                max_subagents=max_subagents,
+                stale_after_minutes=stale_after,
+                kaveman_enabled=kaveman_enabled,
+                sessions=[session for session in sessions if session],
+            )
+            data["state_db"] = str(state_db_path(config))
+            data["codex_status_file"] = sync_codex_status_file_from_env(config)
+            data["stale_reconciliation"] = reconciliation
             return stable_envelope(
                 command="manager",
                 status="pass",
-                summary=f"Qwendex manager mode is {data['label']}.",
+                summary=f"Qwendex Kaveman mode is {'enabled' if enabled else 'disabled'}.",
                 next_actions=data["next_actions"],
                 data=data,
             )
@@ -2445,6 +3761,11 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
             set_manager_setting(conn, "local_subagents_enabled", enabled)
             conn.commit()
             local_status = local_subagent_status(config, enabled=enabled, env=os.environ, probe=True)
+            if enabled and not local_status.get("usable"):
+                enabled = False
+                set_manager_setting(conn, "local_subagents_enabled", False)
+                conn.commit()
+                local_status = local_subagent_status(config, enabled=False, env=os.environ, probe=False)
             rows = conn.execute("SELECT * FROM qwendex_agent_sessions ORDER BY updated_at DESC LIMIT ?", (args.limit,)).fetchall()
             sessions = [row_to_agent_session(row) for row in rows]
             data = manager_mode_payload(
@@ -2453,9 +3774,12 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
                 local_status=local_status,
                 max_subagents=max_subagents,
                 stale_after_minutes=stale_after,
+                kaveman_enabled=kaveman_enabled,
                 sessions=[session for session in sessions if session],
             )
             data["state_db"] = str(state_db_path(config))
+            data["codex_status_file"] = sync_codex_status_file_from_env(config)
+            data["stale_reconciliation"] = reconciliation
             return stable_envelope(
                 command="manager",
                 status="pass",
@@ -2483,15 +3807,22 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
                 local_status=local_status,
                 max_subagents=max_subagents,
                 stale_after_minutes=stale_after,
+                kaveman_enabled=kaveman_enabled,
                 sessions=[session for session in sessions if session],
             )
             data["agent_sessions"] = [session for session in sessions if session]
             data["state_db"] = str(state_db_path(config))
+            data["stale_reconciliation"] = reconciliation
+            status = data["deployment_contract"]["status"]
             return stable_envelope(
                 command="manager",
-                status="pass",
+                status=status,
                 summary=f"Loaded {len(data['agent_sessions'])} Qwendex manager sessions.",
-                next_actions=data["next_actions"],
+                next_actions=(
+                    ["Spawn/register at least one manager lane or set orchestration.manager_deploy_policy to disabled."]
+                    if status == "blocked"
+                    else data["next_actions"]
+                ),
                 data=data,
             )
         if args.action == "assign":
@@ -2571,25 +3902,33 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
             conn.commit()
             row = conn.execute("SELECT * FROM qwendex_agent_sessions WHERE agent_id = ?", (args.agent_id,)).fetchone()
             return stable_envelope(command="manager", status="pass", summary=f"Heartbeat recorded for {args.agent_id}.", data={"agent_session": row_to_agent_session(row)})
-        if args.action == "close-stale":
-            cutoff_seconds = max(stale_after, 5) * 60
-            rows = conn.execute("SELECT * FROM qwendex_agent_sessions WHERE status = 'active'").fetchall()
-            closed: list[dict[str, Any]] = []
-            for row in rows:
-                if (datetime.now(UTC) - parse_utc(row["heartbeat_at"])).total_seconds() >= cutoff_seconds:
-                    close_receipt = make_id("close")
-                    conn.execute(
-                        "UPDATE qwendex_agent_sessions SET status = 'closed', updated_at = ?, stop_reason = 'stale', close_receipt = ? WHERE agent_id = ?",
-                        (now, close_receipt, row["agent_id"]),
-                    )
-                    updated = conn.execute("SELECT * FROM qwendex_agent_sessions WHERE agent_id = ?", (row["agent_id"],)).fetchone()
-                    closed.append(row_to_agent_session(updated) or {})
+        if args.action == "close":
+            if not args.agent_id:
+                return stable_envelope(command="manager", status="blocked", summary="Manager close requires --agent-id.", errors=["missing agent_id"])
+            row = conn.execute("SELECT * FROM qwendex_agent_sessions WHERE agent_id = ?", (args.agent_id,)).fetchone()
+            if row is None:
+                return stable_envelope(command="manager", status="blocked", summary=f"Agent session not found: {args.agent_id}", errors=[args.agent_id])
+            close_receipt = make_id("close")
+            reason = args.reason or "operator_closed"
+            conn.execute(
+                "UPDATE qwendex_agent_sessions SET status = 'closed', updated_at = ?, stop_reason = ?, close_receipt = ? WHERE agent_id = ?",
+                (now, reason, close_receipt, args.agent_id),
+            )
             conn.commit()
+            row = conn.execute("SELECT * FROM qwendex_agent_sessions WHERE agent_id = ?", (args.agent_id,)).fetchone()
             return stable_envelope(
                 command="manager",
                 status="pass",
-                summary=f"Closed {len(closed)} stale Qwendex manager sessions.",
-                data={"closed_count": len(closed), "closed": closed, "stale_after_minutes": max(stale_after, 5)},
+                summary=f"Closed agent session {args.agent_id}.",
+                data={"agent_session": row_to_agent_session(row)},
+            )
+        if args.action == "close-stale":
+            reconciliation = reconcile_stale_manager_sessions(conn, stale_after_minutes=stale_after, now=now)
+            return stable_envelope(
+                command="manager",
+                status="pass",
+                summary=f"Closed {reconciliation['closed_count']} stale Qwendex manager sessions.",
+                data=reconciliation,
             )
     return stable_envelope(command="manager", status="blocked", summary=f"Unknown manager action: {args.action}", errors=[args.action])
 
@@ -2841,14 +4180,16 @@ def command_manager(args: argparse.Namespace, config: dict[str, Any]) -> dict[st
     with connect_state(config) as conn:
         mode = current_manager_mode(config, conn, explicit=args.mode)
         local_status = local_subagent_status(config, enabled=current_local_enabled(config, conn), env=os.environ, probe=True)
+        kaveman_enabled = current_kaveman_enabled(config, conn)
+        stale_after = mode_stale_after_minutes(config, mode, args.stale_after_minutes)
+        reconciliation = reconcile_stale_manager_sessions(conn, stale_after_minutes=stale_after, now=utc_now())
         rows = conn.execute("SELECT * FROM qwendex_agent_sessions ORDER BY updated_at DESC LIMIT ?", (args.limit,)).fetchall()
         sessions = [row_to_agent_session(row) for row in rows]
     profile = manager_mode_profile(config, mode)
     max_subagents = args.max_subagents or profile["max_subagents"]
-    stale_after = mode_stale_after_minutes(config, mode, args.stale_after_minutes)
     errors: list[str] = []
-    if not isinstance(max_subagents, int) or max_subagents < 1 or max_subagents > 8:
-        errors.append(f"max_subagents must be between 1 and 8: {max_subagents}")
+    if not isinstance(max_subagents, int) or max_subagents < 1 or max_subagents > MANAGER_MAX_SUBAGENTS_LIMIT:
+        errors.append(f"max_subagents must be between 1 and {MANAGER_MAX_SUBAGENTS_LIMIT}: {max_subagents}")
     if not isinstance(stale_after, int) or stale_after < 5 or stale_after > 240:
         errors.append(f"stale_after_minutes must be between 5 and 240: {stale_after}")
     if errors:
@@ -2860,7 +4201,7 @@ def command_manager(args: argparse.Namespace, config: dict[str, Any]) -> dict[st
             data={
                 "max_subagents": max_subagents,
                 "stale_after_minutes": stale_after,
-                "allowed": {"max_subagents": [1, 8], "stale_after_minutes": [5, 240]},
+                "allowed": {"max_subagents": [1, MANAGER_MAX_SUBAGENTS_LIMIT], "stale_after_minutes": [5, 240]},
             },
         )
     legacy_mode = args.mode if args.mode and normalize_manager_mode(args.mode) != args.mode else ""
@@ -2870,17 +4211,63 @@ def command_manager(args: argparse.Namespace, config: dict[str, Any]) -> dict[st
         local_status=local_status,
         max_subagents=max_subagents,
         stale_after_minutes=stale_after,
+        kaveman_enabled=kaveman_enabled,
         legacy_mode=legacy_mode,
         sessions=[session for session in sessions if session],
     )
     data["close_stale"] = args.close_stale
+    data["stale_reconciliation"] = reconciliation
+    status = data["deployment_contract"]["status"]
     return stable_envelope(
         command="manager",
-        status="pass",
+        status=status,
         summary=f"Qwendex manager mode is {data['label']}.",
-        next_actions=data["next_actions"],
+        next_actions=(
+            ["Spawn/register at least one manager lane or set orchestration.manager_deploy_policy to disabled."]
+            if status == "blocked"
+            else data["next_actions"]
+        ),
         data=data,
     )
+
+
+def command_codex_status(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, Any]:
+    write_path = Path(args.write).expanduser() if args.write else None
+    data = codex_status_payload(config, write_path=write_path)
+    artifacts = [data["status_file"]] if data.get("status_file") else []
+    return stable_envelope(
+        command="codex-status",
+        status="pass",
+        summary=data["text"],
+        artifacts=artifacts,
+        data=data,
+    )
+
+
+def command_codex_patch(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, Any]:
+    del config
+    if args.action == "locations":
+        data = {
+            "known_versions": sorted(CODEX_PATCH_MANIFESTS),
+            "manifests": CODEX_PATCH_MANIFESTS,
+            "runtime_contract": {
+                "status_file_env": QWENDEX_CODEX_STATUS_FILE_ENV,
+                "status_line_item": QWENDEX_CODEX_STATUS_ITEM_ID,
+                "patch_marker": QWENDEX_CODEX_PATCH_MARKER,
+                "manager_toggle": "qwendex manager mode --toggle --json",
+                "kaveman_toggle": "qwendex manager kaveman --toggle --json",
+                "local_toggle": "qwendex manager local --toggle --json",
+            },
+        }
+        return stable_envelope(
+            command="codex-patch",
+            status="pass",
+            summary="Qwendex Codex TUI patch locations are available.",
+            data=data,
+        )
+    if args.action == "apply":
+        return codex_patch_apply_payload(args)
+    return codex_patch_payload(args)
 
 
 def command_version(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, Any]:
@@ -2909,11 +4296,23 @@ def command_line() -> argparse.ArgumentParser:
         command.add_argument("--dry-run", action="store_true")
         command.add_argument("--json", action="store_true")
 
+    llmstack = sub.add_parser("llmstack")
+    llmstack_sub = llmstack.add_subparsers(dest="action", required=True)
+    for name in ("check", "doctor"):
+        command = llmstack_sub.add_parser(name)
+        command.add_argument("--json", action="store_true")
+    for name in ("up", "down", "restart"):
+        command = llmstack_sub.add_parser(name)
+        command.add_argument("service", nargs="?", default="all")
+        command.add_argument("--dry-run", action="store_true")
+        command.add_argument("--json", action="store_true")
+
     exec_parser = sub.add_parser("exec")
     exec_parser.add_argument("prompt", nargs="+")
     exec_parser.add_argument("--seat", choices=["auto", *sorted(DEFAULT_CONFIG["seats"])], default="auto")
     exec_parser.add_argument("--prefer-local", action="store_true")
     exec_parser.add_argument("--timeout", type=int, default=600)
+    exec_parser.add_argument("--cwd", default="")
     exec_parser.add_argument("--dry-run", action="store_true")
     exec_parser.add_argument("--json", action="store_true")
 
@@ -3015,8 +4414,8 @@ def command_line() -> argparse.ArgumentParser:
     learn.add_argument("--json", action="store_true")
 
     manager = sub.add_parser("manager")
-    manager.add_argument("action", nargs="?", choices=["status", "assign", "heartbeat", "close-stale", "mode", "estimate", "local"])
-    manager.add_argument("--mode", choices=["manual", "auto", "lite", "medium", "heavy", "manager", "manager_only"], default="")
+    manager.add_argument("action", nargs="?", choices=["status", "assign", "heartbeat", "close", "close-stale", "mode", "estimate", "kaveman", "local"])
+    manager.add_argument("--mode", choices=["manual", "off", "auto", "lite", "medium", "heavy", "manager", "manager_only"], default="")
     manager.add_argument("--set", default="")
     manager.add_argument("--cycle", action="store_true")
     manager.add_argument("--toggle", action="store_true")
@@ -3034,6 +4433,7 @@ def command_line() -> argparse.ArgumentParser:
     manager.add_argument("--owner", default="manager")
     manager.add_argument("--write-surface", default="read-only")
     manager.add_argument("--stop-condition", default="return compact findings")
+    manager.add_argument("--reason", default="")
     manager.add_argument("--expected-artifact", default="")
     manager.add_argument("--receipt-path", default="")
     manager.add_argument("--context-budget", type=int, default=0)
@@ -3043,6 +4443,19 @@ def command_line() -> argparse.ArgumentParser:
     manager.add_argument("--limit", type=int, default=20)
     manager.add_argument("--shortcut", action="store_true")
     manager.add_argument("--json", action="store_true")
+
+    codex_status = sub.add_parser("codex-status")
+    codex_status.add_argument("--write", default="")
+    codex_status.add_argument("--plain", action="store_true")
+    codex_status.add_argument("--json", action="store_true")
+
+    codex_patch = sub.add_parser("codex-patch")
+    codex_patch.add_argument("action", choices=["status", "preflight", "locations", "apply"], nargs="?", default="status")
+    codex_patch.add_argument("--codex-bin", default="codex")
+    codex_patch.add_argument("--source", default="")
+    codex_patch.add_argument("--require-applied", action="store_true")
+    codex_patch.add_argument("--dry-run", action="store_true")
+    codex_patch.add_argument("--json", action="store_true")
 
     version = sub.add_parser("version")
     version.add_argument("--json", action="store_true")
@@ -3066,6 +4479,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         return command_doctor(args, config)
     if args.command in {"up", "down", "restart"}:
         return command_stack(args, config)
+    if args.command == "llmstack":
+        return command_llmstack(args, config)
     if args.command == "exec":
         return command_exec(args, config)
     if args.command == "route":
@@ -3092,6 +4507,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         return command_learn(args, config)
     if args.command == "manager":
         return command_manager(args, config)
+    if args.command == "codex-status":
+        return command_codex_status(args, config)
+    if args.command == "codex-patch":
+        return command_codex_patch(args, config)
     if args.command == "version":
         return command_version(args, config)
     raise RuntimeError(f"unknown command: {args.command}")
@@ -3108,7 +4527,9 @@ def main(argv: list[str] | None = None) -> int:
         data = run(args)
     except Exception as exc:  # pragma: no cover - defensive CLI boundary
         data = stable_envelope(command=getattr(args, "command", "unknown"), status="fail", summary=str(exc), errors=[str(exc)])
-    if getattr(args, "json", False):
+    if args.command == "codex-status" and not getattr(args, "json", False):
+        print(data.get("data", {}).get("text", data["summary"]))
+    elif getattr(args, "json", False):
         print_json(data)
     else:
         human_print(data)

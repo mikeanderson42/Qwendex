@@ -1,0 +1,479 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+QWENDEX_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DEFAULT_PROJECT="$PWD"
+if [[ -d "$HOME/thehub" ]]; then
+  DEFAULT_PROJECT="$HOME/thehub"
+fi
+PROJECT_ROOT="${QWENDEX_BENCH_PROJECT:-$DEFAULT_PROJECT}"
+BENCH_ROOT="${QWENDEX_BENCH_ROOT:-$HOME/qwendex_testbench/current}"
+CODEX_HOME="$BENCH_ROOT/codex_home"
+SESSION="${QWENDEX_BENCH_SESSION:-qwendex-bench}"
+
+export QWENDEX_BENCH_ROOT="$BENCH_ROOT"
+export QWENDEX_ROOT
+export CODEX_HOME
+export QWENDEX_STATE_DB="$BENCH_ROOT/state/qwendex.sqlite"
+export QWENDEX_RESULTS_ROOT="$BENCH_ROOT/results/qwendex"
+export QWENDEX_META_ROOT="$BENCH_ROOT/results/bench_meta"
+export QWENDEX_CODEX_STATUS_FILE="$QWENDEX_META_ROOT/codex_status.json"
+if [[ -f "$QWENDEX_ROOT/config/local_llm_stack/stack_manager.local.json" ]]; then
+  export QWENDEX_LLMSTACK_CONFIG="$QWENDEX_ROOT/config/local_llm_stack/stack_manager.local.json"
+else
+  export QWENDEX_LLMSTACK_CONFIG="$QWENDEX_ROOT/config/local_llm_stack/stack_manager.json"
+fi
+export QWENDEX_EXEC_CWD="$PROJECT_ROOT"
+export QWENDEX_MCP_TRUSTED_ROOTS="$BENCH_ROOT:$QWENDEX_ROOT:$PROJECT_ROOT"
+export LOCAL_QWEN_CODEX_CWD="$PROJECT_ROOT"
+export LOCAL_QWEN_CODEX_ADD_DIRS="$BENCH_ROOT:$QWENDEX_ROOT"
+export LOCAL_QWEN_MODEL_CATALOG_JSON="$QWENDEX_ROOT/config/local_llm_stack/qwen_local_model_catalog.json"
+export LOCAL_QWEN_LOCAL_HARNESS_MCP="$QWENDEX_ROOT/scripts/artifact_queue_mcp.py"
+export LOCAL_QWEN_LOCAL_HARNESS_TRUSTED_ROOTS="$BENCH_ROOT:$QWENDEX_ROOT:$PROJECT_ROOT"
+export PATH="$BENCH_ROOT/bin:$QWENDEX_ROOT:$QWENDEX_ROOT/scripts:$PATH"
+
+QWENDEX="$QWENDEX_ROOT/scripts/qwendex"
+LOCAL_LAUNCHER="$QWENDEX_ROOT/scripts/run_local_qwen_codex.sh"
+BENCH_CMD="$QWENDEX_ROOT/scripts/qwendex_testbench"
+FULL_MODEL="${QWENDEX_BENCH_FULL_MODEL:-gpt-5.5}"
+FULL_REASONING="${QWENDEX_BENCH_FULL_REASONING:-high}"
+MCP_OVERRIDE_ARGS=(
+  -c 'mcp_servers.local-harness.command="python3"'
+  -c "mcp_servers.local-harness.args=[\"$QWENDEX_ROOT/scripts/artifact_queue_mcp.py\"]"
+  -c "mcp_servers.local-harness.cwd=\"$QWENDEX_ROOT\""
+  -c "mcp_servers.local-harness.env.ARTIFACT_QUEUE_MCP_TRUSTED_ROOTS=\"$BENCH_ROOT:$QWENDEX_ROOT:$PROJECT_ROOT\""
+  -c 'mcp_servers.local-harness.env.SEARXNG_URL="http://127.0.0.1:6060"'
+)
+
+die() {
+  printf 'error: %s\n' "$*" >&2
+  exit 1
+}
+
+require_project() {
+  [[ -d "$PROJECT_ROOT" ]] || die "project folder does not exist: $PROJECT_ROOT"
+}
+
+prepare_bench_home() {
+  mkdir -p "$BENCH_ROOT/state" "$QWENDEX_RESULTS_ROOT" "$QWENDEX_META_ROOT" "$CODEX_HOME/logs"
+  mkdir -p "$BENCH_ROOT/bin"
+  cat > "$BENCH_ROOT/bin/qwendex-bench" <<EOF
+#!/usr/bin/env bash
+exec "$QWENDEX_ROOT/scripts/qwendex_testbench" "\$@"
+EOF
+  cat > "$BENCH_ROOT/bin/qwendex" <<EOF
+#!/usr/bin/env bash
+exec "$QWENDEX_ROOT/scripts/qwendex" "\$@"
+EOF
+  cat > "$BENCH_ROOT/bin/llmstack" <<EOF
+#!/usr/bin/env bash
+exec "$QWENDEX_ROOT/llmstack" "\$@"
+EOF
+  cat > "$BENCH_ROOT/bin/qwebdex-bench" <<EOF
+#!/usr/bin/env bash
+echo "qwebdex-bench is a typo; running qwendex-bench instead." >&2
+exec "$QWENDEX_ROOT/scripts/qwendex_testbench" "\$@"
+EOF
+  chmod +x "$BENCH_ROOT/bin/qwendex-bench" "$BENCH_ROOT/bin/qwendex" "$BENCH_ROOT/bin/llmstack" "$BENCH_ROOT/bin/qwebdex-bench"
+  if [[ -d "$HOME/.codex/mcp-servers" && ! -e "$CODEX_HOME/mcp-servers" ]]; then
+    ln -s "$HOME/.codex/mcp-servers" "$CODEX_HOME/mcp-servers"
+  fi
+  if [[ -f "$HOME/.codex/auth.json" && ! -e "$CODEX_HOME/auth.json" ]]; then
+    ln -s "$HOME/.codex/auth.json" "$CODEX_HOME/auth.json"
+  fi
+  if [[ -f "$HOME/.codex/version.json" && ! -e "$CODEX_HOME/version.json" ]]; then
+    ln -s "$HOME/.codex/version.json" "$CODEX_HOME/version.json"
+  fi
+  if [[ -f "$HOME/.codex/installation_id" && ! -e "$CODEX_HOME/installation_id" ]]; then
+    cp "$HOME/.codex/installation_id" "$CODEX_HOME/installation_id"
+  fi
+  if [[ ! -f "$CODEX_HOME/config.toml" ]]; then
+    cat > "$CODEX_HOME/config.toml" <<EOF
+approval_policy = "never"
+sandbox_mode = "workspace-write"
+persistent_instructions = "Qwendex Test Bench active. QWENDEX_ROOT, QWENDEX_STATE_DB, QWENDEX_RESULTS_ROOT, QWENDEX_EXEC_CWD, and QWENDEX_BENCH_ROOT are set by the launcher. Use Qwendex CLI commands for status, routing, smoke checks, receipts, and manager state."
+
+[features]
+multi_agent = true
+
+[projects."$PROJECT_ROOT"]
+trust_level = "trusted"
+
+[projects."$QWENDEX_ROOT"]
+trust_level = "trusted"
+
+[projects."$BENCH_ROOT"]
+trust_level = "trusted"
+EOF
+  fi
+}
+
+banner() {
+  cat <<EOF
+Qwendex Test Bench
+  bench:        $BENCH_ROOT
+  qwendex:      $QWENDEX_ROOT
+  project:      $PROJECT_ROOT
+  codex home:   $CODEX_HOME
+  state db:     $QWENDEX_STATE_DB
+  results:      $QWENDEX_RESULTS_ROOT
+  bench meta:   $QWENDEX_META_ROOT
+
+Qwendex interface commands:
+  qwendex_testbench console
+  qwendex_testbench status
+  qwendex_testbench route exec
+  qwendex_testbench smoke-local
+  qwendex_testbench receipt latest
+EOF
+}
+
+codex_version_label() {
+  local version
+  version="$(codex --version 2>/dev/null | awk '{print $2}' | head -1)"
+  if [[ -z "$version" ]]; then
+    version="unknown"
+  fi
+  printf '>_ OpenAI Codex (v%s) /w Qwendex\n' "$version"
+}
+
+codex_start_banner() {
+  local mode="$1"
+  local model="$2"
+  local title
+  title="$(codex_version_label)"
+  printf '\033]2;%s\a' "$title"
+  printf '\n%s\n' "$title"
+  printf 'Qwendex mode: %s\n' "$mode"
+  printf 'Qwendex model: %s\n' "$model"
+  printf '{Qwendex} Agent Manager: [Manager Mode] | Kaveman: [N] | Local: [Y] (Alt+M/K/L)\n'
+  printf 'Project: %s\n' "$PROJECT_ROOT"
+  printf 'Qwendex: %s\n' "$QWENDEX_ROOT"
+  printf 'State: %s\n' "$QWENDEX_STATE_DB"
+  printf 'Receipts: %s\n' "$QWENDEX_RESULTS_ROOT"
+  "$QWENDEX" codex-status --plain 2>/dev/null || true
+  printf 'Tip: qwendex codex-patch preflight verifies the installed Codex TUI integration contract.\n\n'
+}
+
+usage() {
+  banner
+  cat <<'EOF'
+
+Commands:
+  qwendex_testbench console
+  qwendex_testbench menu
+  qwendex_testbench env
+  qwendex_testbench init
+  qwendex_testbench codex-preflight
+  qwendex_testbench status
+  qwendex_testbench route [task-class]
+  qwendex_testbench manager [prompt]
+  qwendex_testbench codex-preflight
+  qwendex_testbench smoke-local
+  qwendex_testbench smoke-full-dry-run
+  qwendex_testbench receipt [latest|path]
+  qwendex_testbench open-local [initial prompt...]
+  qwendex_testbench open-full [initial prompt...]
+  qwendex_testbench mcp
+  qwendex_testbench tmux
+
+Environment:
+  QWENDEX_BENCH_PROJECT   project folder to test; default: ~/thehub if present, else cwd
+  QWENDEX_BENCH_ROOT      isolated bench root; default: ~/qwendex_testbench/current
+  QWENDEX_BENCH_SESSION   tmux session name; default: qwendex-bench
+
+This Codex TUI build does not expose custom project prompts as slash commands.
+Use this console for Qwendex controls and qwendex-local/qwendex-full panes for
+normal Codex interaction.
+EOF
+}
+
+summary_json() {
+  python3 - "$@" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+for raw in sys.argv[1:]:
+    path = Path(raw)
+    if not path.is_file():
+        print(f"{path}: missing")
+        continue
+    data = json.loads(path.read_text(encoding="utf-8"))
+    command = data.get("command", path.name)
+    status = data.get("status")
+    summary = data.get("summary")
+    print(f"{command}: {status} - {summary}")
+    payload = data.get("data") or {}
+    if command == "manager":
+        print(f"  mode: {payload.get('mode')} ({payload.get('label')})")
+        print(f"  local: {payload.get('local_indicator')} usable={payload.get('local_subagents', {}).get('usable')}")
+        print(f"  active agents: {payload.get('active_subagents', {}).get('count')}")
+    if command == "route":
+        print(f"  seat/model: {payload.get('seat')} / {payload.get('model')}")
+        print(f"  reason: {payload.get('reason')}")
+        print(f"  token_saver_used: {payload.get('token_saver_used')}")
+        print(f"  local_qwen_eligible: {payload.get('local_qwen_eligible')}")
+    if command == "receipt":
+        verification = payload.get("verification") or {}
+        receipt = payload.get("receipt") or {}
+        print(f"  verified: {verification.get('verified')}")
+        print(f"  receipt seat/model: {receipt.get('seat')} / {receipt.get('model')}")
+        print(f"  returncode: {receipt.get('returncode')}")
+        print(f"  markers: {receipt.get('markers')}")
+PY
+}
+
+cmd_env() {
+  cat <<EOF
+export QWENDEX_BENCH_ROOT='$BENCH_ROOT'
+export QWENDEX_ROOT='$QWENDEX_ROOT'
+export CODEX_HOME='$CODEX_HOME'
+export QWENDEX_STATE_DB='$QWENDEX_STATE_DB'
+export QWENDEX_RESULTS_ROOT='$QWENDEX_RESULTS_ROOT'
+export QWENDEX_META_ROOT='$QWENDEX_META_ROOT'
+export QWENDEX_CODEX_STATUS_FILE='$QWENDEX_CODEX_STATUS_FILE'
+export QWENDEX_LLMSTACK_CONFIG='$QWENDEX_LLMSTACK_CONFIG'
+export QWENDEX_EXEC_CWD='$QWENDEX_EXEC_CWD'
+export QWENDEX_MCP_TRUSTED_ROOTS='$QWENDEX_MCP_TRUSTED_ROOTS'
+export LOCAL_QWEN_CODEX_CWD='$LOCAL_QWEN_CODEX_CWD'
+export LOCAL_QWEN_CODEX_ADD_DIRS='$LOCAL_QWEN_CODEX_ADD_DIRS'
+export LOCAL_QWEN_MODEL_CATALOG_JSON='$LOCAL_QWEN_MODEL_CATALOG_JSON'
+export LOCAL_QWEN_LOCAL_HARNESS_MCP='$LOCAL_QWEN_LOCAL_HARNESS_MCP'
+export LOCAL_QWEN_LOCAL_HARNESS_TRUSTED_ROOTS='$LOCAL_QWEN_LOCAL_HARNESS_TRUSTED_ROOTS'
+export PATH='$BENCH_ROOT/bin':'$QWENDEX_ROOT':'$QWENDEX_ROOT/scripts':"\$PATH"
+EOF
+}
+
+cmd_status() {
+  require_project
+  prepare_bench_home
+  cmd_codex_preflight >/dev/null
+  banner
+  "$QWENDEX" manager status --json > "$QWENDEX_META_ROOT/bench_manager_status.json"
+  "$QWENDEX" route --seat auto --task-class exec --prefer-local --json > "$QWENDEX_META_ROOT/bench_route_exec.json"
+  summary_json "$QWENDEX_META_ROOT/bench_manager_status.json" "$QWENDEX_META_ROOT/bench_route_exec.json"
+}
+
+cmd_init() {
+  require_project
+  prepare_bench_home
+  "$QWENDEX" manager mode --set manager --json > "$QWENDEX_META_ROOT/bench_manager_mode_set.json"
+  "$QWENDEX" manager local --set on --json > "$QWENDEX_META_ROOT/bench_manager_local_set.json"
+  cmd_codex_preflight >/dev/null
+  cmd_status
+}
+
+cmd_codex_preflight() {
+  require_project
+  prepare_bench_home
+  "$QWENDEX" codex-status --write "$QWENDEX_CODEX_STATUS_FILE" --json > "$QWENDEX_META_ROOT/codex_status_write.json"
+  "$QWENDEX" codex-patch preflight --json > "$QWENDEX_META_ROOT/codex_patch_preflight.json"
+  summary_json "$QWENDEX_META_ROOT/codex_status_write.json" "$QWENDEX_META_ROOT/codex_patch_preflight.json"
+}
+
+cmd_route() {
+  require_project
+  prepare_bench_home
+  local task_class="${1:-exec}"
+  "$QWENDEX" route --seat auto --task-class "$task_class" --prefer-local --json \
+    | tee "$QWENDEX_META_ROOT/bench_route_${task_class//[^A-Za-z0-9_.-]/_}.json"
+}
+
+cmd_manager() {
+  require_project
+  prepare_bench_home
+  if [[ "$#" -gt 0 ]]; then
+    "$QWENDEX" manager estimate --prompt "$*" --json
+  else
+    "$QWENDEX" manager status --json
+  fi
+}
+
+cmd_receipt() {
+  prepare_bench_home
+  local target="${1:-latest}"
+  "$QWENDEX" receipt "$target" --json | tee "$QWENDEX_META_ROOT/bench_receipt.json"
+}
+
+cmd_smoke_local() {
+  require_project
+  prepare_bench_home
+  "$QWENDEX" exec --cwd "$PROJECT_ROOT" --seat auto --prefer-local --timeout 120 --json \
+    "Use one bounded shell command to print the current directory basename, then final answer exactly QWENDEX_OK." \
+    | tee "$QWENDEX_META_ROOT/bench_smoke_local.json"
+  cmd_receipt latest >/dev/null
+  summary_json "$QWENDEX_META_ROOT/bench_smoke_local.json" "$QWENDEX_META_ROOT/bench_receipt.json"
+}
+
+cmd_smoke_full_dry_run() {
+  require_project
+  prepare_bench_home
+  "$QWENDEX" exec --cwd "$PROJECT_ROOT" --seat primary --timeout 120 --dry-run --json \
+    "Use one bounded shell command to print the current directory basename, then final answer exactly QWENDEX_OK." \
+    | tee "$QWENDEX_META_ROOT/bench_smoke_full_dry_run.json"
+}
+
+cmd_open_local() {
+  require_project
+  prepare_bench_home
+  cmd_codex_preflight >/dev/null
+  codex_start_banner "local" "qwen-local"
+  "$LOCAL_LAUNCHER" --cwd "$PROJECT_ROOT" --no-alt-screen "$@"
+}
+
+cmd_open_full() {
+  require_project
+  prepare_bench_home
+  cmd_codex_preflight >/dev/null
+  codex_start_banner "full" "$FULL_MODEL $FULL_REASONING"
+  codex \
+    --no-alt-screen \
+    --sandbox workspace-write \
+    "${MCP_OVERRIDE_ARGS[@]}" \
+    --add-dir "$BENCH_ROOT" \
+    --add-dir "$QWENDEX_ROOT" \
+    -m "$FULL_MODEL" \
+    -c "model_reasoning_effort=\"$FULL_REASONING\"" \
+    -c 'model_verbosity="low"' \
+    -C "$PROJECT_ROOT" \
+    "$@"
+}
+
+cmd_mcp() {
+  require_project
+  prepare_bench_home
+  (cd "$PROJECT_ROOT" && codex "${MCP_OVERRIDE_ARGS[@]}" mcp list)
+}
+
+cmd_console() {
+  prepare_bench_home
+  while true; do
+    clear
+    banner
+    cat <<'EOF'
+
+Choose:
+  1  status
+  2  route exec
+  3  route architecture
+  4  smoke local
+  5  receipt latest
+  6  mcp list
+  7  codex patch preflight
+  8  open local Codex in this pane
+  9  open full Codex in this pane
+  q  quit
+
+EOF
+    read -r -p "qwendex> " choice
+    case "$choice" in
+      1) cmd_status ;;
+      2) cmd_route exec ;;
+      3) cmd_route architecture ;;
+      4) cmd_smoke_local ;;
+      5) cmd_receipt latest ;;
+      6) cmd_mcp ;;
+      7) cmd_codex_preflight ;;
+      8) cmd_open_local ;;
+      9) cmd_open_full ;;
+      q|Q|quit|exit) break ;;
+      *) printf 'unknown choice: %s\n' "$choice" ;;
+    esac
+    printf '\n'
+    read -r -p "press Enter to continue..." _
+  done
+}
+
+tmux_new_or_reset_window() {
+  local name="$1"
+  local cwd="$2"
+  local command="$3"
+  if tmux list-windows -t "$SESSION" -F '#W' 2>/dev/null | rg -qx "$name"; then
+    tmux send-keys -t "$SESSION:$name" C-c
+    tmux send-keys -t "$SESSION:$name" "clear" C-m
+  else
+    tmux new-window -t "$SESSION" -n "$name" -c "$cwd"
+  fi
+  tmux send-keys -t "$SESSION:$name" "$command" C-m
+}
+
+cmd_tmux() {
+  require_project
+  prepare_bench_home
+  command -v tmux >/dev/null 2>&1 || die "tmux is required for qwendex_testbench tmux"
+  if ! tmux has-session -t "$SESSION" 2>/dev/null; then
+    tmux new-session -d -s "$SESSION" -n bench -c "$BENCH_ROOT"
+  fi
+  local stale
+  for stale in local full; do
+    if tmux list-windows -t "$SESSION" -F '#W' 2>/dev/null | rg -qx "$stale"; then
+      tmux kill-window -t "$SESSION:$stale"
+    fi
+  done
+  tmux_new_or_reset_window bench "$BENCH_ROOT" "eval \"\$('$BENCH_CMD' env)\" && '$BENCH_CMD' console; exec bash"
+  tmux_new_or_reset_window qwendex-local "$PROJECT_ROOT" "eval \"\$('$BENCH_CMD' env)\" && '$BENCH_CMD' open-local; exec bash"
+  tmux_new_or_reset_window qwendex-full "$PROJECT_ROOT" "eval \"\$('$BENCH_CMD' env)\" && '$BENCH_CMD' open-full; exec bash"
+  tmux_new_or_reset_window receipts "$QWENDEX_ROOT" "eval \"\$('$BENCH_CMD' env)\" && '$BENCH_CMD' receipt latest || true; exec bash"
+  tmux select-window -t "$SESSION:bench"
+  printf 'tmux attach -t %s\n' "$SESSION"
+}
+
+case "${1:-menu}" in
+  menu|help|--help|-h)
+    prepare_bench_home
+    usage
+    ;;
+  console)
+    cmd_console
+    ;;
+  env)
+    prepare_bench_home
+    cmd_env
+    ;;
+  init)
+    cmd_init
+    ;;
+  status)
+    cmd_status
+    ;;
+  route)
+    shift
+    cmd_route "$@"
+    ;;
+  manager)
+    shift
+    cmd_manager "$@"
+    ;;
+  receipt)
+    shift
+    cmd_receipt "$@"
+    ;;
+  codex-preflight)
+    cmd_codex_preflight
+    ;;
+  smoke-local)
+    cmd_smoke_local
+    ;;
+  smoke-full-dry-run)
+    cmd_smoke_full_dry_run
+    ;;
+  open-local)
+    shift
+    cmd_open_local "$@"
+    ;;
+  open-full)
+    shift
+    cmd_open_full "$@"
+    ;;
+  mcp)
+    cmd_mcp
+    ;;
+  tmux)
+    cmd_tmux
+    ;;
+  *)
+    usage >&2
+    die "unknown command: $1"
+    ;;
+esac
