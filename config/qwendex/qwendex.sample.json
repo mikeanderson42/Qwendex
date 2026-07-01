@@ -78,15 +78,22 @@
   },
   "orchestration": {
     "mode": "auto",
+    "manager_deploy_policy": "auto",
     "manager_only_available": true,
-    "shortcut": "Ctrl+Shift+M",
-    "shortcut_command": "scripts/qwendex manager --mode manager_only --json",
+    "shortcut": "Alt+M",
+    "shortcut_command": "scripts/qwendex manager mode --toggle --json",
     "max_subagents": 4,
     "stale_after_minutes": 30,
     "local_subagents": {
       "enabled": true,
-      "shortcut": "Ctrl+Shift+L",
+      "shortcut": "Alt+L",
       "shortcut_command": "scripts/qwendex manager local --toggle --json"
+    },
+    "kaveman": {
+      "enabled": false,
+      "shortcut": "Alt+K",
+      "shortcut_command": "scripts/qwendex manager kaveman --toggle --json",
+      "directive": "Use terse output: short, direct, minimal prose, no optional explanation unless asked."
     },
     "mode_order": ["auto", "lite", "medium", "heavy", "manager"],
     "mode_profiles": {
@@ -94,7 +101,7 @@
       "lite": {"label": "Lite", "offload_target": "10-20%", "max_subagents": 2},
       "medium": {"label": "Medium", "offload_target": "25-45%", "max_subagents": 4},
       "heavy": {"label": "Heavy", "offload_target": "50-75%", "max_subagents": 6},
-      "manager": {"label": "Manager Mode", "offload_target": "85-95%", "max_subagents": 8}
+      "manager": {"label": "Manager Mode", "offload_target": "85-95%", "max_subagents": 10}
     },
     "estimator": {
       "enabled": true,

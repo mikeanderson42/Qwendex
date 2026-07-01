@@ -14,6 +14,9 @@ scripts/qwendex context snapshot --task-id task_...
 scripts/qwendex learn dry-run
 scripts/qwendex manager mode --cycle
 scripts/qwendex manager local --toggle
+scripts/qwendex codex-patch preflight
+scripts/qwendex codex-patch apply --source /path/to/codex
+scripts/qwendex_dev_env sync
 ./llmstack status
 scripts/qwendex eval
 ```
@@ -33,6 +36,9 @@ gates.
 - [Seat Handoff](seat-handoff.md)
 - [Learning Loop](learning-loop.md)
 - [Manager Mode](manager-mode.md)
+- [Codex TUI Patching](codex-patching.md)
+- [Dev Environment](dev-environment.md)
+- [Test Bench](testbench.md)
 - [Tool Server](tool-server.md)
 - [Security](security.md)
 - [Verification](verification.md)

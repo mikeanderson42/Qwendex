@@ -102,16 +102,20 @@ endpoint; otherwise it falls back to the configured primary seat.
 `orchestration` controls manager defaults:
 
 - `mode`: `auto`, `lite`, `medium`, `heavy`, or `manager`
-- `shortcut`: declared as `Ctrl+Shift+M`
-- `shortcut_command`: `scripts/qwendex manager --mode manager_only --json`
-- `local_subagents`: `Ctrl+Shift+L` toggle and default Local state
+- `manager_deploy_policy`: `auto` by default; Manager Mode requires active
+  registered agent lanes unless this is set to `disabled`
+- `shortcut`: declared as `Alt+M`
+- `shortcut_command`: `scripts/qwendex manager mode --toggle --json`
+- `kaveman`: `Alt+K` toggle, persisted state, and terse-output directive
+- `local_subagents`: `Alt+L` toggle and default Local state
 - `mode_order`: `auto`, `lite`, `medium`, `heavy`, `manager`
-- `mode_profiles`: label, offload target, and max subagents per mode
+- `mode_profiles`: label, offload target, and max subagents per mode; Manager
+  Mode defaults to `max_subagents: 10`
 - `estimator`: model, reasoning, skill, and token caps for Auto
 - `local_qwen_eligibility`: task classes and max risk for local lanes
 - `escalation_thresholds`: terms that move lanes to high or xhigh
 - `stale_session_thresholds_minutes`: cleanup windows per mode
-- `max_subagents`: default `4`
+- `max_subagents`: default `4`; the Qwendex product ceiling is `10`
 - `stale_after_minutes`: default `30`
 - `close_stale_policy`: close completed agents after integration and idle
   read-only agents after the stale window
@@ -121,6 +125,7 @@ The CLI exposes these settings with:
 ```bash
 scripts/qwendex manager --json
 scripts/qwendex manager mode --set auto --json
+scripts/qwendex manager kaveman --toggle --json
 scripts/qwendex manager local --toggle --json
 scripts/qwendex manager estimate --prompt "..." --json
 ```
@@ -134,3 +139,9 @@ scripts/qwendex manager close-stale --stale-after-minutes 30 --json
 ```
 
 `manager_only` remains a compatibility alias for `manager`.
+
+`manager_deploy_policy` defaults to `auto`: when the selected mode is Manager
+Mode, Qwendex requires at least one active registered agent lane and reports a
+blocked manager status if no lane is active. Set `manager_deploy_policy` to
+`disabled` to opt out of that requirement; explicit manual manager lifecycle
+commands remain operator-directed.

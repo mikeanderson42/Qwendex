@@ -96,16 +96,26 @@ policy in wrapper scripts.
 For complicated runs, use the adaptive manager controls:
 
 ```bash
-scripts/qwendex manager mode --cycle --json
+scripts/qwendex manager mode --toggle --json
+scripts/qwendex manager kaveman --toggle --json
 scripts/qwendex manager local --toggle --json
 scripts/qwendex manager estimate --prompt "..." --json
-scripts/qwendex manager --mode manager_only --json
+scripts/qwendex manager mode --set manager --json
 scripts/qwendex manager status --json
 ```
 
-Bind `Ctrl+Shift+M` to mode cycling and `Ctrl+Shift+L` to the local toggle in
-the terminal or host UI. `Local: [N]` means Qwendex will skip local subagents
+In a patched Codex TUI, `Alt+M` toggles Agent Manager, `Alt+K` toggles Kaveman,
+and `Alt+L` toggles Local. `Local: [N]` means Qwendex will skip local subagents
 even when the local model endpoint is healthy.
+
+Manager Mode defaults to `max_subagents: 10`, which is also the Qwendex product
+ceiling for concurrent subagent lanes.
+
+`manager_deploy_policy` defaults to `auto`: when the selected mode is Manager
+Mode, Qwendex requires at least one active registered agent lane and reports a
+blocked manager status if no lane is active. Set `manager_deploy_policy` to
+`disabled` to opt out of that requirement; explicit manual manager lifecycle
+commands remain operator-directed.
 
 Every assigned lane records a context packet and remains advisory until the main
 session reviews receipts, touched files, validation status, blockers, and

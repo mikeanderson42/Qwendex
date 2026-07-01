@@ -16,3 +16,32 @@
 Read only the files named by the task or the smallest files needed to verify the
 current claim. Prefer Qwendex receipts and JSON summaries over long transcripts.
 After orientation, answer `STARTUP_READ_COMPACT_OK`.
+
+## Dev Worktree
+
+For Qwendex product development, use `~/qwendex-dev` and start with:
+
+```bash
+source ~/qwendex-dev/.qwendex-dev/env.sh
+qwendex-dev status-json
+qwendex-dev doctor
+qwendex-dev review
+```
+
+Bare `qwendex-dev` opens Codex in `~/qwendex-dev` with the current Codex
+yolo-equivalent flag, `--dangerously-bypass-approvals-and-sandbox`. Use the
+named `status-json`, `doctor`, and `review` commands for posture checks.
+
+Use `qwendex-dev verify --tier quick` before staging and
+`qwendex-dev verify --tier release` before release-readiness claims.
+
+## Connectedness Check
+
+Before adding or advertising a Qwendex control, status label, hotkey, wrapper
+command, config key, or public workflow, verify it has a real state source, a
+CLI/API command path, a smoke test or receipt, and docs. If it depends on a
+patched Codex build or is only a placeholder, label that boundary plainly.
+
+Stop and repair if Local-off routes to Qwen, fresh-home isolation touches the
+normal safe-home, receipts fail schema/digest checks, manager sessions are
+unexpectedly active or stale, or live output shows guard markers or tool markup.

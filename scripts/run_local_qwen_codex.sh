@@ -52,6 +52,7 @@ CODEX_GOAL_MODE="${LOCAL_QWEN_CODEX_GOAL_MODE:-guarded}"
 LOCAL_QWEN_GUARD_PROFILE="${LOCAL_QWEN_GUARD_PROFILE:-balanced}"
 LOCAL_QWEN_CODEX_MAX_WALL_TIME_SECONDS="${LOCAL_QWEN_CODEX_MAX_WALL_TIME_SECONDS:--1}"
 LOCAL_QWEN_CODEX_MAX_TOOL_CALLS="${LOCAL_QWEN_CODEX_MAX_TOOL_CALLS:--1}"
+LOCAL_QWEN_CODEX_ADD_DIRS="${LOCAL_QWEN_CODEX_ADD_DIRS:-}"
 EXPECTED_BRIDGE_VERSION="${LOCAL_QWEN_EXPECTED_BRIDGE_VERSION:-tabby-responses-proxy-2026-06-30-qwen-self-analysis-preflight-64k}"
 if [[ -n "${LOCAL_QWEN_CODEX_ENABLE_GOALS+x}" ]]; then
   case "$LOCAL_QWEN_CODEX_ENABLE_GOALS" in
@@ -304,7 +305,14 @@ run_check_only() {
   echo "Local harness MCP: $LOCAL_HARNESS_MCP"
   local codex_bin
   codex_bin="$(resolve_codex_bin)"
-  (cd "$CODEX_CWD" && CODEX_HOME="$SAFE_HOME" "$codex_bin" mcp list)
+  local mcp_trusted_roots="${LOCAL_QWEN_LOCAL_HARNESS_TRUSTED_ROOTS:-$ROOT:$CODEX_CWD}"
+  (cd "$CODEX_CWD" && CODEX_HOME="$SAFE_HOME" "$codex_bin" \
+    -c 'mcp_servers.local-harness.command="python3"' \
+    -c "mcp_servers.local-harness.args=[\"$LOCAL_HARNESS_MCP\"]" \
+    -c "mcp_servers.local-harness.cwd=\"$ROOT\"" \
+    -c "mcp_servers.local-harness.env.ARTIFACT_QUEUE_MCP_TRUSTED_ROOTS=\"$mcp_trusted_roots\"" \
+    -c 'mcp_servers.local-harness.env.SEARXNG_URL="http://127.0.0.1:6060"' \
+    mcp list)
 }
 
 validate_budget_value() {
@@ -487,10 +495,28 @@ run_codex() {
     1|true|TRUE|yes|YES) repo_check_args=(--skip-git-repo-check) ;;
     *) ;;
   esac
+  local add_dir_args=()
+  if [[ -n "$LOCAL_QWEN_CODEX_ADD_DIRS" ]]; then
+    local add_dir
+    IFS=':' read -r -a _qwendex_add_dirs <<< "$LOCAL_QWEN_CODEX_ADD_DIRS"
+    for add_dir in "${_qwendex_add_dirs[@]}"; do
+      if [[ -n "$add_dir" ]]; then
+        add_dir_args+=(--add-dir "$add_dir")
+      fi
+    done
+  fi
   local catalog_args=()
   if [[ -n "$MODEL_CATALOG_JSON" ]]; then
     catalog_args=(-c "model_catalog_json=\"$MODEL_CATALOG_JSON\"")
   fi
+  local mcp_trusted_roots="${LOCAL_QWEN_LOCAL_HARNESS_TRUSTED_ROOTS:-$ROOT:$CODEX_CWD}"
+  local mcp_override_args=(
+    -c 'mcp_servers.local-harness.command="python3"'
+    -c "mcp_servers.local-harness.args=[\"$LOCAL_HARNESS_MCP\"]"
+    -c "mcp_servers.local-harness.cwd=\"$ROOT\""
+    -c "mcp_servers.local-harness.env.ARTIFACT_QUEUE_MCP_TRUSTED_ROOTS=\"$mcp_trusted_roots\""
+    -c 'mcp_servers.local-harness.env.SEARXNG_URL="http://127.0.0.1:6060"'
+  )
 
   if [[ "$mode" == "exec" ]]; then
     local exec_args=()
@@ -518,6 +544,8 @@ run_codex() {
       "${exec_args[@]}" \
       "${goal_args[@]}" \
       "${repo_check_args[@]}" \
+      "${add_dir_args[@]}" \
+      "${mcp_override_args[@]}" \
       --oss \
       --local-provider lmstudio \
       "${catalog_args[@]}" \
@@ -537,6 +565,8 @@ run_codex() {
   "$codex_bin" \
     "${goal_args[@]}" \
     "${repo_check_args[@]}" \
+    "${add_dir_args[@]}" \
+    "${mcp_override_args[@]}" \
     --sandbox workspace-write \
     --oss \
     --local-provider lmstudio \

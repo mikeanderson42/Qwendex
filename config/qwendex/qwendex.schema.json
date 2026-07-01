@@ -108,13 +108,14 @@
     },
     "orchestration": {
       "type": "object",
-      "required": ["mode", "manager_only_available", "shortcut", "shortcut_command", "max_subagents", "stale_after_minutes", "local_subagents", "mode_order", "mode_profiles", "estimator", "local_qwen_eligibility", "escalation_thresholds", "stale_session_thresholds_minutes", "close_stale_policy"],
+      "required": ["mode", "manager_deploy_policy", "manager_only_available", "shortcut", "shortcut_command", "max_subagents", "stale_after_minutes", "local_subagents", "kaveman", "mode_order", "mode_profiles", "estimator", "local_qwen_eligibility", "escalation_thresholds", "stale_session_thresholds_minutes", "close_stale_policy"],
       "properties": {
         "mode": {"enum": ["manual", "auto", "lite", "medium", "heavy", "manager", "manager_only"]},
+        "manager_deploy_policy": {"enum": ["auto", "disabled"]},
         "manager_only_available": {"type": "boolean"},
         "shortcut": {"type": "string"},
         "shortcut_command": {"type": "string"},
-        "max_subagents": {"type": "integer", "minimum": 1, "maximum": 8},
+        "max_subagents": {"type": "integer", "minimum": 1, "maximum": 10},
         "stale_after_minutes": {"type": "integer", "minimum": 5, "maximum": 240},
         "local_subagents": {
           "type": "object",
@@ -123,6 +124,16 @@
             "enabled": {"type": "boolean"},
             "shortcut": {"type": "string"},
             "shortcut_command": {"type": "string"}
+          }
+        },
+        "kaveman": {
+          "type": "object",
+          "required": ["enabled", "shortcut", "shortcut_command", "directive"],
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "shortcut": {"type": "string"},
+            "shortcut_command": {"type": "string"},
+            "directive": {"type": "string", "minLength": 1}
           }
         },
         "mode_order": {
@@ -244,7 +255,7 @@
       "properties": {
         "label": {"type": "string"},
         "offload_target": {"type": "string"},
-        "max_subagents": {"type": "integer", "minimum": 1, "maximum": 8}
+        "max_subagents": {"type": "integer", "minimum": 1, "maximum": 10}
       }
     }
   },

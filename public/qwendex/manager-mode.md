@@ -11,20 +11,29 @@ Public modes are ordered:
 Auto -> Lite -> Medium -> Heavy -> Manager Mode
 ```
 
-`Ctrl+Shift+M` cycles that order in the host terminal or UI:
+`Alt+M` toggles Agent Manager between Auto and Manager Mode in the patched TUI:
 
 ```bash
-scripts/qwendex manager mode --cycle --json
+scripts/qwendex manager mode --toggle --json
 ```
 
 Visible indicators:
 
 ```text
-(Ctrl+Shift+M) Subagent Management: [ Auto ]
-(Ctrl+Shift+L) Local: [Y]
+{Qwendex} Agent Manager: [Auto] | Kaveman: [N] | Local: [Y] (Alt+M/K/L)
 ```
 
-`Ctrl+Shift+L` toggles whether local subagents may be used:
+`Alt+K` toggles Kaveman output mode:
+
+```bash
+scripts/qwendex manager kaveman --toggle --json
+```
+
+When Kaveman is `[Y]`, Qwendex writes a terse-output directive into the Codex
+status file. This is lightweight Qwendex state, not a vendored copy of the
+external Caveman package.
+
+`Alt+L` toggles whether local subagents may be used:
 
 ```bash
 scripts/qwendex manager local --toggle --json
@@ -33,22 +42,25 @@ scripts/qwendex manager local --set off --json
 
 When Local is `[N]`, Qwendex skips local Qwen even if the endpoint is healthy.
 
+## Agent Deploy Policy
+
+`manager_deploy_policy` defaults to `auto`: when the selected mode is Manager
+Mode, Qwendex requires at least one active registered agent lane and reports a
+blocked manager status if no lane is active. Set `manager_deploy_policy` to
+`disabled` to opt out of that requirement; explicit manual manager lifecycle
+commands remain operator-directed.
+
 ## Mode Meaning
 
 - `Auto`: deterministic checks plus the bounded estimator pick a mode.
 - `Lite`: target 10-20% subagent offload.
 - `Medium`: target 25-45% subagent offload.
 - `Heavy`: target 50-75% subagent offload.
-- `Manager Mode`: target 85-95% offload; the main session coordinates,
-  reviews, and validates.
+- `Manager Mode`: target 85-95% offload; default `max_subagents` is 10, and
+  the main session coordinates, reviews, and validates.
 
-Legacy compatibility remains:
-
-```bash
-scripts/qwendex manager --mode manager_only --json
-```
-
-The legacy spelling maps to `Manager Mode`.
+Legacy compatibility remains: the `manager_only` spelling maps to
+`Manager Mode`.
 
 ## Auto Estimator
 
@@ -83,7 +95,7 @@ Subagent output is advisory until reviewed and backed by artifacts or tests.
 
 Default manager settings:
 
-- `max_subagents`: mode-specific, 2 to 8.
+- `max_subagents`: mode-specific, 2 to 10. The Qwendex product ceiling is 10.
 - `stale_after_minutes`: mode-specific, 15 to 45.
 - Close completed agents after findings are integrated.
 - Close idle read-only agents after the stale window.

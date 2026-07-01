@@ -24,7 +24,7 @@ harness.
 - `scripts/qwendex manager status --json`
 - `scripts/qwendex queue status --json`
 - `scripts/qwendex learn dry-run --backend mock --json`
-- `scripts/qwendex manager --mode manager_only --json`
+- `scripts/qwendex manager mode --set manager --json`
 - Public docs naming, link, and secret scans
 
 ## Review Status
