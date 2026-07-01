@@ -1,5 +1,23 @@
 # Release Notes
 
+## 0.1.0-rc.2
+
+- Tightened Manager Mode lifecycle checks so stale read-only lanes are
+  reconciled during status refreshes, while stale writer lanes remain blocked
+  until the operator integrates or explicitly stops them.
+- Made `check`, `doctor`, `manager status`, and `codex-status` share the same
+  stale-session contract instead of allowing leftover active lanes to make
+  Manager Mode look healthy after a TUI refresh.
+- Extended the Codex TUI patch manifest so Kaveman `[Y]` is connected beyond
+  the footer: the patched TUI now reads `QWENDEX_CODEX_STATUS_FILE` and appends
+  the Kaveman directive to developer instructions for thread start, resume, and
+  fork flows.
+- Added dev-environment hook visibility reporting. `qwendex-dev status-json`
+  now records active isolated `CODEX_HOME` hook sources and warns when global
+  `~/.codex/hooks.json` exists but the dev Codex home has none.
+- Added smoke coverage for stale manager reconciliation, stale writer blocking,
+  Kaveman TUI patch injection, and dev-hook visibility.
+
 ## 0.1.0-rc.1
 
 - Added `scripts/qwendex` as the public CLI boundary.

@@ -30,8 +30,9 @@ scripts/qwendex manager kaveman --toggle --json
 ```
 
 When Kaveman is `[Y]`, Qwendex writes a terse-output directive into the Codex
-status file. This is lightweight Qwendex state, not a vendored copy of the
-external Caveman package.
+status file. The patched Codex TUI reads that directive and appends it to
+developer instructions for thread start, resume, and fork flows. This is
+lightweight Qwendex state, not a vendored copy of the external Caveman package.
 
 `Alt+L` toggles whether local subagents may be used:
 
@@ -98,8 +99,9 @@ Default manager settings:
 - `max_subagents`: mode-specific, 2 to 10. The Qwendex product ceiling is 10.
 - `stale_after_minutes`: mode-specific, 15 to 45.
 - Close completed agents after findings are integrated.
-- Close idle read-only agents after the stale window.
-- Do not close an active writer until its changes are integrated or stopped.
+- Status refreshes reconcile idle read-only agents after the stale window.
+- Do not close an active writer until its changes are integrated or stopped;
+  stale writer lanes keep Manager Mode blocked.
 
 Durable lifecycle commands:
 

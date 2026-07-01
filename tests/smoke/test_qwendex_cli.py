@@ -2,6 +2,7 @@ import importlib.util
 import json
 import os
 import re
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -361,6 +362,8 @@ def test_qwendex_dev_env_public_surface_is_visible_and_isolated():
     assert "cmd_bootstrap" in text
     assert "cmd_doctor" in text
     assert "cmd_status_json" in text
+    assert "hook_source_count" in text
+    assert "active dev CODEX_HOME has no hooks" in text
     assert "cmd_codex_source" in text
     assert "cmd_clean" in text
     assert "cmd_repair_copy" in text
@@ -448,6 +451,8 @@ def test_qwendex_dev_default_launches_repo_with_yolo_codex(tmp_path):
 
     fake_bin.mkdir()
     fake_home.mkdir()
+    (fake_home / ".codex").mkdir()
+    (fake_home / ".codex" / "hooks.json").write_text('{"hooks":{"PreToolUse":[]}}\n', encoding="utf-8")
     fake_codex.write_text(
         """#!/usr/bin/env python3
 import json
@@ -509,6 +514,10 @@ Path(os.environ["QWENDEX_FAKE_CODEX_CWD"]).write_text(os.getcwd(), encoding="utf
     assert "qwendex_toggle_manager = \"alt-m\"" in config
     assert "qwendex_toggle_kaveman = \"alt-k\"" in config
     assert "qwendex_toggle_local = \"alt-l\"" in config
+    dev_status = json.loads((dev_root / ".qwendex-dev" / "results" / "meta" / "dev_status.json").read_text(encoding="utf-8"))
+    assert dev_status["codex"]["hook_source_count"] == 0
+    assert dev_status["codex"]["global_hook_source_count"] == 1
+    assert "active dev CODEX_HOME has no hooks" in " ".join(dev_status["warnings"])
 
 
 def test_qwendex_codex_status_tracks_manager_state_and_writes_surface_file(tmp_path):
@@ -640,6 +649,12 @@ def test_qwendex_codex_patch_apply_updates_supported_source_checkout(tmp_path):
     assert "qwendex_toggle_kaveman" in (
         source / "codex-rs/tui/src/keymap.rs"
     ).read_text(encoding="utf-8")
+    terminal_instructions = (
+        source / "codex-rs/tui/src/terminal_visualization_instructions.rs"
+    ).read_text(encoding="utf-8")
+    assert "qwendex_kaveman_directive" in terminal_instructions
+    assert "QWENDEX_CODEX_STATUS_FILE" in terminal_instructions
+    assert "Qwendex Kaveman directive" in terminal_instructions
 
 
 def test_qwendex_route_command_and_auto_exec_prefer_local_qwen_when_available(tmp_path):
@@ -1017,6 +1032,51 @@ def test_qwendex_manager_assign_generates_context_packet_and_routing(tmp_path):
     assert status["data"]["deployment_contract"]["status"] == "pass"
     assert status["data"]["subagent_state"]["receipts"] == ["results/qwendex/security-review.json"]
     assert status["data"]["subagent_state"]["validation_status"]["pending"] == 1
+
+
+def test_qwendex_manager_reconciles_stale_read_only_and_blocks_stale_writers(tmp_path):
+    state_db = tmp_path / "qwendex.sqlite"
+    env = {
+        "QWENDEX_STATE_DB": str(state_db),
+        "QWENDEX_MANAGER_DEPLOY_POLICY": "disabled",
+    }
+
+    json_result(
+        "manager",
+        "assign",
+        "--agent-id",
+        "stale-reader",
+        "--lane",
+        "review",
+        "--write-surface",
+        "read-only",
+        "--json",
+        env=env,
+    )
+    json_result(
+        "manager",
+        "assign",
+        "--agent-id",
+        "stale-writer",
+        "--lane",
+        "implementation",
+        "--write-surface",
+        "scripts",
+        "--json",
+        env=env,
+    )
+    with sqlite3.connect(state_db) as conn:
+        conn.execute("UPDATE qwendex_agent_sessions SET heartbeat_at = '2000-01-01T00:00:00Z'")
+
+    status_result = run_qwendex("manager", "status", "--stale-after-minutes", "5", "--json", env=env)
+    status = parse_json_result(status_result)
+    assert status_result.returncode != 0
+    assert status["data"]["stale_reconciliation"]["closed_count"] == 1
+    assert status["data"]["stale_reconciliation"]["closed"][0]["agent_id"] == "stale-reader"
+    assert status["data"]["stale_reconciliation"]["skipped_writer_count"] == 1
+    assert status["data"]["active_subagents"]["count"] == 0
+    assert status["data"]["stale_writer_sessions"]["count"] == 1
+    assert "stale writer lane" in " ".join(status["data"]["subagent_state"]["blockers"])
 
 
 def test_qwendex_auto_manager_estimator_skill_contract():

@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.1.0-rc.1"
+VERSION = "0.1.0-rc.2"
 CONFIG_DIR = ROOT / "config" / "qwendex"
 DEFAULT_PROJECT_CONFIG = CONFIG_DIR / "qwendex.json"
 DEFAULT_USER_CONFIG = Path.home() / ".config" / "qwendex" / "config.json"
@@ -181,6 +181,10 @@ CODEX_PATCH_MANIFESTS: dict[str, dict[str, Any]] = {
                 "path": "codex-rs/tui/src/app/input.rs",
                 "anchors": ["app_keymap_shortcuts_available", "toggle_raw_output"],
             },
+            {
+                "path": "codex-rs/tui/src/terminal_visualization_instructions.rs",
+                "anchors": ["with_terminal_visualization_instructions", "TERMINAL_VISUALIZATION_INSTRUCTIONS"],
+            },
         ],
         "required_source_edits": [
             "Add StatusLineItem::QwendexManager serialized as qwendex-manager.",
@@ -189,6 +193,7 @@ CODEX_PATCH_MANIFESTS: dict[str, dict[str, Any]] = {
             "Add global keymap actions qwendex_toggle_manager, qwendex_toggle_kaveman, and qwendex_toggle_local.",
             "Dispatch those actions before generic composer input handling.",
             "After each action, call the configured Qwendex toggle command and refresh status surfaces.",
+            "Append the active Kaveman directive from QWENDEX_CODEX_STATUS_FILE to TUI developer instructions.",
         ],
     },
 }
@@ -1371,41 +1376,88 @@ def stale_age_seconds(row: Mapping[str, Any]) -> float:
         return 0.0
 
 
+def manager_session_is_stale(session: Mapping[str, Any], *, stale_after_minutes: int) -> bool:
+    return stale_age_seconds(session) >= stale_after_minutes * 60
+
+
+def manager_session_is_read_only(session: Mapping[str, Any]) -> bool:
+    return str(session.get("write_surface") or "").strip().lower() in {"read-only", "readonly"}
+
+
+def reconcile_stale_manager_sessions(
+    conn: sqlite3.Connection,
+    *,
+    stale_after_minutes: int,
+    now: str,
+) -> dict[str, Any]:
+    rows = conn.execute("SELECT * FROM qwendex_agent_sessions WHERE status = 'active'").fetchall()
+    closed: list[dict[str, Any]] = []
+    skipped_writers: list[dict[str, Any]] = []
+    for row in rows:
+        session = row_to_agent_session(row)
+        if not session or not manager_session_is_stale(session, stale_after_minutes=stale_after_minutes):
+            continue
+        if not manager_session_is_read_only(session):
+            skipped_writers.append(session)
+            continue
+        close_receipt = make_id("close")
+        conn.execute(
+            "UPDATE qwendex_agent_sessions SET status = 'closed', updated_at = ?, stop_reason = 'stale', close_receipt = ? WHERE agent_id = ?",
+            (now, close_receipt, session["agent_id"]),
+        )
+        updated = conn.execute("SELECT * FROM qwendex_agent_sessions WHERE agent_id = ?", (session["agent_id"],)).fetchone()
+        closed.append(row_to_agent_session(updated) or {})
+    conn.commit()
+    return {
+        "closed_count": len(closed),
+        "closed": closed,
+        "skipped_writer_count": len(skipped_writers),
+        "skipped_writers": skipped_writers,
+        "stale_after_minutes": max(stale_after_minutes, 5),
+    }
+
+
 def summarize_agent_sessions(
     sessions: list[dict[str, Any]],
     *,
     stale_after_minutes: int,
 ) -> dict[str, Any]:
-    active = [session for session in sessions if session.get("status") == "active"]
+    active_all = [session for session in sessions if session.get("status") == "active"]
     stale = [
         session
-        for session in active
-        if stale_age_seconds(session) >= stale_after_minutes * 60
+        for session in active_all
+        if manager_session_is_stale(session, stale_after_minutes=stale_after_minutes)
     ]
+    stale_ids = {session.get("agent_id") for session in stale}
+    active = [session for session in active_all if session.get("agent_id") not in stale_ids]
+    stale_writers = [session for session in stale if not manager_session_is_read_only(session)]
+    open_sessions = [session for session in sessions if session.get("status") != "closed"]
     receipts = [
         session.get("context_packet", {}).get("receipt_path", "")
-        for session in sessions
+        for session in open_sessions
         if session.get("context_packet", {}).get("receipt_path")
     ]
     files_touched = sorted({
         path
-        for session in sessions
+        for session in open_sessions
         for path in session.get("context_packet", {}).get("exact_files", [])
     })
     blockers = [
         session.get("stop_reason", "")
-        for session in sessions
+        for session in open_sessions
         if session.get("stop_reason") and session.get("status") != "closed"
     ]
+    blockers.extend(f"stale writer lane: {session.get('lane') or session.get('agent_id')}" for session in stale_writers)
     validation_counts = {"pending": 0, "pass": 0, "fail": 0}
-    for session in sessions:
+    for session in open_sessions:
         status = str(session.get("validation_status") or "pending")
         validation_counts[status] = validation_counts.get(status, 0) + 1
     return {
         "active_subagents": {"count": len(active), "agents": active},
         "stale_sessions": {"count": len(stale), "agents": stale},
+        "stale_writer_sessions": {"count": len(stale_writers), "agents": stale_writers},
         "subagent_state": {
-            "context_used": sum(int(session.get("context_packet", {}).get("context_budget") or 0) for session in sessions),
+            "context_used": sum(int(session.get("context_packet", {}).get("context_budget") or 0) for session in open_sessions),
             "files_touched": files_touched,
             "blockers": blockers,
             "receipts": receipts,
@@ -1443,6 +1495,22 @@ def manager_deployment_contract(mode: str, policy: str, active_count: int) -> di
             else "Manager Mode requires at least one active agent lane."
         ),
     }
+
+
+def manager_health_issues(config: Mapping[str, Any], sessions: list[dict[str, Any]], *, mode: str, stale_after_minutes: int) -> list[str]:
+    summary = summarize_agent_sessions(sessions, stale_after_minutes=stale_after_minutes)
+    contract = manager_deployment_contract(
+        normalize_manager_mode(mode),
+        manager_deploy_policy(config),
+        int(summary["active_subagents"]["count"]),
+    )
+    issues: list[str] = []
+    if summary["stale_writer_sessions"]["count"]:
+        ids = ", ".join(str(session.get("agent_id")) for session in summary["stale_writer_sessions"]["agents"])
+        issues.append(f"stale manager writer sessions require integration or explicit stop: {ids}")
+    if contract["status"] != "pass":
+        issues.append(contract["summary"])
+    return issues
 
 
 def high_value_add_lines(local_status: Mapping[str, Any], *, release_risk: str = "medium") -> list[str]:
@@ -1604,6 +1672,13 @@ def manager_mode_payload(
         data["manager_deploy_policy"],
         int(data["active_subagents"]["count"]),
     )
+    if data["stale_writer_sessions"]["count"]:
+        data["deployment_contract"] = {
+            **data["deployment_contract"],
+            "healthy": False,
+            "status": "blocked",
+            "summary": "Stale manager writer sessions require integration or explicit stop.",
+        }
     data["manager_estimate"] = manager_self_estimate(
         config,
         mode=profile["mode"],
@@ -1623,6 +1698,8 @@ def manager_status_surface_text(label: str, local_enabled: bool, kaveman_enabled
 def codex_status_payload(config: Mapping[str, Any], *, write_path: Path | None = None) -> dict[str, Any]:
     with connect_state(config) as conn:
         mode = current_manager_mode(config, conn)
+        stale_after = mode_stale_after_minutes(config, mode)
+        reconcile_stale_manager_sessions(conn, stale_after_minutes=stale_after, now=utc_now())
         local_enabled = current_local_enabled(config, conn)
         kaveman_enabled = current_kaveman_enabled(config, conn)
         local_status = local_subagent_status(config, enabled=local_enabled, env=os.environ, probe=True)
@@ -2096,6 +2173,76 @@ impl ChatWidget {{
             self.apply_raw_output_mode(tui, enabled, /*notify*/ false);
             return;
         }
+""",
+                ),
+            ],
+        },
+        {
+            "path": "codex-rs/tui/src/terminal_visualization_instructions.rs",
+            "replacements": [
+                (
+                    """pub(crate) fn with_terminal_visualization_instructions(
+    config: &Config,
+    control_instructions: Option<String>,
+) -> Option<String> {
+    if !config
+        .features
+        .enabled(Feature::TerminalVisualizationInstructions)
+    {
+        return control_instructions;
+    }
+
+    let existing_instructions =
+        control_instructions.or_else(|| config.developer_instructions.clone());
+    Some(match existing_instructions.as_deref() {
+        Some(existing) if !existing.trim().is_empty() => {
+            format!("{existing}\\n\\n{TERMINAL_VISUALIZATION_INSTRUCTIONS}")
+        }
+        _ => TERMINAL_VISUALIZATION_INSTRUCTIONS.to_string(),
+    })
+}
+""",
+                    f"""{marker}
+fn qwendex_kaveman_directive() -> Option<String> {{
+    let status_file = std::env::var("QWENDEX_CODEX_STATUS_FILE").ok()?;
+    let raw = std::fs::read_to_string(status_file).ok()?;
+    let value = serde_json::from_str::<serde_json::Value>(&raw).ok()?;
+    if !value
+        .get("kaveman_enabled")
+        .and_then(|enabled| enabled.as_bool())
+        .unwrap_or(false)
+    {{
+        return None;
+    }}
+    value
+        .get("kaveman_directive")
+        .and_then(|directive| directive.as_str())
+        .map(str::trim)
+        .filter(|directive| !directive.is_empty())
+        .map(|directive| format!("Qwendex Kaveman directive: {{directive}}"))
+}}
+
+pub(crate) fn with_terminal_visualization_instructions(
+    config: &Config,
+    control_instructions: Option<String>,
+) -> Option<String> {{
+    let mut blocks = Vec::new();
+    if let Some(existing) = control_instructions.or_else(|| config.developer_instructions.clone()) {{
+        if !existing.trim().is_empty() {{
+            blocks.push(existing);
+        }}
+    }}
+    if config
+        .features
+        .enabled(Feature::TerminalVisualizationInstructions)
+    {{
+        blocks.push(TERMINAL_VISUALIZATION_INSTRUCTIONS.to_string());
+    }}
+    if let Some(directive) = qwendex_kaveman_directive() {{
+        blocks.push(directive);
+    }}
+    (!blocks.is_empty()).then(|| blocks.join("\\n\\n"))
+}}
 """,
                 ),
             ],
@@ -2599,9 +2746,17 @@ def command_check(args: argparse.Namespace, config: dict[str, Any]) -> dict[str,
     surface = required_surface_check()
     artifacts = [path for path in REQUIRED_SURFACE_FILES if (ROOT / path).exists()]
     status = "pass" if surface["status"] == "pass" else "fail"
+    manager_issues: list[str] = []
     with connect_state(config) as conn:
         mode = current_manager_mode(config, conn)
         local_status = local_subagent_status(config, enabled=current_local_enabled(config, conn), env=os.environ, probe=False)
+        stale_after = mode_stale_after_minutes(config, mode)
+        reconcile_stale_manager_sessions(conn, stale_after_minutes=stale_after, now=utc_now())
+        rows = conn.execute("SELECT * FROM qwendex_agent_sessions ORDER BY updated_at DESC").fetchall()
+        sessions = [session for row in rows if (session := row_to_agent_session(row))]
+        manager_issues = manager_health_issues(config, sessions, mode=mode, stale_after_minutes=stale_after)
+    if manager_issues:
+        status = "fail"
     manager_estimate = manager_self_estimate(
         config,
         mode=mode,
@@ -2615,9 +2770,10 @@ def command_check(args: argparse.Namespace, config: dict[str, Any]) -> dict[str,
         summary="Qwendex surface is ready." if status == "pass" else "Qwendex surface is incomplete.",
         artifacts=artifacts,
         next_actions=[] if status == "pass" else ["Run scripts/qwendex doctor --json"],
-        errors=surface["missing"],
+        errors=[*surface["missing"], *manager_issues],
         data={
             "surface": surface,
+            "manager_health_issues": manager_issues,
             "default_seat": config["default_seat"],
             "routing": routing_policy(config),
             "manager_estimate": manager_estimate,
@@ -2639,9 +2795,17 @@ def command_doctor(args: argparse.Namespace, config: dict[str, Any]) -> dict[str
     artifacts = [f"public/qwendex/{name}" for name in docs["files"]]
     artifacts.extend(path for path in REQUIRED_SURFACE_FILES if (ROOT / path).exists())
     status = "pass" if not critical else "fail"
+    manager_issues: list[str] = []
     with connect_state(config) as conn:
         mode = current_manager_mode(config, conn)
         local_status = local_subagent_status(config, enabled=current_local_enabled(config, conn), env=os.environ, probe=False)
+        stale_after = mode_stale_after_minutes(config, mode)
+        reconcile_stale_manager_sessions(conn, stale_after_minutes=stale_after, now=utc_now())
+        rows = conn.execute("SELECT * FROM qwendex_agent_sessions ORDER BY updated_at DESC").fetchall()
+        sessions = [session for row in rows if (session := row_to_agent_session(row))]
+        manager_issues = manager_health_issues(config, sessions, mode=mode, stale_after_minutes=stale_after)
+    critical.extend(manager_issues)
+    status = "pass" if not critical else "fail"
     manager_estimate = manager_self_estimate(
         config,
         mode=mode,
@@ -2658,6 +2822,7 @@ def command_doctor(args: argparse.Namespace, config: dict[str, Any]) -> dict[str
         errors=critical,
         data={
             "critical_issues": critical,
+            "manager_health_issues": manager_issues,
             "surface": surface,
             "public_docs": docs,
             "config": {
@@ -3491,6 +3656,9 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
         max_subagents = args.max_subagents or manager_mode_profile(config, mode)["max_subagents"]
         local_status = local_subagent_status(config, enabled=current_local_enabled(config, conn), env=os.environ, probe=True)
         kaveman_enabled = current_kaveman_enabled(config, conn)
+        reconciliation = {"closed_count": 0, "closed": [], "skipped_writer_count": 0, "skipped_writers": [], "stale_after_minutes": max(stale_after, 5)}
+        if args.action in {"kaveman", "local", "estimate", "status"}:
+            reconciliation = reconcile_stale_manager_sessions(conn, stale_after_minutes=stale_after, now=now)
         if args.action == "mode":
             if args.toggle:
                 mode = "auto" if mode == "manager" else "manager"
@@ -3508,6 +3676,8 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
                 mode = requested
                 set_manager_setting(conn, "selected_mode", mode)
                 conn.commit()
+            stale_after = mode_stale_after_minutes(config, mode, args.stale_after_minutes)
+            reconciliation = reconcile_stale_manager_sessions(conn, stale_after_minutes=stale_after, now=now)
             rows = conn.execute("SELECT * FROM qwendex_agent_sessions ORDER BY updated_at DESC LIMIT ?", (args.limit,)).fetchall()
             sessions = [row_to_agent_session(row) for row in rows]
             data = manager_mode_payload(
@@ -3521,6 +3691,7 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
             )
             data["state_db"] = str(state_db_path(config))
             data["codex_status_file"] = sync_codex_status_file_from_env(config)
+            data["stale_reconciliation"] = reconciliation
             status = data["deployment_contract"]["status"]
             return stable_envelope(
                 command="manager",
@@ -3558,6 +3729,7 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
             )
             data["state_db"] = str(state_db_path(config))
             data["codex_status_file"] = sync_codex_status_file_from_env(config)
+            data["stale_reconciliation"] = reconciliation
             return stable_envelope(
                 command="manager",
                 status="pass",
@@ -3595,6 +3767,7 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
             )
             data["state_db"] = str(state_db_path(config))
             data["codex_status_file"] = sync_codex_status_file_from_env(config)
+            data["stale_reconciliation"] = reconciliation
             return stable_envelope(
                 command="manager",
                 status="pass",
@@ -3627,6 +3800,7 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
             )
             data["agent_sessions"] = [session for session in sessions if session]
             data["state_db"] = str(state_db_path(config))
+            data["stale_reconciliation"] = reconciliation
             status = data["deployment_contract"]["status"]
             return stable_envelope(
                 command="manager",
@@ -3717,24 +3891,12 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
             row = conn.execute("SELECT * FROM qwendex_agent_sessions WHERE agent_id = ?", (args.agent_id,)).fetchone()
             return stable_envelope(command="manager", status="pass", summary=f"Heartbeat recorded for {args.agent_id}.", data={"agent_session": row_to_agent_session(row)})
         if args.action == "close-stale":
-            cutoff_seconds = max(stale_after, 5) * 60
-            rows = conn.execute("SELECT * FROM qwendex_agent_sessions WHERE status = 'active'").fetchall()
-            closed: list[dict[str, Any]] = []
-            for row in rows:
-                if (datetime.now(UTC) - parse_utc(row["heartbeat_at"])).total_seconds() >= cutoff_seconds:
-                    close_receipt = make_id("close")
-                    conn.execute(
-                        "UPDATE qwendex_agent_sessions SET status = 'closed', updated_at = ?, stop_reason = 'stale', close_receipt = ? WHERE agent_id = ?",
-                        (now, close_receipt, row["agent_id"]),
-                    )
-                    updated = conn.execute("SELECT * FROM qwendex_agent_sessions WHERE agent_id = ?", (row["agent_id"],)).fetchone()
-                    closed.append(row_to_agent_session(updated) or {})
-            conn.commit()
+            reconciliation = reconcile_stale_manager_sessions(conn, stale_after_minutes=stale_after, now=now)
             return stable_envelope(
                 command="manager",
                 status="pass",
-                summary=f"Closed {len(closed)} stale Qwendex manager sessions.",
-                data={"closed_count": len(closed), "closed": closed, "stale_after_minutes": max(stale_after, 5)},
+                summary=f"Closed {reconciliation['closed_count']} stale Qwendex manager sessions.",
+                data=reconciliation,
             )
     return stable_envelope(command="manager", status="blocked", summary=f"Unknown manager action: {args.action}", errors=[args.action])
 
@@ -3987,11 +4149,12 @@ def command_manager(args: argparse.Namespace, config: dict[str, Any]) -> dict[st
         mode = current_manager_mode(config, conn, explicit=args.mode)
         local_status = local_subagent_status(config, enabled=current_local_enabled(config, conn), env=os.environ, probe=True)
         kaveman_enabled = current_kaveman_enabled(config, conn)
+        stale_after = mode_stale_after_minutes(config, mode, args.stale_after_minutes)
+        reconciliation = reconcile_stale_manager_sessions(conn, stale_after_minutes=stale_after, now=utc_now())
         rows = conn.execute("SELECT * FROM qwendex_agent_sessions ORDER BY updated_at DESC LIMIT ?", (args.limit,)).fetchall()
         sessions = [row_to_agent_session(row) for row in rows]
     profile = manager_mode_profile(config, mode)
     max_subagents = args.max_subagents or profile["max_subagents"]
-    stale_after = mode_stale_after_minutes(config, mode, args.stale_after_minutes)
     errors: list[str] = []
     if not isinstance(max_subagents, int) or max_subagents < 1 or max_subagents > MANAGER_MAX_SUBAGENTS_LIMIT:
         errors.append(f"max_subagents must be between 1 and {MANAGER_MAX_SUBAGENTS_LIMIT}: {max_subagents}")
@@ -4021,6 +4184,7 @@ def command_manager(args: argparse.Namespace, config: dict[str, Any]) -> dict[st
         sessions=[session for session in sessions if session],
     )
     data["close_stale"] = args.close_stale
+    data["stale_reconciliation"] = reconciliation
     status = data["deployment_contract"]["status"]
     return stable_envelope(
         command="manager",

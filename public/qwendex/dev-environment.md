@@ -66,6 +66,13 @@ The `codex` wrapper first uses `QWENDEX_DEV_CODEX_BIN` when set, then
 current system Codex binary. This keeps the larger main Codex install available
 while a patched/dev Codex build is being prepared.
 
+The dev launcher uses an isolated `CODEX_HOME` at
+`~/qwendex-dev/.qwendex-dev/codex_home`. `qwendex-dev status-json` records the
+active hook source count for that home and also reports whether global
+`~/.codex/hooks.json` exists. If global hooks exist but the isolated dev home has
+none, the dev status JSON includes a warning so hook behavior is not silently
+lost after a TUI refresh.
+
 ## Developer Lifecycle
 
 Work inside `~/qwendex-dev`, then use the dev commands to move changes through

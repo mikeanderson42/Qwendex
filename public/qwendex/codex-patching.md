@@ -72,8 +72,10 @@ and `Alt+L` for Local routing. They can be rebound through Codex
 and `qwendex_toggle_local`.
 
 Qwendex does not vendor the external Caveman package. Its Kaveman control is a
-small persisted state bit plus directive for terse output; projects that want
-the upstream Git package can install it separately from
+small persisted state bit plus directive for terse output. The patched TUI reads
+the directive from `QWENDEX_CODEX_STATUS_FILE` and appends it to developer
+instructions for thread start, resume, and fork flows. Projects that want the
+upstream Git package can install it separately from
 <https://github.com/juliusbrussee/caveman>.
 
 ## Source Locations
@@ -87,6 +89,7 @@ For Codex `0.142.4` (`rust-v0.142.4`), the patch touches these source areas:
 - `codex-rs/config/src/tui_keymap.rs`
 - `codex-rs/tui/src/keymap.rs`
 - `codex-rs/tui/src/app/input.rs`
+- `codex-rs/tui/src/terminal_visualization_instructions.rs`
 
 Inspect the active manifest with:
 

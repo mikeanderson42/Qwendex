@@ -392,6 +392,27 @@ def run(cmd, cwd=None):
     except Exception as exc:
         return {"returncode": 127, "stdout": "", "stderr": str(exc)}
 
+def hook_source(path, scope):
+    exists = path.is_file()
+    events = []
+    if exists:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            hooks = payload.get("hooks") if isinstance(payload, dict) else None
+            if isinstance(hooks, dict):
+                events = sorted(str(key) for key in hooks)
+            elif isinstance(payload, dict):
+                events = sorted(str(key) for key in payload if str(key).lower().endswith("hook"))
+        except Exception:
+            events = []
+    return {
+        "scope": scope,
+        "path": str(path),
+        "exists": exists,
+        "events": events,
+        "bytes": path.stat().st_size if exists else 0,
+    }
+
 def under(path, root):
     try:
         path.resolve().relative_to(root.resolve())
@@ -410,6 +431,15 @@ state_isolation = {
     "local_harness_ledger_db_under_work_root": under(paths["local_harness_ledger_db"], paths["work_root"]),
     "results_under_work_root": under(paths["results_root"], paths["work_root"]),
 }
+active_codex_home = paths["work_root"] / "codex_home"
+active_hook_sources = [
+    hook_source(active_codex_home / "hooks.json", "active-codex-home"),
+    hook_source(paths["dev_root"] / ".codex" / "hooks.json", "project"),
+    hook_source(paths["dev_root"] / "hooks" / "hooks.json", "project"),
+]
+global_hook_sources = [hook_source(Path.home() / ".codex" / "hooks.json", "global")]
+active_hook_sources = [source for source in active_hook_sources if source["exists"]]
+global_hook_sources = [source for source in global_hook_sources if source["exists"]]
 data = {
     "schema_version": "qwendex.dev.status.v1",
     "generated_at": datetime.now(UTC).isoformat(),
@@ -428,17 +458,26 @@ data = {
         "dev_binary_exists": paths["dev_codex"].is_file(),
         "main_binary_exists": paths["main_codex"].is_file(),
         "source_exists": paths["codex_source"].is_dir(),
+        "active_codex_home": str(active_codex_home),
+        "hook_sources": active_hook_sources,
+        "hook_source_count": len(active_hook_sources),
+        "global_hook_sources": global_hook_sources,
+        "global_hook_source_count": len(global_hook_sources),
     },
     "latest_receipts": sorted(str(p) for p in paths["results_root"].glob("**/*.json"))[-20:] if paths["results_root"].exists() else [],
 }
 blockers = []
+warnings = []
 if not all(state_isolation.values()):
     blockers.append("state paths are not fully isolated under .qwendex-dev")
 if not data["git"]["dev_is_worktree"]:
     blockers.append("dev root is not a git worktree")
 if not tools["python3"] or not tools["git"] or not tools["codex"]:
     blockers.append("required tool missing")
+if not active_hook_sources and global_hook_sources:
+    warnings.append("active dev CODEX_HOME has no hooks while ~/.codex has hooks")
 data["blockers"] = blockers
+data["warnings"] = warnings
 data["status"] = "pass" if not blockers else "blocked"
 out.parent.mkdir(parents=True, exist_ok=True)
 out.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")

@@ -27,5 +27,7 @@ Public docs live under [`public/qwendex`](public/qwendex/README.md):
 
 ## Release Candidate
 
-This checkout is seeded as `v0.1.0-rc.1`. The max-depth validation summary is
-stored at [`docs/validation/v0.1.0-rc.1-validation_summary.json`](docs/validation/v0.1.0-rc.1-validation_summary.json).
+This checkout is seeded as `v0.1.0-rc.2`. The latest max-depth validation
+summary remains stored at
+[`docs/validation/v0.1.0-rc.1-validation_summary.json`](docs/validation/v0.1.0-rc.1-validation_summary.json)
+until the next release validation run is captured.

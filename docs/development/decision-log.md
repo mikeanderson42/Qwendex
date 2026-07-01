@@ -25,11 +25,22 @@ repeatable, and can block safely when Codex versions change.
 ## Kaveman Control Boundary
 
 Decision: Qwendex exposes Kaveman as persisted mode state and a terse-output
-directive, not as a vendored external Git package.
+directive that the patched Codex TUI injects into developer instructions, not
+as a vendored external Git package.
 
 Reason: the harness needs a connected footer/CLI/TUI control with low
 maintenance cost; projects that want the upstream Caveman package can install it
 separately.
+
+## Manager Session Reconciliation
+
+Decision: status, doctor, and Codex status refreshes reconcile stale read-only
+manager lanes automatically, but stale writer lanes remain blocked until the
+operator integrates or explicitly stops them.
+
+Reason: stale read-only audit lanes should not keep Manager Mode healthy after a
+TUI refresh, while writer lanes may represent unintegrated changes and must
+stay visible.
 
 ## Local Qwen Authority
 
