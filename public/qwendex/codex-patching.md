@@ -12,7 +12,7 @@ Qwendex owns a stable runtime contract:
 - `QWENDEX_CODEX_STATUS_FILE` points at a tiny JSON status file.
 - `qwendex codex-status --write "$QWENDEX_CODEX_STATUS_FILE" --json` refreshes
   the footer text.
-- `qwendex manager mode --toggle --json` toggles Manager Mode versus Auto.
+- `qwendex manager mode --toggle --json` cycles Agent Manager duty levels.
 - `qwendex manager kaveman --toggle --json` toggles terse Kaveman output mode.
 - `qwendex manager local --toggle --json` toggles Local `[Y]` versus `[N]`.
 - The Codex status-line item ID is `qwendex-manager`.

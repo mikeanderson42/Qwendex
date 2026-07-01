@@ -110,7 +110,7 @@
       "type": "object",
       "required": ["mode", "manager_deploy_policy", "manager_only_available", "shortcut", "shortcut_command", "max_subagents", "stale_after_minutes", "local_subagents", "kaveman", "mode_order", "mode_profiles", "estimator", "local_qwen_eligibility", "escalation_thresholds", "stale_session_thresholds_minutes", "close_stale_policy"],
       "properties": {
-        "mode": {"enum": ["manual", "auto", "lite", "medium", "heavy", "manager", "manager_only"]},
+        "mode": {"enum": ["manual", "off", "auto", "lite", "medium", "heavy", "manager", "manager_only"]},
         "manager_deploy_policy": {"enum": ["auto", "disabled"]},
         "manager_only_available": {"type": "boolean"},
         "shortcut": {"type": "string"},
@@ -139,20 +139,22 @@
         "mode_order": {
           "type": "array",
           "prefixItems": [
+            {"const": "off"},
             {"const": "auto"},
             {"const": "lite"},
             {"const": "medium"},
             {"const": "heavy"},
             {"const": "manager"}
           ],
-          "minItems": 5,
-          "maxItems": 5
+          "minItems": 6,
+          "maxItems": 6
         },
         "mode_profiles": {
           "type": "object",
-          "required": ["auto", "lite", "medium", "heavy", "manager"],
+          "required": ["off", "auto", "lite", "medium", "heavy", "manager"],
           "additionalProperties": false,
           "properties": {
+            "off": {"$ref": "#/$defs/managerModeProfile"},
             "auto": {"$ref": "#/$defs/managerModeProfile"},
             "lite": {"$ref": "#/$defs/managerModeProfile"},
             "medium": {"$ref": "#/$defs/managerModeProfile"},

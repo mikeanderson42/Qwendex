@@ -530,7 +530,8 @@ def test_qwendex_codex_status_tracks_manager_state_and_writes_surface_file(tmp_p
 
     blocked_mode = run_qwendex("manager", "mode", "--set", "manager", "--json", env=env)
     blocked_mode_data = parse_json_result(blocked_mode)
-    assert blocked_mode.returncode != 0
+    assert blocked_mode.returncode == 0
+    assert blocked_mode_data["status"] == "pass"
     assert blocked_mode_data["data"]["deployment_contract"]["status"] == "blocked"
     json_result(
         "manager",
@@ -564,9 +565,9 @@ def test_qwendex_codex_status_tracks_manager_state_and_writes_surface_file(tmp_p
     assert written_after_kaveman["kaveman_directive"]
 
     toggled = json_result("manager", "mode", "--toggle", "--json", env=env)
-    assert toggled["data"]["mode"] == "auto"
+    assert toggled["data"]["mode"] == "off"
     written_after_toggle = json.loads(status_file.read_text(encoding="utf-8"))
-    assert written_after_toggle["text"] == "{Qwendex} Agent Manager: [Auto] | Kaveman: [Y] | Local: [Y] (Alt+M/K/L)"
+    assert written_after_toggle["text"] == "{Qwendex} Agent Manager: [Off] | Kaveman: [Y] | Local: [Y] (Alt+M/K/L)"
 
 
 def test_qwendex_codex_status_disables_unusable_local_state(tmp_path):
@@ -916,6 +917,27 @@ def test_qwendex_manager_mode_cycles_status_and_legacy_alias(tmp_path):
     assert disabled["data"]["max_subagents"] == 10
 
 
+def test_qwendex_manager_mode_toggle_cycles_full_duty_order(tmp_path):
+    env = {"QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite")}
+
+    json_result("manager", "mode", "--set", "off", "--json", env=env)
+    seen = []
+    for _ in range(6):
+        result = run_qwendex("manager", "mode", "--toggle", "--json", env=env)
+        toggled = parse_json_result(result)
+        assert result.returncode == 0
+        assert toggled["status"] == "pass"
+        seen.append(toggled["data"]["mode"])
+
+    assert seen == ["auto", "lite", "medium", "heavy", "manager", "off"]
+
+    status_result = run_qwendex("manager", "status", "--json", env=env)
+    status = parse_json_result(status_result)
+    assert status_result.returncode == 0
+    assert status["data"]["mode"] == "off"
+    assert status["data"]["deployment_contract"]["status"] == "pass"
+
+
 def test_qwendex_manager_local_toggle_controls_local_lane_eligibility(tmp_path):
     env = {
         "QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite"),
@@ -1077,6 +1099,15 @@ def test_qwendex_manager_reconciles_stale_read_only_and_blocks_stale_writers(tmp
     assert status["data"]["active_subagents"]["count"] == 0
     assert status["data"]["stale_writer_sessions"]["count"] == 1
     assert "stale writer lane" in " ".join(status["data"]["subagent_state"]["blockers"])
+
+    closed = json_result("manager", "close", "--agent-id", "stale-writer", "--reason", "integrated", "--json", env=env)
+    closed_session = closed["data"]["agent_session"]
+    assert closed_session["status"] == "closed"
+    assert closed_session["stop_reason"] == "integrated"
+    assert closed_session["close_receipt"]
+
+    cleared = json_result("manager", "status", "--stale-after-minutes", "5", "--json", env=env)
+    assert cleared["data"]["stale_writer_sessions"]["count"] == 0
 
 
 def test_qwendex_auto_manager_estimator_skill_contract():

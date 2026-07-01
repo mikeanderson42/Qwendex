@@ -119,7 +119,7 @@ scripts/qwendex manager mode --set manager --json
 scripts/qwendex manager status --json
 ```
 
-In a patched Codex TUI, `Alt+M` toggles Agent Manager, `Alt+K` toggles Kaveman,
+In a patched Codex TUI, `Alt+M` cycles Agent Manager, `Alt+K` toggles Kaveman,
 and `Alt+L` toggles Local. `Local: [N]` means Qwendex will skip local subagents
 even when the local model endpoint is healthy.
 
@@ -131,6 +131,10 @@ Mode, Qwendex requires at least one active registered agent lane and reports a
 blocked manager status if no lane is active. Set `manager_deploy_policy` to
 `disabled` to opt out of that requirement; explicit manual manager lifecycle
 commands remain operator-directed.
+
+Use `scripts/qwendex manager close --agent-id ... --reason integrated --json`
+after integrating or intentionally stopping a writer lane. `close-stale` only
+auto-closes stale read-only lanes.
 
 Every assigned lane records a context packet and remains advisory until the main
 session reviews receipts, touched files, validation status, blockers, and

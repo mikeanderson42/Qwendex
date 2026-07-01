@@ -114,9 +114,11 @@ PUBLIC_NAMING_PATTERNS = (
     (re.compile(r"\bCodex/Qwen bridge\b", re.IGNORECASE), "Use Qwendex product language."),
 )
 
-MANAGER_MODE_ORDER = ("auto", "lite", "medium", "heavy", "manager")
+MANAGER_MODE_ORDER = ("off", "auto", "lite", "medium", "heavy", "manager")
 MANAGER_MODE_ALIASES = {
     "": "",
+    "off": "off",
+    "disabled": "off",
     "auto": "auto",
     "lite": "lite",
     "medium": "medium",
@@ -128,6 +130,7 @@ MANAGER_MODE_ALIASES = {
     "manual": "lite",
 }
 MANAGER_MODE_LABELS = {
+    "off": "Off",
     "auto": "Auto",
     "lite": "Lite",
     "medium": "Medium",
@@ -297,6 +300,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         },
         "mode_order": list(MANAGER_MODE_ORDER),
         "mode_profiles": {
+            "off": {"label": "Off", "offload_target": "0%", "max_subagents": 1},
             "auto": {"label": "Auto", "offload_target": "auto", "max_subagents": 4},
             "lite": {"label": "Lite", "offload_target": "10-20%", "max_subagents": 2},
             "medium": {"label": "Medium", "offload_target": "25-45%", "max_subagents": 4},
@@ -335,6 +339,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "xhigh": ["security release", "credential", "public release acceptance", "protocol migration"],
         },
         "stale_session_thresholds_minutes": {
+            "off": 30,
             "auto": 30,
             "lite": 45,
             "medium": 30,
@@ -3661,7 +3666,8 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
             reconciliation = reconcile_stale_manager_sessions(conn, stale_after_minutes=stale_after, now=now)
         if args.action == "mode":
             if args.toggle:
-                mode = "auto" if mode == "manager" else "manager"
+                index = MANAGER_MODE_ORDER.index(mode) if mode in MANAGER_MODE_ORDER else 0
+                mode = MANAGER_MODE_ORDER[(index + 1) % len(MANAGER_MODE_ORDER)]
                 set_manager_setting(conn, "selected_mode", mode)
                 conn.commit()
             elif args.cycle:
@@ -3692,14 +3698,20 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
             data["state_db"] = str(state_db_path(config))
             data["codex_status_file"] = sync_codex_status_file_from_env(config)
             data["stale_reconciliation"] = reconciliation
-            status = data["deployment_contract"]["status"]
+            contract_status = data["deployment_contract"]["status"]
+            mode_changed = bool(args.toggle or args.cycle or args.set)
+            status = "pass" if mode_changed else contract_status
             return stable_envelope(
                 command="manager",
                 status=status,
-                summary=f"Qwendex manager mode is {data['label']}.",
+                summary=(
+                    f"Qwendex manager mode changed to {data['label']}."
+                    if mode_changed
+                    else f"Qwendex manager mode is {data['label']}."
+                ),
                 next_actions=(
                     ["Spawn/register at least one manager lane or set orchestration.manager_deploy_policy to disabled."]
-                    if status == "blocked"
+                    if contract_status == "blocked"
                     else data["next_actions"]
                 ),
                 data=data,
@@ -3890,6 +3902,26 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
             conn.commit()
             row = conn.execute("SELECT * FROM qwendex_agent_sessions WHERE agent_id = ?", (args.agent_id,)).fetchone()
             return stable_envelope(command="manager", status="pass", summary=f"Heartbeat recorded for {args.agent_id}.", data={"agent_session": row_to_agent_session(row)})
+        if args.action == "close":
+            if not args.agent_id:
+                return stable_envelope(command="manager", status="blocked", summary="Manager close requires --agent-id.", errors=["missing agent_id"])
+            row = conn.execute("SELECT * FROM qwendex_agent_sessions WHERE agent_id = ?", (args.agent_id,)).fetchone()
+            if row is None:
+                return stable_envelope(command="manager", status="blocked", summary=f"Agent session not found: {args.agent_id}", errors=[args.agent_id])
+            close_receipt = make_id("close")
+            reason = args.reason or "operator_closed"
+            conn.execute(
+                "UPDATE qwendex_agent_sessions SET status = 'closed', updated_at = ?, stop_reason = ?, close_receipt = ? WHERE agent_id = ?",
+                (now, reason, close_receipt, args.agent_id),
+            )
+            conn.commit()
+            row = conn.execute("SELECT * FROM qwendex_agent_sessions WHERE agent_id = ?", (args.agent_id,)).fetchone()
+            return stable_envelope(
+                command="manager",
+                status="pass",
+                summary=f"Closed agent session {args.agent_id}.",
+                data={"agent_session": row_to_agent_session(row)},
+            )
         if args.action == "close-stale":
             reconciliation = reconcile_stale_manager_sessions(conn, stale_after_minutes=stale_after, now=now)
             return stable_envelope(
@@ -4382,8 +4414,8 @@ def command_line() -> argparse.ArgumentParser:
     learn.add_argument("--json", action="store_true")
 
     manager = sub.add_parser("manager")
-    manager.add_argument("action", nargs="?", choices=["status", "assign", "heartbeat", "close-stale", "mode", "estimate", "kaveman", "local"])
-    manager.add_argument("--mode", choices=["manual", "auto", "lite", "medium", "heavy", "manager", "manager_only"], default="")
+    manager.add_argument("action", nargs="?", choices=["status", "assign", "heartbeat", "close", "close-stale", "mode", "estimate", "kaveman", "local"])
+    manager.add_argument("--mode", choices=["manual", "off", "auto", "lite", "medium", "heavy", "manager", "manager_only"], default="")
     manager.add_argument("--set", default="")
     manager.add_argument("--cycle", action="store_true")
     manager.add_argument("--toggle", action="store_true")
@@ -4401,6 +4433,7 @@ def command_line() -> argparse.ArgumentParser:
     manager.add_argument("--owner", default="manager")
     manager.add_argument("--write-surface", default="read-only")
     manager.add_argument("--stop-condition", default="return compact findings")
+    manager.add_argument("--reason", default="")
     manager.add_argument("--expected-artifact", default="")
     manager.add_argument("--receipt-path", default="")
     manager.add_argument("--context-budget", type=int, default=0)

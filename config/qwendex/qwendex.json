@@ -95,8 +95,9 @@
       "shortcut_command": "scripts/qwendex manager kaveman --toggle --json",
       "directive": "Use terse output: short, direct, minimal prose, no optional explanation unless asked."
     },
-    "mode_order": ["auto", "lite", "medium", "heavy", "manager"],
+    "mode_order": ["off", "auto", "lite", "medium", "heavy", "manager"],
     "mode_profiles": {
+      "off": {"label": "Off", "offload_target": "0%", "max_subagents": 1},
       "auto": {"label": "Auto", "offload_target": "auto", "max_subagents": 4},
       "lite": {"label": "Lite", "offload_target": "10-20%", "max_subagents": 2},
       "medium": {"label": "Medium", "offload_target": "25-45%", "max_subagents": 4},
@@ -135,6 +136,7 @@
       "xhigh": ["security release", "credential", "public release acceptance", "protocol migration"]
     },
     "stale_session_thresholds_minutes": {
+      "off": 30,
       "auto": 30,
       "lite": 45,
       "medium": 30,

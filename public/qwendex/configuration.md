@@ -101,14 +101,14 @@ endpoint; otherwise it falls back to the configured primary seat.
 
 `orchestration` controls manager defaults:
 
-- `mode`: `auto`, `lite`, `medium`, `heavy`, or `manager`
+- `mode`: `off`, `auto`, `lite`, `medium`, `heavy`, or `manager`
 - `manager_deploy_policy`: `auto` by default; Manager Mode requires active
   registered agent lanes unless this is set to `disabled`
 - `shortcut`: declared as `Alt+M`
 - `shortcut_command`: `scripts/qwendex manager mode --toggle --json`
 - `kaveman`: `Alt+K` toggle, persisted state, and terse-output directive
 - `local_subagents`: `Alt+L` toggle and default Local state
-- `mode_order`: `auto`, `lite`, `medium`, `heavy`, `manager`
+- `mode_order`: `off`, `auto`, `lite`, `medium`, `heavy`, `manager`
 - `mode_profiles`: label, offload target, and max subagents per mode; Manager
   Mode defaults to `max_subagents: 10`
 - `estimator`: model, reasoning, skill, and token caps for Auto
@@ -135,6 +135,7 @@ Durable manager lifecycle commands write to `state.db`:
 ```bash
 scripts/qwendex manager assign --agent-id reviewer-1 --lane review --task-id task_... --json
 scripts/qwendex manager heartbeat --agent-id reviewer-1 --json
+scripts/qwendex manager close --agent-id reviewer-1 --reason integrated --json
 scripts/qwendex manager close-stale --stale-after-minutes 30 --json
 ```
 

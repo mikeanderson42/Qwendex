@@ -5,6 +5,8 @@
 - Tightened Manager Mode lifecycle checks so stale read-only lanes are
   reconciled during status refreshes, while stale writer lanes remain blocked
   until the operator integrates or explicitly stops them.
+- Added `manager close --agent-id ... --reason ... --json` as the explicit
+  stop path for active or stale writer lanes.
 - Made `check`, `doctor`, `manager status`, and `codex-status` share the same
   stale-session contract instead of allowing leftover active lanes to make
   Manager Mode look healthy after a TUI refresh.

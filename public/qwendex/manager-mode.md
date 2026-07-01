@@ -8,10 +8,10 @@ high/xhigh reasoning when the lane actually needs it.
 Public modes are ordered:
 
 ```text
-Auto -> Lite -> Medium -> Heavy -> Manager Mode
+Off -> Auto -> Lite -> Medium -> Heavy -> Manager Mode
 ```
 
-`Alt+M` toggles Agent Manager between Auto and Manager Mode in the patched TUI:
+`Alt+M` cycles Agent Manager through the duty levels in the patched TUI:
 
 ```bash
 scripts/qwendex manager mode --toggle --json
@@ -53,6 +53,7 @@ commands remain operator-directed.
 
 ## Mode Meaning
 
+- `Off`: no manager delegation duty.
 - `Auto`: deterministic checks plus the bounded estimator pick a mode.
 - `Lite`: target 10-20% subagent offload.
 - `Medium`: target 25-45% subagent offload.
@@ -109,6 +110,7 @@ Durable lifecycle commands:
 scripts/qwendex manager assign --agent-id reviewer-1 --lane review --task-id task_... --owner Rawls --write-surface read-only --stop-condition "return findings" --json
 scripts/qwendex manager heartbeat --agent-id reviewer-1 --json
 scripts/qwendex manager status --json
+scripts/qwendex manager close --agent-id reviewer-1 --reason integrated --json
 scripts/qwendex manager close-stale --stale-after-minutes 30 --json
 ```
 
