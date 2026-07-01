@@ -1,5 +1,15 @@
 # Release Notes
 
+## 0.1.0-rc.3
+
+- Fixed route receipts so `local_subagents.local_state`, availability,
+  usability, and indicator text reflect the same local-Qwen probe result used
+  for the actual routing decision.
+- Added smoke coverage that keeps CLI version, project config, sample config,
+  README, and release notes aligned on the same release candidate.
+- Updated the testbench startup banner to use `Local: [Ready]` instead of the
+  legacy `Local: [Y]` label.
+
 ## 0.1.0-rc.2
 
 - Tightened Manager Mode lifecycle checks so stale read-only lanes are

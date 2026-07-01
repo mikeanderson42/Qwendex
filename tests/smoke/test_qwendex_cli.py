@@ -97,6 +97,20 @@ def test_qwendex_parser_exposes_public_commands():
     assert parser.parse_args(["version"]).command == "version"
 
 
+def test_qwendex_version_matches_public_config_metadata():
+    qwendex = load_qwendex()
+    project_config = json.loads((ROOT / "config" / "qwendex" / "qwendex.json").read_text(encoding="utf-8"))
+    sample_config = json.loads((ROOT / "config" / "qwendex" / "qwendex.sample.json").read_text(encoding="utf-8"))
+    version = json_result("version", "--json")
+
+    assert qwendex.VERSION == "0.1.0-rc.3"
+    assert version["data"]["version"] == qwendex.VERSION
+    assert project_config["version"] == qwendex.VERSION
+    assert sample_config["version"] == qwendex.VERSION
+    assert f"v{qwendex.VERSION}" in (ROOT / "README.md").read_text(encoding="utf-8")
+    assert f"## {qwendex.VERSION}" in (ROOT / "public" / "qwendex" / "release-notes.md").read_text(encoding="utf-8")
+
+
 def test_qwendex_check_and_doctor_emit_stable_json(tmp_path):
     env = {"QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite")}
     check = json_result("check", "--json", env=env)
@@ -380,6 +394,8 @@ def test_qwendex_testbench_public_surface_is_visible_and_sandboxed():
     assert "QWENDEX_BENCH_PROJECT" in text
     assert "QWENDEX_BENCH_ROOT" in text
     assert "QWENDEX_CODEX_STATUS_FILE" in text
+    assert "Local: [Ready]" in text
+    assert "Local: [Y]" not in text
     assert "QWENDEX_MCP_TRUSTED_ROOTS" in text
     assert "codex-patch preflight" in text
     assert "codex-status --write" in text
