@@ -48,6 +48,50 @@ Inspect the latest receipt:
 scripts/qwendex receipt latest --json
 ```
 
+## Dev Root
+
+Create or refresh a standalone development copy:
+
+```bash
+scripts/qwendex_dev_env sync
+source ~/qwendex-dev/.qwendex-dev/env.sh
+qwendex-dev status
+```
+
+From there, `qwendex-dev open` starts Codex in `~/qwendex-dev`. The dev-local
+`codex` wrapper uses a patched/dev Codex binary when one is configured and
+falls back to the current main Codex install otherwise.
+
+Development loop:
+
+```bash
+qwendex-dev verify
+qwendex-dev diff
+qwendex-dev promote
+qwendex-dev stage
+```
+
+## Visible Test Bench
+
+To test Qwendex against a project folder with both local and full Codex panes:
+
+```bash
+scripts/qwendex_testbench init
+scripts/qwendex_testbench codex-preflight
+scripts/qwendex_testbench tmux
+```
+
+The tmux session starts a Qwendex console plus `qwendex-local` and
+`qwendex-full` Codex panes. Each Codex pane launches with a visible banner:
+
+```text
+>_ OpenAI Codex (v0.142.4) /w Qwendex
+```
+
+`codex-preflight` detects the installed Codex CLI version and checks it against
+the Qwendex TUI patch manifest before a patched footer/hotkey build is treated
+as connected.
+
 ## Example Workflows
 
 Local Qwen coding run:
@@ -98,8 +142,11 @@ prior receipt by itself.
 Manager mode:
 
 ```bash
-scripts/qwendex manager --mode manager_only --json
+scripts/qwendex manager mode --toggle --json
+scripts/qwendex manager local --toggle --json
 ```
 
-Bind `Ctrl+Shift+M` in your host terminal or UI to that command if you want a
-shortcut for full-time orchestration.
+Patched Codex TUI builds bind those toggles through the Qwendex patch contract.
+Use `scripts/qwendex codex-patch apply --source /path/to/codex --json` only
+against a supported Codex source checkout; unknown versions and moved anchors
+block before writing.

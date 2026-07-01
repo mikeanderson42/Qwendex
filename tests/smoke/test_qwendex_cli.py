@@ -58,6 +58,7 @@ def test_qwendex_parser_exposes_public_commands():
     assert parser.parse_args(["doctor"]).command == "doctor"
     assert parser.parse_args(["exec", "Reply exactly QWENDEX_OK"]).command == "exec"
     assert parser.parse_args(["exec", "Reply exactly QWENDEX_OK", "--seat", "auto"]).seat == "auto"
+    assert parser.parse_args(["exec", "Reply exactly QWENDEX_OK", "--cwd", "/tmp/qwendex-project"]).cwd == "/tmp/qwendex-project"
     assert parser.parse_args(["eval", "--case", "exact_marker"]).command == "eval"
     assert parser.parse_args(["receipt", "latest"]).command == "receipt"
     assert parser.parse_args(["route"]).command == "route"
@@ -70,8 +71,12 @@ def test_qwendex_parser_exposes_public_commands():
     assert parser.parse_args(["learn", "dry-run", "--backend", "mock"]).command == "learn"
     assert parser.parse_args(["manager", "--mode", "manager_only"]).command == "manager"
     assert parser.parse_args(["manager", "mode", "--set", "auto"]).action == "mode"
+    assert parser.parse_args(["manager", "mode", "--toggle"]).toggle is True
     assert parser.parse_args(["manager", "local", "--set", "off"]).action == "local"
     assert parser.parse_args(["manager", "estimate", "--prompt", "Fix a typo"]).action == "estimate"
+    assert parser.parse_args(["codex-status", "--write", "/tmp/qwendex-status.json"]).command == "codex-status"
+    assert parser.parse_args(["codex-patch", "preflight", "--codex-bin", "codex"]).command == "codex-patch"
+    assert parser.parse_args(["codex-patch", "apply", "--source", "/tmp/codex", "--dry-run"]).dry_run is True
     assert parser.parse_args(["estimate", "--prompt", "Fix a typo"]).command == "estimate"
     assert parser.parse_args(["llmstack", "check"]).command == "llmstack"
     assert parser.parse_args(["llmstack", "check"]).action == "check"
@@ -145,6 +150,8 @@ def test_llmstack_public_configs_are_copy_safe_and_connected():
         ROOT / "scripts/run_llamacpp_qwopucode_gguf.sh",
         ROOT / "scripts/run_vllm_qwopucode_gguf.sh",
         ROOT / "scripts/run_koboldcpp_gguf.sh",
+        ROOT / "scripts/qwendex_testbench",
+        ROOT / "public/qwendex/testbench.md",
         ROOT / "llmstack",
         ROOT / "scripts/windows/open.ps1",
     ]
@@ -250,6 +257,189 @@ def test_qwendex_exact_exec_and_qwen_seat_write_reviewable_receipts(tmp_path):
     assert seat_receipt["files_touched"] == []
     assert exec_receipt["effective_policy"]["sandbox"]["mode"] == "workspace-write"
     assert "guard" in exec_receipt["effective_policy"]
+
+
+def test_qwendex_exec_dry_run_respects_cwd_and_mcp_override(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    env = {
+        "QWENDEX_RESULTS_ROOT": str(tmp_path / "receipts"),
+        "QWENDEX_MCP_TRUSTED_ROOTS": f"{ROOT}:{project}",
+        "QWENDEX_FORCE_LOCAL_QWEN_AVAILABLE": "1",
+    }
+
+    primary = json_result(
+        "exec",
+        "Summarize the project.",
+        "--seat",
+        "primary",
+        "--cwd",
+        str(project),
+        "--dry-run",
+        "--json",
+        env=env,
+    )
+    qwen = json_result(
+        "exec",
+        "Summarize the project.",
+        "--seat",
+        "qwen",
+        "--cwd",
+        str(project),
+        "--dry-run",
+        "--json",
+        env=env,
+    )
+
+    primary_cmd = primary["data"]["command"]
+    qwen_cmd = qwen["data"]["command"]
+
+    assert primary["data"]["seat"] == "primary"
+    assert qwen["data"]["seat"] == "qwen"
+    assert primary_cmd[primary_cmd.index("-C") + 1] == str(project)
+    assert 'mcp_servers.local-harness.command="python3"' in " ".join(primary_cmd)
+    assert "mcp_servers.local-harness.args" in " ".join(primary_cmd)
+    assert str(ROOT / "scripts" / "artifact_queue_mcp.py") in " ".join(primary_cmd)
+    assert f"{ROOT}:{project}" in " ".join(primary_cmd)
+    assert qwen_cmd[qwen_cmd.index("--cwd") + 1] == str(project)
+    assert "--minimal" in qwen_cmd
+    assert "--ephemeral" in qwen_cmd
+
+
+def test_qwendex_testbench_public_surface_is_visible_and_sandboxed():
+    script = ROOT / "scripts" / "qwendex_testbench"
+    text = script.read_text(encoding="utf-8")
+
+    assert script.exists()
+    assert ">_ OpenAI Codex (v%s) /w Qwendex" in text
+    assert "--no-alt-screen" in text
+    assert "qwendex-local" in text
+    assert "qwendex-full" in text
+    assert "$BENCH_ROOT/bin" in text
+    assert "qwendex-bench" in text
+    assert "qwebdex-bench is a typo" in text
+    assert "llmstack" in text
+    assert "QWENDEX_BENCH_PROJECT" in text
+    assert "QWENDEX_BENCH_ROOT" in text
+    assert "QWENDEX_CODEX_STATUS_FILE" in text
+    assert "QWENDEX_MCP_TRUSTED_ROOTS" in text
+    assert "codex-patch preflight" in text
+    assert "codex-status --write" in text
+    assert "'$BENCH_CMD' env" in text
+    assert "exec bash" in text
+
+
+def test_qwendex_dev_env_public_surface_is_visible_and_isolated():
+    script = ROOT / "scripts" / "qwendex_dev_env"
+    text = script.read_text(encoding="utf-8")
+
+    assert script.exists()
+    assert "QWENDEX_DEV_ROOT" in text
+    assert "$HOME/qwendex-dev" in text
+    assert "WORK_ROOT=\"$DEV_ROOT/.qwendex-dev\"" in text
+    assert "$WORK_ROOT/env.sh" in text
+    assert "codex-main" in text
+    assert "QWENDEX_DEV_CODEX_BIN" in text
+    assert "senior Qwendex project developer" in text
+    assert "cmd_verify" in text
+    assert "cmd_promote" in text
+    assert "cmd_stage" in text
+    assert "cmd_snapshot" in text
+    assert "codex-patch apply" in text
+    assert "open.ps1" in text
+    assert "--exclude '.git/'" in text
+    assert "--exclude 'results/'" in text
+    assert "--exclude '/bin/'" in text
+    assert "git -C \"$SOURCE_ROOT\" add -A" in text
+
+    doc = (ROOT / "public" / "qwendex" / "dev-environment.md").read_text(encoding="utf-8")
+    assert "scripts/qwendex_dev_env sync" in doc
+    assert "qwendex-dev stage" in doc
+    assert "qwendex-dev promote" in doc
+    assert "~/qwendex-dev" in doc
+    assert "fallback execution plane" in doc
+
+
+def test_qwendex_codex_status_tracks_manager_state_and_writes_surface_file(tmp_path):
+    status_file = tmp_path / "codex_status.json"
+    env = {
+        "QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite"),
+        "QWENDEX_CODEX_STATUS_FILE": str(status_file),
+    }
+
+    json_result("manager", "mode", "--set", "manager", "--json", env=env)
+    json_result("manager", "local", "--set", "on", "--json", env=env)
+    status = json_result("codex-status", "--write", str(status_file), "--json", env=env)
+    plain = run_qwendex("codex-status", "--plain", env=env)
+
+    assert status["data"]["text"] == "Qwendex manager: [Manager Mode], Local [Y]"
+    assert plain.stdout.strip() == "Qwendex manager: [Manager Mode], Local [Y]"
+    written = json.loads(status_file.read_text(encoding="utf-8"))
+    assert written["text"] == "Qwendex manager: [Manager Mode], Local [Y]"
+
+    toggled = json_result("manager", "mode", "--toggle", "--json", env=env)
+    assert toggled["data"]["mode"] == "auto"
+    written_after_toggle = json.loads(status_file.read_text(encoding="utf-8"))
+    assert written_after_toggle["text"] == "Qwendex manager: [Auto], Local [Y]"
+
+
+def test_qwendex_codex_patch_preflight_version_manifest(tmp_path):
+    fake_codex = tmp_path / "codex"
+    fake_codex.write_text("#!/usr/bin/env bash\nprintf 'codex-cli 0.142.4\\n'\n", encoding="utf-8")
+    fake_codex.chmod(0o755)
+
+    data = json_result("codex-patch", "preflight", "--codex-bin", str(fake_codex), "--json")
+
+    assert data["status"] == "pass"
+    assert data["data"]["version"]["version"] == "0.142.4"
+    assert data["data"]["supported"] is True
+    assert data["data"]["manifest"]["status_line_item"] == "qwendex-manager"
+    assert "qwendex_toggle_manager" in data["data"]["manifest"]["keymap_actions"]
+
+
+def test_qwendex_codex_patch_apply_updates_supported_source_checkout(tmp_path):
+    qwendex = load_qwendex()
+    source = tmp_path / "codex"
+    anchors_by_path = {
+        str(spec["path"]): "\n".join(str(anchor) for anchor in spec["anchors"])
+        for spec in qwendex.CODEX_PATCH_MANIFESTS["0.142.4"]["source_anchors"]
+    }
+    for spec in qwendex.codex_source_patch_specs("0.142.4"):
+        rel = str(spec["path"])
+        path = source / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        old_fragments = "\n".join(old for old, _new in spec["replacements"])
+        path.write_text(f"{anchors_by_path.get(rel, '')}\n{old_fragments}\n", encoding="utf-8")
+
+    fake_codex = tmp_path / "codex-bin"
+    fake_codex.write_text("#!/usr/bin/env bash\nprintf 'codex-cli 0.142.4\\n'\n", encoding="utf-8")
+    fake_codex.chmod(0o755)
+
+    applied = json_result("codex-patch", "apply", "--codex-bin", str(fake_codex), "--source", str(source), "--json")
+    preflight = json_result(
+        "codex-patch",
+        "preflight",
+        "--codex-bin",
+        str(fake_codex),
+        "--source",
+        str(source),
+        "--require-applied",
+        "--json",
+    )
+    reapplied = json_result("codex-patch", "apply", "--codex-bin", str(fake_codex), "--source", str(source), "--json")
+
+    assert applied["status"] == "pass"
+    assert applied["data"]["apply"]["changed"] is True
+    assert preflight["status"] == "pass"
+    assert preflight["data"]["applied"] is True
+    assert reapplied["status"] == "pass"
+    assert reapplied["data"]["apply"]["changed"] is False
+    assert qwendex.QWENDEX_CODEX_PATCH_MARKER in (
+        source / "codex-rs/tui/src/app/input.rs"
+    ).read_text(encoding="utf-8")
+    assert "qwendex_toggle_manager" in (
+        source / "codex-rs/tui/src/keymap.rs"
+    ).read_text(encoding="utf-8")
 
 
 def test_qwendex_route_command_and_auto_exec_prefer_local_qwen_when_available(tmp_path):

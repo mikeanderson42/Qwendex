@@ -9,6 +9,7 @@ import importlib.util
 import json
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -41,6 +42,9 @@ PUBLIC_DOC_FILES = (
     "seat-handoff.md",
     "learning-loop.md",
     "manager-mode.md",
+    "codex-patching.md",
+    "dev-environment.md",
+    "testbench.md",
     "tool-server.md",
     "security.md",
     "verification.md",
@@ -53,6 +57,8 @@ REQUIRED_SURFACE_FILES = (
     "llmstack",
     "scripts/qwendex",
     "scripts/qwendex_cli.py",
+    "scripts/qwendex_dev_env",
+    "scripts/qwendex_testbench",
     "scripts/llm",
     "scripts/windows/open.ps1",
     "scripts/run_local_qwen_codex.sh",
@@ -127,6 +133,60 @@ MANAGER_MODE_LABELS = {
     "manager": "Manager Mode",
 }
 MANAGER_REASONING_LEVELS = {"low", "medium", "high", "xhigh"}
+QWENDEX_CODEX_PATCH_MARKER = "QWENDEX_CODEX_TUI_PATCH_V1"
+QWENDEX_CODEX_STATUS_ITEM_ID = "qwendex-manager"
+QWENDEX_CODEX_STATUS_FILE_ENV = "QWENDEX_CODEX_STATUS_FILE"
+CODEX_PATCH_MANIFESTS: dict[str, dict[str, Any]] = {
+    "0.142.4": {
+        "codex_tag": "rust-v0.142.4",
+        "patch_marker": QWENDEX_CODEX_PATCH_MARKER,
+        "status_line_item": QWENDEX_CODEX_STATUS_ITEM_ID,
+        "status_file_env": QWENDEX_CODEX_STATUS_FILE_ENV,
+        "keymap_actions": ["qwendex_toggle_manager", "qwendex_toggle_local"],
+        "toggle_commands": {
+            "manager": "qwendex manager mode --toggle --json",
+            "local": "qwendex manager local --toggle --json",
+        },
+        "source_anchors": [
+            {
+                "path": "codex-rs/tui/src/bottom_pane/status_line_setup.rs",
+                "anchors": ["pub(crate) enum StatusLineItem", "TaskProgress"],
+            },
+            {
+                "path": "codex-rs/tui/src/chatwidget/status_surfaces.rs",
+                "anchors": ["status_line_value_for_item", "StatusLineItem::TaskProgress"],
+            },
+            {
+                "path": "codex-rs/tui/src/bottom_pane/status_line_style.rs",
+                "anchors": ["impl StatusLineAccent", "StatusLineItem::TaskProgress"],
+            },
+            {
+                "path": "codex-rs/tui/src/bottom_pane/status_surface_preview.rs",
+                "anchors": ["pub(crate) enum StatusSurfacePreviewItem", "StatusSurfacePreviewItem::TaskProgress"],
+            },
+            {
+                "path": "codex-rs/config/src/tui_keymap.rs",
+                "anchors": ["pub struct TuiGlobalKeymap", "toggle_raw_output"],
+            },
+            {
+                "path": "codex-rs/tui/src/keymap.rs",
+                "anchors": ["pub(crate) struct AppKeymap", "toggle_raw_output"],
+            },
+            {
+                "path": "codex-rs/tui/src/app/input.rs",
+                "anchors": ["app_keymap_shortcuts_available", "toggle_raw_output"],
+            },
+        ],
+        "required_source_edits": [
+            "Add StatusLineItem::QwendexManager serialized as qwendex-manager.",
+            "Render qwendex-manager from QWENDEX_CODEX_STATUS_FILE JSON text.",
+            "Add qwendex-manager to status preview and styling surfaces.",
+            "Add global keymap actions qwendex_toggle_manager and qwendex_toggle_local.",
+            "Dispatch those actions before generic composer input handling.",
+            "After each action, call the configured Qwendex toggle command and refresh status surfaces.",
+        ],
+    },
+}
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "schema_version": "qwendex.config.v1",
@@ -1456,6 +1516,658 @@ def manager_mode_payload(
     return data
 
 
+def manager_status_surface_text(label: str, local_enabled: bool) -> str:
+    return f"Qwendex manager: [{label}], Local [{'Y' if local_enabled else 'N'}]"
+
+
+def codex_status_payload(config: Mapping[str, Any], *, write_path: Path | None = None) -> dict[str, Any]:
+    with connect_state(config) as conn:
+        mode = current_manager_mode(config, conn)
+        local_enabled = current_local_enabled(config, conn)
+    profile = manager_mode_profile(config, mode)
+    local_status = local_subagent_status(config, enabled=local_enabled, env=os.environ, probe=False)
+    text = manager_status_surface_text(profile["label"], bool(local_status.get("enabled")))
+    data = {
+        "text": text,
+        "mode": profile["mode"],
+        "label": profile["label"],
+        "local": "Y" if local_status.get("enabled") else "N",
+        "local_enabled": bool(local_status.get("enabled")),
+        "local_available": local_status.get("available"),
+        "local_usable": bool(local_status.get("usable")),
+        "state_db": str(state_db_path(config)),
+        "status_file_env": QWENDEX_CODEX_STATUS_FILE_ENV,
+    }
+    if write_path is not None:
+        target = write_path.expanduser()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        data["status_file"] = str(target)
+    return data
+
+
+def sync_codex_status_file_from_env(config: Mapping[str, Any]) -> str:
+    raw = os.environ.get(QWENDEX_CODEX_STATUS_FILE_ENV, "").strip()
+    if not raw:
+        return ""
+    return str(codex_status_payload(config, write_path=Path(raw)).get("status_file") or "")
+
+
+def parse_codex_version_output(output: str) -> str:
+    match = re.search(r"(\d+\.\d+\.\d+)", output)
+    return match.group(1) if match else ""
+
+
+def detect_codex_version(codex_bin: str) -> dict[str, Any]:
+    path = shutil.which(codex_bin) or (codex_bin if Path(codex_bin).exists() else "")
+    try:
+        result = subprocess.run(
+            [codex_bin, "--version"],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {
+            "codex_bin": codex_bin,
+            "path": path,
+            "raw": "",
+            "version": "",
+            "returncode": 127,
+            "error": redact_text(str(exc)),
+        }
+    raw = (result.stdout or result.stderr).strip()
+    return {
+        "codex_bin": codex_bin,
+        "path": path,
+        "raw": raw,
+        "version": parse_codex_version_output(raw),
+        "returncode": result.returncode,
+        "error": redact_text(result.stderr.strip()) if result.returncode else "",
+    }
+
+
+def codex_source_patch_state(source: Path, manifest: Mapping[str, Any]) -> dict[str, Any]:
+    root = source.expanduser().resolve()
+    files: list[dict[str, Any]] = []
+    missing_files: list[str] = []
+    missing_anchors: list[str] = []
+    marker_hits: list[str] = []
+    for spec in manifest.get("source_anchors", []):
+        rel = str(spec.get("path") or "")
+        path = root / rel
+        if not path.is_file():
+            missing_files.append(rel)
+            files.append({"path": rel, "exists": False, "anchors_ok": False, "patched": False})
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        anchors = [str(anchor) for anchor in spec.get("anchors", [])]
+        absent = [anchor for anchor in anchors if anchor not in text]
+        missing_anchors.extend(f"{rel}: {anchor}" for anchor in absent)
+        patched = QWENDEX_CODEX_PATCH_MARKER in text or QWENDEX_CODEX_STATUS_ITEM_ID in text
+        if patched:
+            marker_hits.append(rel)
+        files.append({
+            "path": rel,
+            "exists": True,
+            "anchors_ok": not absent,
+            "patched": patched,
+            "missing_anchors": absent,
+        })
+    return {
+        "root": str(root),
+        "files": files,
+        "missing_files": missing_files,
+        "missing_anchors": missing_anchors,
+        "patch_marker_hits": marker_hits,
+        "anchors_ok": not missing_files and not missing_anchors,
+        "applied": bool(marker_hits),
+    }
+
+
+def codex_source_patch_specs(version: str) -> list[dict[str, Any]]:
+    marker = f"// {QWENDEX_CODEX_PATCH_MARKER}"
+    if version != "0.142.4":
+        return []
+    return [
+        {
+            "path": "codex-rs/tui/src/bottom_pane/status_line_setup.rs",
+            "replacements": [
+                (
+                    """    /// Latest checklist task progress from `update_plan` (if available).
+    TaskProgress,
+""",
+                    f"""    /// Latest checklist task progress from `update_plan` (if available).
+    TaskProgress,
+
+    {marker}
+    /// Qwendex manager and local routing state.
+    #[strum(to_string = "qwendex-manager")]
+    QwendexManager,
+""",
+                ),
+                (
+                    """            StatusLineItem::TaskProgress => {
+                "Latest task progress from update_plan (omitted until available)"
+            }
+""",
+                    """            StatusLineItem::TaskProgress => {
+                "Latest task progress from update_plan (omitted until available)"
+            },
+            StatusLineItem::QwendexManager => "Qwendex manager mode and local routing state",
+""",
+                ),
+                (
+                    """            StatusLineItem::TaskProgress => StatusSurfacePreviewItem::TaskProgress,
+""",
+                    """            StatusLineItem::TaskProgress => StatusSurfacePreviewItem::TaskProgress,
+            StatusLineItem::QwendexManager => StatusSurfacePreviewItem::QwendexManager,
+""",
+                ),
+            ],
+        },
+        {
+            "path": "codex-rs/tui/src/chatwidget/status_surfaces.rs",
+            "replacements": [
+                (
+                    """impl ChatWidget {
+""",
+                    f"""{marker}
+fn qwendex_status_line_text() -> Option<String> {{
+    let status_file = std::env::var("QWENDEX_CODEX_STATUS_FILE").ok()?;
+    let raw = std::fs::read_to_string(status_file).ok()?;
+    let value = serde_json::from_str::<serde_json::Value>(&raw).ok()?;
+    value
+        .get("text")
+        .and_then(|text| text.as_str())
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(ToOwned::to_owned)
+}}
+
+impl ChatWidget {{
+""",
+                ),
+                (
+                    """            StatusLineItem::RawOutput => self.raw_output_mode().then(|| "raw output".to_string()),
+""",
+                    """            StatusLineItem::RawOutput => self.raw_output_mode().then(|| "raw output".to_string()),
+            StatusLineItem::QwendexManager => qwendex_status_line_text(),
+""",
+                ),
+            ],
+        },
+        {
+            "path": "codex-rs/tui/src/bottom_pane/status_line_style.rs",
+            "replacements": [
+                (
+                    """            StatusLineItem::FastMode | StatusLineItem::RawOutput => Self::Mode,
+""",
+                    f"""            {marker}
+            StatusLineItem::FastMode | StatusLineItem::RawOutput | StatusLineItem::QwendexManager => Self::Mode,
+""",
+                ),
+            ],
+        },
+        {
+            "path": "codex-rs/tui/src/bottom_pane/status_surface_preview.rs",
+            "replacements": [
+                (
+                    """    TaskProgress,
+}
+""",
+                    f"""    TaskProgress,
+    {marker}
+    QwendexManager,
+}}
+""",
+                ),
+                (
+                    """            StatusSurfacePreviewItem::TaskProgress => "Tasks 0/0",
+""",
+                    """            StatusSurfacePreviewItem::TaskProgress => "Tasks 0/0",
+            StatusSurfacePreviewItem::QwendexManager => "Qwendex manager: [Manager Mode], Local [Y]",
+""",
+                ),
+                (
+                    """            Self::TaskProgress,
+        ]
+""",
+                    """            Self::TaskProgress,
+            Self::QwendexManager,
+        ]
+""",
+                ),
+            ],
+        },
+        {
+            "path": "codex-rs/config/src/tui_keymap.rs",
+            "replacements": [
+                (
+                    """    /// Toggle raw scrollback mode for copy-friendly transcript selection.
+    pub toggle_raw_output: Option<KeybindingsSpec>,
+}
+""",
+                    f"""    /// Toggle raw scrollback mode for copy-friendly transcript selection.
+    pub toggle_raw_output: Option<KeybindingsSpec>,
+    {marker}
+    /// Toggle Qwendex Manager Mode.
+    pub qwendex_toggle_manager: Option<KeybindingsSpec>,
+    /// Toggle Qwendex local routing.
+    pub qwendex_toggle_local: Option<KeybindingsSpec>,
+}}
+""",
+                ),
+            ],
+        },
+        {
+            "path": "codex-rs/tui/src/keymap.rs",
+            "replacements": [
+                (
+                    """    /// Toggle raw scrollback mode for copy-friendly transcript selection.
+    pub(crate) toggle_raw_output: Vec<KeyBinding>,
+}
+""",
+                    f"""    /// Toggle raw scrollback mode for copy-friendly transcript selection.
+    pub(crate) toggle_raw_output: Vec<KeyBinding>,
+    {marker}
+    /// Toggle Qwendex Manager Mode.
+    pub(crate) qwendex_toggle_manager: Vec<KeyBinding>,
+    /// Toggle Qwendex local routing.
+    pub(crate) qwendex_toggle_local: Vec<KeyBinding>,
+}}
+""",
+                ),
+                (
+                    """            toggle_raw_output: resolve_bindings(
+                keymap.global.toggle_raw_output.as_ref(),
+                &defaults.app.toggle_raw_output,
+                "tui.keymap.global.toggle_raw_output",
+            )?,
+""",
+                    """            toggle_raw_output: resolve_bindings(
+                keymap.global.toggle_raw_output.as_ref(),
+                &defaults.app.toggle_raw_output,
+                "tui.keymap.global.toggle_raw_output",
+            )?,
+            qwendex_toggle_manager: resolve_bindings(
+                keymap.global.qwendex_toggle_manager.as_ref(),
+                &defaults.app.qwendex_toggle_manager,
+                "tui.keymap.global.qwendex_toggle_manager",
+            )?,
+            qwendex_toggle_local: resolve_bindings(
+                keymap.global.qwendex_toggle_local.as_ref(),
+                &defaults.app.qwendex_toggle_local,
+                "tui.keymap.global.qwendex_toggle_local",
+            )?,
+""",
+                ),
+                (
+                    """            (
+                keymap.global.toggle_raw_output.as_ref(),
+                app.toggle_raw_output.as_slice(),
+            ),
+""",
+                    """            (
+                keymap.global.toggle_raw_output.as_ref(),
+                app.toggle_raw_output.as_slice(),
+            ),
+            (
+                keymap.global.qwendex_toggle_manager.as_ref(),
+                app.qwendex_toggle_manager.as_slice(),
+            ),
+            (
+                keymap.global.qwendex_toggle_local.as_ref(),
+                app.qwendex_toggle_local.as_slice(),
+            ),
+""",
+                ),
+                (
+                    """                toggle_raw_output: default_bindings![alt(KeyCode::Char('r'))],
+            },
+""",
+                    """                toggle_raw_output: default_bindings![alt(KeyCode::Char('r'))],
+                qwendex_toggle_manager: default_bindings![alt(KeyCode::Char('m'))],
+                qwendex_toggle_local: default_bindings![alt(KeyCode::Char('l'))],
+            },
+""",
+                ),
+                (
+                    """                ("toggle_fast_mode", self.app.toggle_fast_mode.as_slice()),
+                ("toggle_raw_output", self.app.toggle_raw_output.as_slice()),
+                ("chat.interrupt_turn", self.chat.interrupt_turn.as_slice()),
+""",
+                    """                ("toggle_fast_mode", self.app.toggle_fast_mode.as_slice()),
+                ("toggle_raw_output", self.app.toggle_raw_output.as_slice()),
+                ("qwendex_toggle_manager", self.app.qwendex_toggle_manager.as_slice()),
+                ("qwendex_toggle_local", self.app.qwendex_toggle_local.as_slice()),
+                ("chat.interrupt_turn", self.chat.interrupt_turn.as_slice()),
+""",
+                ),
+                (
+                    """                ("toggle_fast_mode", self.app.toggle_fast_mode.as_slice()),
+                ("toggle_raw_output", self.app.toggle_raw_output.as_slice()),
+            ],
+            [
+""",
+                    """                ("toggle_fast_mode", self.app.toggle_fast_mode.as_slice()),
+                ("toggle_raw_output", self.app.toggle_raw_output.as_slice()),
+                ("qwendex_toggle_manager", self.app.qwendex_toggle_manager.as_slice()),
+                ("qwendex_toggle_local", self.app.qwendex_toggle_local.as_slice()),
+            ],
+            [
+""",
+                ),
+                (
+                    """                ("toggle_vim_mode", self.app.toggle_vim_mode.as_slice()),
+                ("toggle_fast_mode", self.app.toggle_fast_mode.as_slice()),
+                ("toggle_raw_output", self.app.toggle_raw_output.as_slice()),
+                (
+                    "composer.history_search_previous",
+""",
+                    """                ("toggle_vim_mode", self.app.toggle_vim_mode.as_slice()),
+                ("toggle_fast_mode", self.app.toggle_fast_mode.as_slice()),
+                ("toggle_raw_output", self.app.toggle_raw_output.as_slice()),
+                ("qwendex_toggle_manager", self.app.qwendex_toggle_manager.as_slice()),
+                ("qwendex_toggle_local", self.app.qwendex_toggle_local.as_slice()),
+                (
+                    "composer.history_search_previous",
+""",
+                ),
+            ],
+        },
+        {
+            "path": "codex-rs/tui/src/app/input.rs",
+            "replacements": [
+                (
+                    """    pub(super) async fn handle_key_event(
+""",
+                    f"""    {marker}
+    fn run_qwendex_toggle_command(&mut self, tui: &mut tui::Tui, label: &str, args: &[&str]) {{
+        let output = std::process::Command::new("qwendex").args(args).output();
+        match output {{
+            Ok(output) if output.status.success() => {{
+                self.chat_widget.add_to_history(history_cell::new_info_event(
+                    format!("Qwendex {{label}} toggled."),
+                    None,
+                ));
+            }}
+            Ok(output) => {{
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                self.chat_widget.add_to_history(history_cell::new_error_event(format!(
+                    "Qwendex {{label}} toggle failed: {{stderr}}"
+                )));
+            }}
+            Err(err) => {{
+                self.chat_widget.add_to_history(history_cell::new_error_event(format!(
+                    "Qwendex {{label}} toggle failed: {{err}}"
+                )));
+            }}
+        }}
+        self.refresh_status_line();
+        tui.frame_requester().schedule_frame();
+    }}
+
+    pub(super) async fn handle_key_event(
+""",
+                ),
+                (
+                    """        if app_keymap_shortcuts_available && self.keymap.app.toggle_raw_output.is_pressed(key_event)
+        {
+            let enabled = !self.chat_widget.raw_output_mode();
+            self.apply_raw_output_mode(tui, enabled, /*notify*/ false);
+            return;
+        }
+""",
+                    """        if app_keymap_shortcuts_available
+            && self.keymap.app.qwendex_toggle_manager.is_pressed(key_event)
+        {
+            self.run_qwendex_toggle_command(
+                tui,
+                "manager mode",
+                &["manager", "mode", "--toggle", "--json"],
+            );
+            return;
+        }
+
+        if app_keymap_shortcuts_available
+            && self.keymap.app.qwendex_toggle_local.is_pressed(key_event)
+        {
+            self.run_qwendex_toggle_command(
+                tui,
+                "local routing",
+                &["manager", "local", "--toggle", "--json"],
+            );
+            return;
+        }
+
+        if app_keymap_shortcuts_available && self.keymap.app.toggle_raw_output.is_pressed(key_event)
+        {
+            let enabled = !self.chat_widget.raw_output_mode();
+            self.apply_raw_output_mode(tui, enabled, /*notify*/ false);
+            return;
+        }
+""",
+                ),
+            ],
+        },
+    ]
+
+
+def apply_codex_source_patch(source: Path, version: str, *, dry_run: bool = False) -> dict[str, Any]:
+    root = source.expanduser().resolve()
+    changes: list[dict[str, Any]] = []
+    errors: list[str] = []
+    specs = codex_source_patch_specs(version)
+    if not specs:
+        return {"changed": False, "changes": changes, "errors": [f"no source patch is available for Codex {version}"]}
+    for spec in specs:
+        rel = str(spec["path"])
+        path = root / rel
+        if not path.is_file():
+            errors.append(f"missing file: {rel}")
+            changes.append({"path": rel, "changed": False, "replacements": 0, "error": "missing file"})
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        updated = text
+        replacements = 0
+        missing: list[str] = []
+        for old, new in spec["replacements"]:
+            if new in updated:
+                continue
+            if old not in updated:
+                missing.append(old.splitlines()[0] if old.splitlines() else old[:80])
+                continue
+            updated = updated.replace(old, new)
+            replacements += 1
+        if missing:
+            errors.extend(f"{rel}: missing replacement anchor: {item}" for item in missing)
+        changed = updated != text
+        if changed and not dry_run:
+            path.write_text(updated, encoding="utf-8")
+        changes.append({
+            "path": rel,
+            "changed": changed,
+            "replacements": replacements,
+            "dry_run": dry_run,
+            "missing": missing,
+        })
+    return {"changed": any(change["changed"] for change in changes), "changes": changes, "errors": errors}
+
+
+def codex_patch_payload(args: argparse.Namespace) -> dict[str, Any]:
+    version_info = detect_codex_version(args.codex_bin)
+    version = version_info.get("version") or ""
+    manifest = CODEX_PATCH_MANIFESTS.get(version)
+    source_state = codex_source_patch_state(Path(args.source), manifest) if args.source and manifest else None
+    supported = manifest is not None
+    applied = bool(source_state and source_state.get("applied"))
+    anchors_ok = bool(source_state.get("anchors_ok")) if source_state else None
+    data = {
+        "version": version_info,
+        "supported": supported,
+        "applied": applied,
+        "source": source_state,
+        "manifest": manifest or {},
+        "known_versions": sorted(CODEX_PATCH_MANIFESTS),
+        "runtime_contract": {
+            "status_file_env": QWENDEX_CODEX_STATUS_FILE_ENV,
+            "status_line_item": QWENDEX_CODEX_STATUS_ITEM_ID,
+            "status_command": "qwendex codex-status --write \"$QWENDEX_CODEX_STATUS_FILE\" --json",
+            "manager_toggle": "qwendex manager mode --toggle --json",
+            "local_toggle": "qwendex manager local --toggle --json",
+        },
+    }
+    if version_info.get("returncode") != 0 or not version:
+        return stable_envelope(
+            command="codex-patch",
+            status="blocked",
+            summary="Could not determine the installed Codex CLI version.",
+            errors=[version_info.get("error") or version_info.get("raw") or "codex --version failed"],
+            data=data,
+        )
+    if not supported:
+        return stable_envelope(
+            command="codex-patch",
+            status="blocked",
+            summary=f"Codex {version} is not in the Qwendex patch manifest.",
+            errors=[f"unknown Codex version: {version}"],
+            next_actions=["Run qwendex codex-patch locations --json and refresh the source anchors for this Codex version."],
+            data=data,
+        )
+    if source_state and not anchors_ok:
+        return stable_envelope(
+            command="codex-patch",
+            status="blocked",
+            summary=f"Codex {version} is supported, but the supplied source checkout no longer matches the patch anchors.",
+            errors=list(source_state.get("missing_files", [])) + list(source_state.get("missing_anchors", [])),
+            next_actions=["Refresh the version manifest before applying the Qwendex TUI patch."],
+            data=data,
+        )
+    if args.require_applied and not applied:
+        return stable_envelope(
+            command="codex-patch",
+            status="blocked",
+            summary=f"Codex {version} is supported, but the Qwendex TUI patch is not applied to the checked source.",
+            errors=["patch marker not found"],
+            next_actions=["Apply the Qwendex Codex TUI source patch, rebuild Codex, then rerun preflight with --source."],
+            data=data,
+        )
+    summary = f"Codex {version} is supported by the Qwendex patch manifest."
+    if source_state:
+        summary += " Source patch marker is present." if applied else " Source anchors are ready; patch marker is not present yet."
+    else:
+        summary += " No source checkout was supplied, so installed-binary patch state was not asserted."
+    return stable_envelope(
+        command="codex-patch",
+        status="pass",
+        summary=summary,
+        next_actions=[] if applied else ["Use a source checkout when you want preflight to assert the Qwendex TUI patch is applied."],
+        data=data,
+    )
+
+
+def codex_patch_apply_payload(args: argparse.Namespace) -> dict[str, Any]:
+    version_info = detect_codex_version(args.codex_bin)
+    version = version_info.get("version") or ""
+    manifest = CODEX_PATCH_MANIFESTS.get(version)
+    source = Path(args.source).expanduser() if args.source else None
+    source_state = codex_source_patch_state(source, manifest) if source and manifest else None
+    data: dict[str, Any] = {
+        "action": "apply",
+        "dry_run": bool(args.dry_run),
+        "version": version_info,
+        "supported": manifest is not None,
+        "source": source_state,
+        "manifest": manifest or {},
+        "known_versions": sorted(CODEX_PATCH_MANIFESTS),
+        "runtime_contract": {
+            "status_file_env": QWENDEX_CODEX_STATUS_FILE_ENV,
+            "status_line_item": QWENDEX_CODEX_STATUS_ITEM_ID,
+            "status_command": "qwendex codex-status --write \"$QWENDEX_CODEX_STATUS_FILE\" --json",
+            "manager_toggle": "qwendex manager mode --toggle --json",
+            "local_toggle": "qwendex manager local --toggle --json",
+        },
+    }
+    if version_info.get("returncode") != 0 or not version:
+        return stable_envelope(
+            command="codex-patch",
+            status="blocked",
+            summary="Could not determine the installed Codex CLI version.",
+            errors=[version_info.get("error") or version_info.get("raw") or "codex --version failed"],
+            data=data,
+        )
+    if not manifest:
+        return stable_envelope(
+            command="codex-patch",
+            status="blocked",
+            summary=f"Codex {version} is not in the Qwendex patch manifest.",
+            errors=[f"unknown Codex version: {version}"],
+            next_actions=["Run qwendex codex-patch locations --json and refresh the source anchors for this Codex version."],
+            data=data,
+        )
+    if not source:
+        return stable_envelope(
+            command="codex-patch",
+            status="blocked",
+            summary="A Codex source checkout is required before Qwendex can apply the TUI patch.",
+            errors=["missing --source"],
+            next_actions=[f"Check out Codex {manifest.get('codex_tag')} source, then rerun with --source /path/to/codex."],
+            data=data,
+        )
+    if source_state and not source_state.get("anchors_ok"):
+        return stable_envelope(
+            command="codex-patch",
+            status="blocked",
+            summary=f"Codex {version} is supported, but the supplied source checkout no longer matches the patch anchors.",
+            errors=list(source_state.get("missing_files", [])) + list(source_state.get("missing_anchors", [])),
+            next_actions=["Refresh the version manifest before applying the Qwendex TUI patch."],
+            data=data,
+        )
+    apply_result = apply_codex_source_patch(source, version, dry_run=bool(args.dry_run))
+    after_state = codex_source_patch_state(source, manifest)
+    data["apply"] = apply_result
+    data["source_after"] = after_state
+    if apply_result.get("errors"):
+        return stable_envelope(
+            command="codex-patch",
+            status="blocked",
+            summary="Qwendex could not apply the Codex TUI source patch cleanly.",
+            errors=list(apply_result.get("errors", [])),
+            next_actions=["Review the missing anchors, refresh the manifest if Codex changed, then rerun preflight."],
+            data=data,
+        )
+    if args.dry_run:
+        summary = f"Codex {version} source patch dry-run completed."
+        summary += " Patch is already present." if source_state and source_state.get("applied") else " Patch can be applied."
+        return stable_envelope(
+            command="codex-patch",
+            status="pass",
+            summary=summary,
+            next_actions=[] if source_state and source_state.get("applied") else ["Rerun without --dry-run to apply the source patch."],
+            data=data,
+        )
+    if not after_state.get("applied"):
+        return stable_envelope(
+            command="codex-patch",
+            status="blocked",
+            summary="Qwendex applied edits, but post-apply preflight did not find the patch marker.",
+            errors=["patch marker not found after apply"],
+            next_actions=["Inspect the source checkout before rebuilding Codex."],
+            data=data,
+        )
+    changed = bool(apply_result.get("changed"))
+    return stable_envelope(
+        command="codex-patch",
+        status="pass",
+        summary=f"Codex {version} source patch {'applied' if changed else 'is already applied'} and preflight passed.",
+        next_actions=["Rebuild/install Codex from this source checkout, then run qwendex codex-patch preflight --source <checkout> --require-applied --json."],
+        data=data,
+    )
+
+
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -1902,10 +2614,40 @@ def is_exact_qwendex_ok(prompt: str) -> bool:
     }
 
 
-def exec_command_for_seat(seat: str, seat_config: Mapping[str, Any], prompt: str) -> list[str]:
+def qwendex_exec_cwd(raw: str = "") -> Path:
+    value = (raw or os.environ.get("QWENDEX_EXEC_CWD", "")).strip()
+    if not value:
+        return ROOT
+    return Path(value).expanduser().resolve()
+
+
+def codex_mcp_override_args(exec_cwd: Path) -> list[str]:
+    trusted_roots = os.environ.get("QWENDEX_MCP_TRUSTED_ROOTS", "").strip()
+    if not trusted_roots:
+        trusted_roots = f"{ROOT}:{exec_cwd}"
+    local_harness = ROOT / "scripts" / "artifact_queue_mcp.py"
+    return [
+        "-c",
+        'mcp_servers.local-harness.command="python3"',
+        "-c",
+        f"mcp_servers.local-harness.args=[{json.dumps(str(local_harness))}]",
+        "-c",
+        f"mcp_servers.local-harness.cwd={json.dumps(str(ROOT))}",
+        "-c",
+        "mcp_servers.local-harness.env.ARTIFACT_QUEUE_MCP_TRUSTED_ROOTS="
+        + json.dumps(trusted_roots),
+        "-c",
+        'mcp_servers.local-harness.env.SEARXNG_URL="http://127.0.0.1:6060"',
+    ]
+
+
+def exec_command_for_seat(seat: str, seat_config: Mapping[str, Any], prompt: str, *, cwd: Path | None = None) -> list[str]:
+    exec_cwd = cwd or qwendex_exec_cwd()
     if seat in {"qwen", "sandbox"}:
         return [
             str(ROOT / "scripts" / "run_local_qwen_codex.sh"),
+            "--cwd",
+            str(exec_cwd),
             "--minimal",
             "--ephemeral",
             "--exec",
@@ -1916,16 +2658,18 @@ def exec_command_for_seat(seat: str, seat_config: Mapping[str, Any], prompt: str
         "exec",
         "--sandbox",
         "workspace-write",
+        *codex_mcp_override_args(exec_cwd),
         "-m",
         str(seat_config.get("model", "gpt-5.5")),
         "-C",
-        str(ROOT),
+        str(exec_cwd),
         prompt,
     ]
 
 
 def command_exec(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, Any]:
     prompt = " ".join(args.prompt).strip()
+    exec_cwd = qwendex_exec_cwd(args.cwd)
     with connect_state(config) as conn:
         local_enabled = current_local_enabled(config, conn)
     route = resolve_route(
@@ -1966,7 +2710,7 @@ def command_exec(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, 
             next_actions=["Run scripts/qwendex receipt latest --json"],
             data={"seat": seat, "model": seat_config.get("model", ""), "output": "QWENDEX_OK", "routing": route},
         )
-    cmd = exec_command_for_seat(seat, seat_config, prompt)
+    cmd = exec_command_for_seat(seat, seat_config, prompt, cwd=exec_cwd)
     if args.dry_run:
         data = {"status": "ready", "command": cmd, "seat": seat, "model": seat_config.get("model"), "routing": route}
         return stable_envelope(
@@ -2598,7 +3342,11 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
         max_subagents = args.max_subagents or manager_mode_profile(config, mode)["max_subagents"]
         local_status = local_subagent_status(config, enabled=current_local_enabled(config, conn), env=os.environ, probe=True)
         if args.action == "mode":
-            if args.cycle:
+            if args.toggle:
+                mode = "auto" if mode == "manager" else "manager"
+                set_manager_setting(conn, "selected_mode", mode)
+                conn.commit()
+            elif args.cycle:
                 index = MANAGER_MODE_ORDER.index(mode) if mode in MANAGER_MODE_ORDER else 0
                 mode = MANAGER_MODE_ORDER[(index + 1) % len(MANAGER_MODE_ORDER)]
                 set_manager_setting(conn, "selected_mode", mode)
@@ -2621,6 +3369,7 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
                 sessions=[session for session in sessions if session],
             )
             data["state_db"] = str(state_db_path(config))
+            data["codex_status_file"] = sync_codex_status_file_from_env(config)
             return stable_envelope(
                 command="manager",
                 status="pass",
@@ -2651,6 +3400,7 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
                 sessions=[session for session in sessions if session],
             )
             data["state_db"] = str(state_db_path(config))
+            data["codex_status_file"] = sync_codex_status_file_from_env(config)
             return stable_envelope(
                 command="manager",
                 status="pass",
@@ -3078,6 +3828,42 @@ def command_manager(args: argparse.Namespace, config: dict[str, Any]) -> dict[st
     )
 
 
+def command_codex_status(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, Any]:
+    write_path = Path(args.write).expanduser() if args.write else None
+    data = codex_status_payload(config, write_path=write_path)
+    artifacts = [data["status_file"]] if data.get("status_file") else []
+    return stable_envelope(
+        command="codex-status",
+        status="pass",
+        summary=data["text"],
+        artifacts=artifacts,
+        data=data,
+    )
+
+
+def command_codex_patch(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, Any]:
+    del config
+    if args.action == "locations":
+        data = {
+            "known_versions": sorted(CODEX_PATCH_MANIFESTS),
+            "manifests": CODEX_PATCH_MANIFESTS,
+            "runtime_contract": {
+                "status_file_env": QWENDEX_CODEX_STATUS_FILE_ENV,
+                "status_line_item": QWENDEX_CODEX_STATUS_ITEM_ID,
+                "patch_marker": QWENDEX_CODEX_PATCH_MARKER,
+            },
+        }
+        return stable_envelope(
+            command="codex-patch",
+            status="pass",
+            summary="Qwendex Codex TUI patch locations are available.",
+            data=data,
+        )
+    if args.action == "apply":
+        return codex_patch_apply_payload(args)
+    return codex_patch_payload(args)
+
+
 def command_version(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, Any]:
     return stable_envelope(
         command="version",
@@ -3120,6 +3906,7 @@ def command_line() -> argparse.ArgumentParser:
     exec_parser.add_argument("--seat", choices=["auto", *sorted(DEFAULT_CONFIG["seats"])], default="auto")
     exec_parser.add_argument("--prefer-local", action="store_true")
     exec_parser.add_argument("--timeout", type=int, default=600)
+    exec_parser.add_argument("--cwd", default="")
     exec_parser.add_argument("--dry-run", action="store_true")
     exec_parser.add_argument("--json", action="store_true")
 
@@ -3250,6 +4037,19 @@ def command_line() -> argparse.ArgumentParser:
     manager.add_argument("--shortcut", action="store_true")
     manager.add_argument("--json", action="store_true")
 
+    codex_status = sub.add_parser("codex-status")
+    codex_status.add_argument("--write", default="")
+    codex_status.add_argument("--plain", action="store_true")
+    codex_status.add_argument("--json", action="store_true")
+
+    codex_patch = sub.add_parser("codex-patch")
+    codex_patch.add_argument("action", choices=["status", "preflight", "locations", "apply"], nargs="?", default="status")
+    codex_patch.add_argument("--codex-bin", default="codex")
+    codex_patch.add_argument("--source", default="")
+    codex_patch.add_argument("--require-applied", action="store_true")
+    codex_patch.add_argument("--dry-run", action="store_true")
+    codex_patch.add_argument("--json", action="store_true")
+
     version = sub.add_parser("version")
     version.add_argument("--json", action="store_true")
     return parser
@@ -3300,6 +4100,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         return command_learn(args, config)
     if args.command == "manager":
         return command_manager(args, config)
+    if args.command == "codex-status":
+        return command_codex_status(args, config)
+    if args.command == "codex-patch":
+        return command_codex_patch(args, config)
     if args.command == "version":
         return command_version(args, config)
     raise RuntimeError(f"unknown command: {args.command}")
@@ -3316,7 +4120,9 @@ def main(argv: list[str] | None = None) -> int:
         data = run(args)
     except Exception as exc:  # pragma: no cover - defensive CLI boundary
         data = stable_envelope(command=getattr(args, "command", "unknown"), status="fail", summary=str(exc), errors=[str(exc)])
-    if getattr(args, "json", False):
+    if args.command == "codex-status" and not getattr(args, "json", False):
+        print(data.get("data", {}).get("text", data["summary"]))
+    elif getattr(args, "json", False):
         print_json(data)
     else:
         human_print(data)

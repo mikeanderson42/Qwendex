@@ -1,0 +1,555 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ -f "$SCRIPT_ROOT/.qwendex-dev/source-root" ]]; then
+  DEFAULT_SOURCE_ROOT="$(<"$SCRIPT_ROOT/.qwendex-dev/source-root")"
+else
+  DEFAULT_SOURCE_ROOT="$SCRIPT_ROOT"
+fi
+
+SOURCE_ROOT="${QWENDEX_DEV_SOURCE_ROOT:-$DEFAULT_SOURCE_ROOT}"
+DEV_ROOT="${QWENDEX_DEV_ROOT:-$HOME/qwendex-dev}"
+WORK_ROOT="$DEV_ROOT/.qwendex-dev"
+STATE_DB="$WORK_ROOT/state/qwendex.sqlite"
+RESULTS_ROOT="$WORK_ROOT/results/qwendex"
+META_ROOT="$WORK_ROOT/results/meta"
+CODEX_HOME_DIR="$WORK_ROOT/codex_home"
+STATUS_FILE="$WORK_ROOT/codex_status.json"
+MAIN_CODEX_BIN="${QWENDEX_MAIN_CODEX_BIN:-$(command -v codex || true)}"
+DEV_CODEX_DEFAULT="$WORK_ROOT/codex-build/bin/codex"
+MANAGED_RSYNC_EXCLUDES=(
+  --exclude '.git/'
+  --exclude '.pytest_cache/'
+  --exclude '.ruff_cache/'
+  --exclude '.qwendex-dev/'
+  --exclude 'results/'
+  --exclude 'state/'
+  --exclude '__pycache__/'
+  --exclude '*.pyc'
+  --exclude '/bin/'
+  --exclude '/open.ps1'
+)
+MANAGED_GIT_PATHS=(
+  .gitignore
+  AGENTS.md
+  QWENDEX_STARTUP.md
+  README.md
+  RELEASE.md
+  llmstack
+  config
+  docs
+  public
+  scripts
+  tests
+)
+
+die() {
+  printf 'error: %s\n' "$*" >&2
+  exit 1
+}
+
+guard_dev_root() {
+  [[ -n "$DEV_ROOT" ]] || die "QWENDEX_DEV_ROOT resolved to an empty path"
+  [[ "$DEV_ROOT" != "/" ]] || die "refusing to use / as QWENDEX_DEV_ROOT"
+  [[ "$DEV_ROOT" != "$HOME" ]] || die "refusing to use HOME as QWENDEX_DEV_ROOT"
+}
+
+ensure_layout() {
+  guard_dev_root
+  mkdir -p "$WORK_ROOT/state" "$RESULTS_ROOT" "$META_ROOT" "$CODEX_HOME_DIR/logs"
+  mkdir -p "$WORK_ROOT/codex-source" "$WORK_ROOT/codex-build/bin" "$DEV_ROOT/bin"
+}
+
+sync_project() {
+  guard_dev_root
+  [[ -d "$SOURCE_ROOT" ]] || die "source root does not exist: $SOURCE_ROOT"
+  if [[ "$(cd "$SOURCE_ROOT" && pwd)" == "$(mkdir -p "$DEV_ROOT" && cd "$DEV_ROOT" && pwd)" ]]; then
+    die "source root and dev root are the same; set QWENDEX_DEV_SOURCE_ROOT to the tracked repo"
+  fi
+  rsync -a --delete \
+    --omit-dir-times \
+    "${MANAGED_RSYNC_EXCLUDES[@]}" \
+    "$SOURCE_ROOT/" "$DEV_ROOT/"
+}
+
+source_is_git_repo() {
+  git -C "$SOURCE_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1
+}
+
+utc_stamp() {
+  date -u +%Y%m%dT%H%M%SZ
+}
+
+write_codex_config() {
+  cat > "$CODEX_HOME_DIR/config.toml" <<EOF
+approval_policy = "never"
+sandbox_mode = "workspace-write"
+persistent_instructions = "Qwendex dev environment active. Act as a senior Qwendex project developer: keep changes scoped, verify before staging, use qwendex-dev diff/promote/stage for source sync, and keep generated .qwendex-dev state out of public artifacts. QWENDEX_ROOT, QWENDEX_STATE_DB, QWENDEX_RESULTS_ROOT, QWENDEX_CODEX_STATUS_FILE, and QWENDEX_DEV_ROOT are set by the launcher. Use qwendex, qwendex-dev, and llmstack for harness controls."
+
+[features]
+multi_agent = true
+
+[projects."$DEV_ROOT"]
+trust_level = "trusted"
+
+[projects."$SOURCE_ROOT"]
+trust_level = "trusted"
+EOF
+
+  cat > "$CODEX_HOME_DIR/patched-tui.example.toml" <<'EOF'
+# Copy these sections into config.toml only after running a patched Codex build.
+#
+# [tui]
+# status_line = ["model-with-reasoning", "current-dir", "qwendex-manager"]
+#
+# [tui.keymap.global]
+# qwendex_toggle_manager = "alt-m"
+# qwendex_toggle_local = "alt-l"
+EOF
+}
+
+write_wrappers() {
+  cat > "$DEV_ROOT/bin/qwendex" <<EOF
+#!/usr/bin/env bash
+exec "$DEV_ROOT/scripts/qwendex" "\$@"
+EOF
+  cat > "$DEV_ROOT/bin/llmstack" <<EOF
+#!/usr/bin/env bash
+exec "$DEV_ROOT/llmstack" "\$@"
+EOF
+  cat > "$DEV_ROOT/bin/qwendex-dev" <<EOF
+#!/usr/bin/env bash
+export QWENDEX_DEV_SOURCE_ROOT="$SOURCE_ROOT"
+export QWENDEX_MAIN_CODEX_BIN="$MAIN_CODEX_BIN"
+exec "$DEV_ROOT/scripts/qwendex_dev_env" "\$@"
+EOF
+  cat > "$DEV_ROOT/bin/codex-main" <<EOF
+#!/usr/bin/env bash
+if [[ ! -x "$MAIN_CODEX_BIN" ]]; then
+  echo "main Codex fallback is not executable: $MAIN_CODEX_BIN" >&2
+  exit 127
+fi
+exec "$MAIN_CODEX_BIN" "\$@"
+EOF
+  cat > "$DEV_ROOT/bin/codex" <<EOF
+#!/usr/bin/env bash
+dev_codex="\${QWENDEX_DEV_CODEX_BIN:-$DEV_CODEX_DEFAULT}"
+if [[ -x "\$dev_codex" ]]; then
+  exec "\$dev_codex" "\$@"
+fi
+if [[ ! -x "$MAIN_CODEX_BIN" ]]; then
+  echo "no dev Codex binary found and main fallback is not executable: $MAIN_CODEX_BIN" >&2
+  exit 127
+fi
+exec "$MAIN_CODEX_BIN" "\$@"
+EOF
+  cat > "$DEV_ROOT/open.ps1" <<'EOF'
+[CmdletBinding()]
+param(
+    [Parameter(Position = 0, ValueFromRemainingArguments = $true)]
+    [string[]]$Args = @()
+)
+
+$ErrorActionPreference = "Stop"
+$script = Join-Path $PSScriptRoot "scripts/windows/open.ps1"
+& $script -RepoDir $PSScriptRoot @Args
+EOF
+  chmod +x "$DEV_ROOT/bin/qwendex" "$DEV_ROOT/bin/llmstack" "$DEV_ROOT/bin/qwendex-dev" "$DEV_ROOT/bin/codex-main" "$DEV_ROOT/bin/codex"
+}
+
+write_env_files() {
+  printf '%s\n' "$SOURCE_ROOT" > "$WORK_ROOT/source-root"
+  cat > "$WORK_ROOT/env.sh" <<EOF
+export QWENDEX_DEV_ROOT='$DEV_ROOT'
+export QWENDEX_DEV_SOURCE_ROOT='$SOURCE_ROOT'
+export QWENDEX_MAIN_CODEX_BIN='$MAIN_CODEX_BIN'
+export QWENDEX_ROOT='$DEV_ROOT'
+export QWENDEX_STATE_DB='$STATE_DB'
+export QWENDEX_RESULTS_ROOT='$RESULTS_ROOT'
+export QWENDEX_META_ROOT='$META_ROOT'
+export QWENDEX_CODEX_STATUS_FILE='$STATUS_FILE'
+export QWENDEX_EXEC_CWD='$DEV_ROOT'
+export QWENDEX_MCP_TRUSTED_ROOTS='$DEV_ROOT:$SOURCE_ROOT'
+export CODEX_HOME='$CODEX_HOME_DIR'
+export LOCAL_QWEN_CODEX_CWD='$DEV_ROOT'
+export LOCAL_QWEN_CODEX_ADD_DIRS='$DEV_ROOT:$SOURCE_ROOT'
+export LOCAL_QWEN_CANONICAL_LAUNCHER='$DEV_ROOT/scripts/run_local_qwen_codex.sh'
+export LOCAL_QWEN_MODEL_CATALOG_JSON='$DEV_ROOT/config/local_llm_stack/qwen_local_model_catalog.json'
+export LOCAL_QWEN_LOCAL_HARNESS_MCP='$DEV_ROOT/scripts/artifact_queue_mcp.py'
+export LOCAL_QWEN_LOCAL_HARNESS_TRUSTED_ROOTS='$DEV_ROOT:$SOURCE_ROOT'
+export PATH='$HOME/.cargo/bin':'$DEV_ROOT/bin':'$DEV_ROOT':'$DEV_ROOT/scripts':"\$PATH"
+EOF
+  cat > "$WORK_ROOT/README.md" <<EOF
+# Qwendex Dev Environment
+
+This folder is generated by \`scripts/qwendex_dev_env\`.
+
+- Dev root: \`$DEV_ROOT\`
+- Source root: \`$SOURCE_ROOT\`
+- State DB: \`$STATE_DB\`
+- Results: \`$RESULTS_ROOT\`
+- Codex home: \`$CODEX_HOME_DIR\`
+- Status file: \`$STATUS_FILE\`
+- Main Codex fallback: \`$MAIN_CODEX_BIN\`
+
+Use:
+
+\`\`\`bash
+source "$WORK_ROOT/env.sh"
+qwendex-dev status
+qwendex-dev open
+\`\`\`
+
+Developer workflow:
+
+\`\`\`bash
+qwendex-dev review
+qwendex-dev verify
+qwendex-dev diff
+qwendex-dev promote
+qwendex-dev stage
+qwendex-dev snapshot
+\`\`\`
+
+The \`codex\` wrapper first uses \`QWENDEX_DEV_CODEX_BIN\` or
+\`$DEV_CODEX_DEFAULT\` when present, then falls back to the main Codex binary.
+EOF
+}
+
+link_codex_identity() {
+  if [[ -d "$HOME/.codex/mcp-servers" && ! -e "$CODEX_HOME_DIR/mcp-servers" ]]; then
+    ln -s "$HOME/.codex/mcp-servers" "$CODEX_HOME_DIR/mcp-servers"
+  fi
+  if [[ -f "$HOME/.codex/auth.json" && ! -e "$CODEX_HOME_DIR/auth.json" ]]; then
+    ln -s "$HOME/.codex/auth.json" "$CODEX_HOME_DIR/auth.json"
+  fi
+  if [[ -f "$HOME/.codex/version.json" && ! -e "$CODEX_HOME_DIR/version.json" ]]; then
+    ln -s "$HOME/.codex/version.json" "$CODEX_HOME_DIR/version.json"
+  fi
+  if [[ -f "$HOME/.codex/installation_id" && ! -e "$CODEX_HOME_DIR/installation_id" ]]; then
+    cp "$HOME/.codex/installation_id" "$CODEX_HOME_DIR/installation_id"
+  fi
+}
+
+prepare() {
+  ensure_layout
+  write_codex_config
+  write_wrappers
+  write_env_files
+  link_codex_identity
+}
+
+summary_json() {
+  python3 - "$@" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+for raw in sys.argv[1:]:
+    path = Path(raw)
+    if not path.is_file():
+        print(f"{path}: missing")
+        continue
+    data = json.loads(path.read_text(encoding="utf-8"))
+    print(f"{data.get('command', path.name)}: {data.get('status')} - {data.get('summary')}")
+PY
+}
+
+cmd_env() {
+  prepare
+  cat "$WORK_ROOT/env.sh"
+}
+
+cmd_sync() {
+  sync_project
+  prepare
+  "$DEV_ROOT/scripts/qwendex" codex-status --write "$STATUS_FILE" --json > "$META_ROOT/codex_status_write.json"
+  printf 'Qwendex dev root ready: %s\n' "$DEV_ROOT"
+  printf 'Load env with: source %s\n' "$WORK_ROOT/env.sh"
+}
+
+cmd_status() {
+  prepare
+  "$DEV_ROOT/scripts/qwendex" check --json > "$META_ROOT/qwendex_check.json"
+  "$DEV_ROOT/scripts/qwendex" codex-status --write "$STATUS_FILE" --json > "$META_ROOT/codex_status_write.json"
+  "$DEV_ROOT/scripts/qwendex" codex-patch preflight --json > "$META_ROOT/codex_patch_preflight.json"
+  summary_json "$META_ROOT/qwendex_check.json" "$META_ROOT/codex_status_write.json" "$META_ROOT/codex_patch_preflight.json"
+}
+
+cmd_preflight() {
+  prepare
+  "$DEV_ROOT/scripts/qwendex" codex-status --write "$STATUS_FILE" --json > "$META_ROOT/codex_status_write.json"
+  "$DEV_ROOT/scripts/qwendex" codex-patch preflight --json > "$META_ROOT/codex_patch_preflight.json"
+  summary_json "$META_ROOT/codex_status_write.json" "$META_ROOT/codex_patch_preflight.json"
+}
+
+cmd_patch_codex() {
+  prepare
+  local source="${1:-$WORK_ROOT/codex-source/codex}"
+  "$DEV_ROOT/scripts/qwendex" codex-patch apply --source "$source" --json
+}
+
+cmd_shell() {
+  prepare
+  # shellcheck disable=SC1090
+  source "$WORK_ROOT/env.sh"
+  cd "$DEV_ROOT"
+  exec "${SHELL:-/bin/bash}"
+}
+
+cmd_open() {
+  prepare
+  # shellcheck disable=SC1090
+  source "$WORK_ROOT/env.sh"
+  "$DEV_ROOT/scripts/qwendex" codex-status --write "$STATUS_FILE" --json > "$META_ROOT/codex_status_write.json"
+  "$DEV_ROOT/bin/codex" --no-alt-screen --sandbox workspace-write -C "$DEV_ROOT" "$@"
+}
+
+cmd_tools() {
+  prepare
+  "$HOME/.cargo/bin/cargo" --version
+  "$HOME/.cargo/bin/rustfmt" --version
+  "$DEV_ROOT/bin/codex" --version
+}
+
+cmd_diff() {
+  prepare
+  local output_file="$META_ROOT/dev_to_source_rsync_diff.txt"
+  rsync -ain --checksum --omit-dir-times "${MANAGED_RSYNC_EXCLUDES[@]}" "$DEV_ROOT/" "$SOURCE_ROOT/" > "$output_file"
+  if [[ -s "$output_file" ]]; then
+    cat "$output_file"
+  else
+    printf 'No promotable differences from %s to %s.\n' "$DEV_ROOT" "$SOURCE_ROOT"
+  fi
+}
+
+cmd_promote() {
+  prepare
+  local dry_run=0
+  local delete=0
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --dry-run)
+        dry_run=1
+        ;;
+      --delete)
+        delete=1
+        ;;
+      *)
+        die "unknown promote option: $1"
+        ;;
+    esac
+    shift
+  done
+
+  local args=(-a --checksum --omit-dir-times)
+  if [[ "$delete" -eq 1 ]]; then
+    args+=(--delete)
+  fi
+  if [[ "$dry_run" -eq 1 ]]; then
+    args+=(-n -i)
+  fi
+
+  rsync "${args[@]}" "${MANAGED_RSYNC_EXCLUDES[@]}" "$DEV_ROOT/" "$SOURCE_ROOT/"
+  if [[ "$dry_run" -eq 1 ]]; then
+    return
+  fi
+  printf 'Promoted managed dev changes from %s to %s.\n' "$DEV_ROOT" "$SOURCE_ROOT"
+}
+
+cmd_lint() {
+  prepare
+  # shellcheck disable=SC1090
+  source "$WORK_ROOT/env.sh"
+  cd "$DEV_ROOT"
+  python3 -m py_compile scripts/qwendex_cli.py tests/smoke/test_qwendex_cli.py
+  bash -n scripts/qwendex_dev_env scripts/qwendex_testbench scripts/run_local_qwen_codex.sh
+  if python3 -m ruff --version >/dev/null 2>&1; then
+    python3 -m ruff check scripts/qwendex_cli.py tests/smoke/test_qwendex_cli.py --ignore E501
+  else
+    printf 'ruff unavailable; skipped ruff check.\n'
+  fi
+}
+
+cmd_test() {
+  prepare
+  # shellcheck disable=SC1090
+  source "$WORK_ROOT/env.sh"
+  cd "$DEV_ROOT"
+  python3 -m pytest -q tests/smoke/test_qwendex_cli.py
+}
+
+cmd_verify() {
+  prepare
+  cmd_lint
+  cmd_test
+  # shellcheck disable=SC1090
+  source "$WORK_ROOT/env.sh"
+  cd "$DEV_ROOT"
+  scripts/qwendex check --json > "$META_ROOT/qwendex_check.json"
+  scripts/qwendex doctor --json > "$META_ROOT/qwendex_doctor.json"
+  scripts/qwendex codex-status --write "$STATUS_FILE" --json > "$META_ROOT/codex_status_write.json"
+  scripts/qwendex codex-patch preflight --json > "$META_ROOT/codex_patch_preflight.json"
+  summary_json \
+    "$META_ROOT/qwendex_check.json" \
+    "$META_ROOT/qwendex_doctor.json" \
+    "$META_ROOT/codex_status_write.json" \
+    "$META_ROOT/codex_patch_preflight.json"
+}
+
+cmd_snapshot() {
+  prepare
+  local stamp
+  stamp="$(utc_stamp)"
+  local snap="$WORK_ROOT/snapshots/$stamp"
+  mkdir -p "$snap"
+  rsync -ain --checksum --omit-dir-times "${MANAGED_RSYNC_EXCLUDES[@]}" "$DEV_ROOT/" "$SOURCE_ROOT/" > "$snap/dev_to_source_rsync_diff.txt"
+  if source_is_git_repo; then
+    git -C "$SOURCE_ROOT" status --short > "$snap/source_git_status.txt"
+    git -C "$SOURCE_ROOT" diff --stat > "$snap/source_diff_stat.txt"
+  fi
+  cp "$WORK_ROOT/env.sh" "$snap/env.sh"
+  printf 'snapshot: %s\n' "$snap"
+}
+
+cmd_stage() {
+  local skip_verify=0
+  local dry_run=0
+  local promote_delete=0
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --skip-verify)
+        skip_verify=1
+        ;;
+      --dry-run)
+        dry_run=1
+        ;;
+      --delete)
+        promote_delete=1
+        ;;
+      *)
+        die "unknown stage option: $1"
+        ;;
+    esac
+    shift
+  done
+
+  source_is_git_repo || die "source root is not a git repo: $SOURCE_ROOT"
+  if [[ "$dry_run" -eq 1 ]]; then
+    cmd_promote --dry-run
+    return
+  fi
+
+  if [[ "$promote_delete" -eq 1 ]]; then
+    cmd_promote --delete
+  else
+    cmd_promote
+  fi
+  if [[ "$skip_verify" -eq 0 ]]; then
+    cmd_verify
+  fi
+  git -C "$SOURCE_ROOT" add -A "${MANAGED_GIT_PATHS[@]}"
+  git -C "$SOURCE_ROOT" status --short
+}
+
+cmd_review() {
+  prepare
+  cmd_status
+  printf '\nPromotable dev changes:\n'
+  cmd_diff
+  if source_is_git_repo; then
+    printf '\nTracked source status:\n'
+    git -C "$SOURCE_ROOT" status --short
+  fi
+}
+
+usage() {
+  cat <<EOF
+Qwendex Dev Environment
+
+Commands:
+  scripts/qwendex_dev_env sync
+  scripts/qwendex_dev_env env
+  scripts/qwendex_dev_env status
+  scripts/qwendex_dev_env review
+  scripts/qwendex_dev_env diff
+  scripts/qwendex_dev_env promote [--dry-run] [--delete]
+  scripts/qwendex_dev_env stage [--dry-run] [--skip-verify] [--delete]
+  scripts/qwendex_dev_env lint
+  scripts/qwendex_dev_env test
+  scripts/qwendex_dev_env verify
+  scripts/qwendex_dev_env snapshot
+  scripts/qwendex_dev_env preflight
+  scripts/qwendex_dev_env patch-codex [source]
+  scripts/qwendex_dev_env open [initial prompt...]
+  scripts/qwendex_dev_env shell
+  scripts/qwendex_dev_env tools
+
+Defaults:
+  QWENDEX_DEV_ROOT=$DEV_ROOT
+  QWENDEX_DEV_SOURCE_ROOT=$SOURCE_ROOT
+EOF
+}
+
+case "${1:-status}" in
+  sync)
+    cmd_sync
+    ;;
+  env)
+    cmd_env
+    ;;
+  status)
+    cmd_status
+    ;;
+  review)
+    cmd_review
+    ;;
+  diff)
+    cmd_diff
+    ;;
+  promote)
+    shift
+    cmd_promote "$@"
+    ;;
+  stage)
+    shift
+    cmd_stage "$@"
+    ;;
+  lint)
+    cmd_lint
+    ;;
+  test)
+    cmd_test
+    ;;
+  verify)
+    cmd_verify
+    ;;
+  snapshot)
+    cmd_snapshot
+    ;;
+  preflight)
+    cmd_preflight
+    ;;
+  patch-codex)
+    shift
+    cmd_patch_codex "$@"
+    ;;
+  open)
+    shift
+    cmd_open "$@"
+    ;;
+  shell)
+    cmd_shell
+    ;;
+  tools)
+    cmd_tools
+    ;;
+  help|--help|-h)
+    usage
+    ;;
+  *)
+    usage >&2
+    die "unknown command: $1"
+    ;;
+esac
