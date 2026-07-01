@@ -2,7 +2,7 @@
 
 ## Scope
 
-Qwendex 0.1.0-rc.2 stages a public boundary over the existing Codex/local-Qwen
+Qwendex 0.1.0-rc.3 stages a public boundary over the existing Codex/local-Qwen
 harness.
 
 ## Added
