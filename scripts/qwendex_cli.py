@@ -1179,6 +1179,21 @@ def resolve_route(
     }
     seat = "qwen" if should_prefer_local and local_qwen.get("available") else policy["fallback_seat"]
     disabled_by_toggle = local_intent and not local_status["enabled"]
+    route_local_status = dict(local_status)
+    if should_prefer_local:
+        route_local_state = "ready" if local_qwen.get("available") else "unavailable"
+        route_local_usable = route_local_state == "ready" and seat == "qwen"
+        route_local_status.update({
+            "available": bool(local_qwen.get("available")),
+            "usable": route_local_usable,
+            "local_available": bool(local_qwen.get("available")),
+            "local_usable": route_local_usable,
+            "local_state": route_local_state,
+            "indicator": local_indicator(config, True, route_local_state),
+            "probe": local_qwen,
+            "source": local_qwen.get("source"),
+            "reason": local_qwen.get("reason"),
+        })
     return {
         "requested_seat": requested,
         "seat": seat,
@@ -1192,7 +1207,7 @@ def resolve_route(
         "task_class": task_class,
         "reason": "local_qwen_available" if seat == "qwen" else ("local_subagents_disabled" if disabled_by_toggle else "fallback_seat"),
         "local_qwen": local_qwen,
-        "local_subagents": {**local_status, "available": local_qwen.get("available") if should_prefer_local else local_status.get("available"), "usable": bool(local_status.get("enabled")) and seat == "qwen"},
+        "local_subagents": route_local_status,
         "routing": policy,
     }
 
