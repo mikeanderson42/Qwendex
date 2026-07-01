@@ -394,7 +394,8 @@ def test_qwendex_testbench_public_surface_is_visible_and_sandboxed():
     assert "QWENDEX_BENCH_PROJECT" in text
     assert "QWENDEX_BENCH_ROOT" in text
     assert "QWENDEX_CODEX_STATUS_FILE" in text
-    assert "Local: [Ready]" in text
+    assert "$QWENDEX\" codex-status --plain" in text
+    assert "Agent Manager: [Manager Mode] | Kaveman: [N] | Local: [Ready]" not in text
     assert "Local: [Y]" not in text
     assert "QWENDEX_MCP_TRUSTED_ROOTS" in text
     assert "codex-patch preflight" in text
@@ -650,6 +651,41 @@ def test_qwendex_codex_status_tracks_manager_state_and_writes_surface_file(tmp_p
     assert toggled["data"]["mode"] == "off"
     written_after_toggle = json.loads(status_file.read_text(encoding="utf-8"))
     assert written_after_toggle["text"] == "{Qwendex} Agent Manager: [Off] | Kaveman: [Y] | Local: [Ready] (Alt+M/K/L)"
+
+
+def test_qwendex_codex_status_warns_on_state_db_mismatch(tmp_path):
+    status_file = tmp_path / "codex_status.json"
+    env_a = {
+        "QWENDEX_STATE_DB": str(tmp_path / "state-a.sqlite"),
+        "QWENDEX_CODEX_STATUS_FILE": str(status_file),
+        "QWENDEX_FORCE_LOCAL_QWEN_AVAILABLE": "1",
+    }
+    env_b = {
+        "QWENDEX_STATE_DB": str(tmp_path / "state-b.sqlite"),
+        "QWENDEX_CODEX_STATUS_FILE": str(status_file),
+        "QWENDEX_FORCE_LOCAL_QWEN_AVAILABLE": "1",
+    }
+
+    json_result("manager", "mode", "--set", "manager", "--json", env=env_a)
+    json_result("manager", "kaveman", "--set", "on", "--json", env=env_a)
+    json_result("codex-status", "--write", str(status_file), "--json", env=env_a)
+
+    mismatch = json_result("codex-status", "--json", env=env_b)
+    diagnostics = mismatch["data"]["status_file_diagnostics"]
+
+    assert mismatch["data"]["text"] == "{Qwendex} Agent Manager: [Auto] | Kaveman: [N] | Local: [Ready] (Alt+M/K/L)"
+    assert diagnostics["status_file_state_mismatch"] is True
+    assert diagnostics["status_file_state_db"] == env_a["QWENDEX_STATE_DB"]
+    assert mismatch["data"]["warnings"]
+    assert "codex-status --write" in " ".join(mismatch["data"]["next_actions"])
+
+    refreshed = json_result("codex-status", "--write", str(status_file), "--json", env=env_b)
+    written = json.loads(status_file.read_text(encoding="utf-8"))
+
+    assert refreshed["data"]["status_file_diagnostics"]["status_file_state_mismatch"] is True
+    assert written["status_file_diagnostics"]["status_file_state_mismatch"] is False
+    assert written["status_file_diagnostics"]["status_file_state_db"] == env_b["QWENDEX_STATE_DB"]
+    assert written["warnings"] == []
 
 
 def test_qwendex_codex_status_reports_unusable_local_state(tmp_path):

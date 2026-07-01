@@ -146,7 +146,6 @@ codex_start_banner() {
   printf '\n%s\n' "$title"
   printf 'Qwendex mode: %s\n' "$mode"
   printf 'Qwendex model: %s\n' "$model"
-  printf '{Qwendex} Agent Manager: [Manager Mode] | Kaveman: [N] | Local: [Ready] (Alt+M/K/L)\n'
   printf 'Project: %s\n' "$PROJECT_ROOT"
   printf 'Qwendex: %s\n' "$QWENDEX_ROOT"
   printf 'State: %s\n' "$QWENDEX_STATE_DB"
