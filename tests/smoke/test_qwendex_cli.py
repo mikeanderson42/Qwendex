@@ -741,6 +741,10 @@ def test_qwendex_route_command_and_auto_exec_prefer_local_qwen_when_available(tm
     assert route["data"]["seat"] == "qwen"
     assert route["data"]["requested_seat"] == "auto"
     assert route["data"]["local_qwen"]["available"] is True
+    assert route["data"]["local_subagents"]["local_state"] == "ready"
+    assert route["data"]["local_subagents"]["local_available"] is True
+    assert route["data"]["local_subagents"]["local_usable"] is True
+    assert route["data"]["local_subagents"]["indicator"] == "(Alt+L) Local: [Ready]"
     assert route["data"]["routing"]["prefer_local_qwen_when_available"] is True
     assert exec_data["data"]["seat"] == "qwen"
     assert exec_data["data"]["routing"]["seat"] == "qwen"
@@ -760,6 +764,10 @@ def test_qwendex_auto_route_falls_back_to_primary_when_local_qwen_is_unavailable
     assert route["data"]["local_qwen"]["available"] is False
     assert route["data"]["local_qwen_eligible"] is True
     assert route["data"]["local_subagents"]["enabled"] is True
+    assert route["data"]["local_subagents"]["local_state"] == "unavailable"
+    assert route["data"]["local_subagents"]["local_available"] is False
+    assert route["data"]["local_subagents"]["local_usable"] is False
+    assert route["data"]["local_subagents"]["indicator"] == "(Alt+L) Local: [Unavailable]"
     assert route["data"]["local_subagents"]["usable"] is False
     assert exec_data["data"]["seat"] == "primary"
     assert receipt["seat"] == "primary"
@@ -784,6 +792,9 @@ def test_qwendex_route_unavailable_probe_keeps_local_intent_and_falls_back_prima
     assert route["data"]["local_qwen"]["reason"] == "forced_unavailable"
     assert route["data"]["local_subagents"]["enabled"] is True
     assert route["data"]["local_subagents"]["available"] is False
+    assert route["data"]["local_subagents"]["local_state"] == "unavailable"
+    assert route["data"]["local_subagents"]["local_available"] is False
+    assert route["data"]["local_subagents"]["local_usable"] is False
     assert route["data"]["local_subagents"]["usable"] is False
 
 
