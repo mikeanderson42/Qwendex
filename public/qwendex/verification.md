@@ -12,8 +12,29 @@ scripts/qwendex llmstack restart bridge --dry-run --json
 scripts/qwendex eval --json
 ```
 
+Advisory health is for daily operator visibility and strict health is for
+staging, release, and public claims. Advisory mode may keep `check` and
+`doctor` passing while surfacing manager warnings and repair hints; strict mode
+must fail on those issues. Require strict receipts before making
+release-readiness claims.
+
 `scripts/qwendex eval --json` runs the full offline harness suite by default.
 Use `--case exact_marker` only for a quick marker probe.
+
+Development worktree gates:
+
+```bash
+qwendex-dev verify --tier quick
+qwendex-dev verify --tier full
+qwendex-dev verify --tier release
+```
+
+`quick` runs the dev lint and smoke-test path, then records Qwendex `check`,
+`doctor`, Codex status writing, and Codex patch preflight receipts under the
+dev results tree. `full` adds public JSON config validation, the offline
+Qwendex eval suite, harness gate, and local harness eval receipts. `release`
+adds the live launcher check and writes the release summary; use it only when
+the local stack is intentionally running.
 
 Harness gates:
 

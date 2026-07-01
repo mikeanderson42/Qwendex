@@ -96,6 +96,13 @@ scripts/qwendex check --json
 scripts/qwendex doctor --json
 ```
 
+Qwendex separates health output into advisory and strict modes for `check` and
+`doctor`. Advisory mode is for daily operator visibility:
+it can report Manager Mode warnings and repair hints without blocking the whole
+surface check. Strict mode is for staging and release gates: missing public
+surface, public-doc audit failures, and Manager Mode health issues must fail the
+command.
+
 Inspect routing and run the offline harness:
 
 ```bash
@@ -130,6 +137,30 @@ scripts/qwendex manager status --json
 Mode, Qwendex expects at least one registered active lane. Set the policy to
 `disabled` only when intentionally opting out of that requirement.
 
+Manager status semantics are:
+
+- `standby`: manager delegation is off, not required, or waiting for an
+  operator-selected lane.
+- `warning`: advisory issues exist, but no writer lane or required deployment
+  contract is blocked.
+- `blocked`: strict health was requested and a required Manager Mode lane is
+  missing, or an active writer lane requires integration or an explicit stop.
+
+Connected public recovery commands are `manager close`, `manager close-stale`,
+`manager repair --safe`, and `manager status`. `manager repair --safe` closes
+stale read-only lanes and harmless empty stale writer lanes; stale writer lanes
+with artifacts, receipt paths, exact files, or non-pending validation remain
+open as advisory warnings in daily health and as blockers in strict health, with
+an explicit `manager close --agent-id ... --reason ... --json` command for
+operator review.
+
+Local routing also separates intent from availability. `Local: [Ready]` means
+local subagents may be considered and the configured `qwen-local` alias is
+available. `Local: [Off]` means local subagents are intentionally off even if
+the endpoint is healthy. `Local: [Unavailable]` means intent remains on, but the
+probe did not confirm a usable local route; Qwendex falls back to the configured
+primary seat.
+
 ## Codex TUI Integration
 
 Qwendex works without patching Codex. The native footer and hotkeys require a
@@ -146,7 +177,7 @@ scripts/qwendex codex-patch apply --source /path/to/codex --json
 The patched TUI can show:
 
 ```text
-{Qwendex} Agent Manager: [Manager Mode] | Kaveman: [N] | Local: [Y] (Alt+M/K/L)
+{Qwendex} Agent Manager: [Manager Mode] | Kaveman: [N] | Local: [Ready] (Alt+M/K/L)
 ```
 
 Unknown Codex versions or moved source anchors block preflight instead of
@@ -173,6 +204,13 @@ qwendex-dev verify --tier quick
 Use `qwendex-dev verify --tier full` for docs, routing, manager mode,
 bridge/parser behavior, shared contracts, or release-adjacent changes. Use
 `qwendex-dev verify --tier release` before making release-readiness claims.
+
+`qwendex-dev verify --tier quick` runs lint, smoke tests, `scripts/qwendex
+check`, `scripts/qwendex doctor`, Codex status writing, and Codex patch
+preflight. `full` adds JSON config validation, the offline Qwendex eval suite,
+and local harness eval/gate receipts. `release` includes the live launcher check
+and writes the release summary; run it only when the local stack is
+intentionally available.
 
 ## Verification And Release Gates
 

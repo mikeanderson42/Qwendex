@@ -531,10 +531,20 @@ def manager_ui_indicator(config: Mapping[str, Any], mode: str) -> str:
     return f"({shortcut}) Agent Manager: [ {profile['label']} ]"
 
 
-def local_indicator(config: Mapping[str, Any], enabled: bool) -> str:
+def local_state_label(local_state: str) -> str:
+    return {
+        "ready": "Ready",
+        "off": "Off",
+        "unavailable": "Unavailable",
+        "unknown": "Unavailable",
+    }.get(local_state, "Unavailable")
+
+
+def local_indicator(config: Mapping[str, Any], enabled: bool, local_state: str | None = None) -> str:
     local_cfg = config.get("orchestration", {}).get("local_subagents", {})
     shortcut = local_cfg.get("shortcut", "Alt+L") if isinstance(local_cfg, Mapping) else "Alt+L"
-    return f"({shortcut}) Local: [{'Y' if enabled else 'N'}]"
+    state = local_state or ("ready" if enabled else "off")
+    return f"({shortcut}) Local: [{local_state_label(state)}]"
 
 
 def kaveman_default_enabled(config: Mapping[str, Any]) -> bool:
@@ -941,7 +951,11 @@ def local_subagent_status(
             "enabled": False,
             "available": False,
             "usable": False,
-            "indicator": local_indicator(config, False),
+            "local_enabled": False,
+            "local_available": False,
+            "local_usable": False,
+            "local_state": "off",
+            "indicator": local_indicator(config, False, "off"),
             "source": "state",
             "reason": "toggle_off",
             "model": policy["local_model"],
@@ -955,11 +969,21 @@ def local_subagent_status(
         "reason": "enabled_not_probed",
     }
     available = probe_result.get("available")
+    if available is True:
+        local_state = "ready"
+    elif available is False:
+        local_state = "unavailable"
+    else:
+        local_state = "unknown"
     return {
         "enabled": True,
         "available": available,
         "usable": bool(available),
-        "indicator": local_indicator(config, True),
+        "local_enabled": True,
+        "local_available": available,
+        "local_usable": bool(available),
+        "local_state": local_state,
+        "indicator": local_indicator(config, True, local_state),
         "source": probe_result.get("source", "not_probed"),
         "reason": probe_result.get("reason", ""),
         "model": probe_result.get("model", policy["local_model"]),
@@ -1484,12 +1508,13 @@ def manager_deploy_policy(config: Mapping[str, Any]) -> str:
 def manager_deployment_contract(mode: str, policy: str, active_count: int) -> dict[str, Any]:
     required = normalize_manager_mode(mode) == "manager" and policy == "auto"
     healthy = not required or active_count > 0
+    status = "ready" if required and healthy else "standby" if required else "ready"
     return {
         "policy": policy,
         "required": required,
         "active_count": active_count,
         "healthy": healthy,
-        "status": "pass" if healthy else "blocked",
+        "status": status,
         "summary": (
             "Manager Mode has active agent lanes."
             if required and healthy
@@ -1502,7 +1527,18 @@ def manager_deployment_contract(mode: str, policy: str, active_count: int) -> di
     }
 
 
-def manager_health_issues(config: Mapping[str, Any], sessions: list[dict[str, Any]], *, mode: str, stale_after_minutes: int) -> list[str]:
+def normalize_health_mode(value: str | None) -> str:
+    return "strict" if str(value or "").strip().lower() == "strict" else "advisory"
+
+
+def manager_health_summary(
+    config: Mapping[str, Any],
+    sessions: list[dict[str, Any]],
+    *,
+    mode: str,
+    stale_after_minutes: int,
+    health_mode: str = "advisory",
+) -> dict[str, Any]:
     summary = summarize_agent_sessions(sessions, stale_after_minutes=stale_after_minutes)
     contract = manager_deployment_contract(
         normalize_manager_mode(mode),
@@ -1510,12 +1546,109 @@ def manager_health_issues(config: Mapping[str, Any], sessions: list[dict[str, An
         int(summary["active_subagents"]["count"]),
     )
     issues: list[str] = []
+    warnings: list[str] = []
     if summary["stale_writer_sessions"]["count"]:
         ids = ", ".join(str(session.get("agent_id")) for session in summary["stale_writer_sessions"]["agents"])
-        issues.append(f"stale manager writer sessions require integration or explicit stop: {ids}")
-    if contract["status"] != "pass":
+        message = f"stale manager writer sessions require integration or explicit stop: {ids}"
+        if normalize_health_mode(health_mode) == "strict":
+            issues.append(message)
+        else:
+            warnings.append(message)
+    if contract["status"] == "standby":
+        message = contract["summary"]
+        if normalize_health_mode(health_mode) == "strict":
+            issues.append(message)
+        else:
+            warnings.append(message)
+    if contract["status"] == "blocked":
+        issues.append(contract["summary"])
+    if issues:
+        status = "blocked"
+    elif warnings:
+        status = "warning" if summary["stale_writer_sessions"]["count"] else "standby"
+    else:
+        status = contract["status"]
+    return {
+        "status": status,
+        "health_mode": normalize_health_mode(health_mode),
+        "issues": issues,
+        "warnings": warnings,
+        "deployment_contract": contract,
+        "repair_command": "scripts/qwendex manager repair --safe --json",
+    }
+
+
+def manager_health_issues(config: Mapping[str, Any], sessions: list[dict[str, Any]], *, mode: str, stale_after_minutes: int) -> list[str]:
+    health = manager_health_summary(config, sessions, mode=mode, stale_after_minutes=stale_after_minutes, health_mode="strict")
+    issues = list(health["issues"])
+    contract = health["deployment_contract"]
+    if contract["status"] not in {"ready"} and contract["summary"] not in issues:
         issues.append(contract["summary"])
     return issues
+
+
+def manager_session_safe_repairable(session: Mapping[str, Any]) -> bool:
+    context_packet = session.get("context_packet", {})
+    return (
+        not manager_session_is_read_only(session)
+        and not session.get("artifacts")
+        and not session.get("close_receipt")
+        and not context_packet.get("receipt_path")
+        and not context_packet.get("exact_files")
+        and str(session.get("validation_status") or "pending") == "pending"
+    )
+
+
+def repair_manager_sessions(
+    conn: sqlite3.Connection,
+    *,
+    stale_after_minutes: int,
+    now: str,
+    safe: bool,
+) -> dict[str, Any]:
+    rows = conn.execute("SELECT * FROM qwendex_agent_sessions WHERE status = 'active'").fetchall()
+    closed_read_only: list[dict[str, Any]] = []
+    closed_writers: list[dict[str, Any]] = []
+    manual_close: list[dict[str, Any]] = []
+    for row in rows:
+        session = row_to_agent_session(row)
+        if not session or not manager_session_is_stale(session, stale_after_minutes=stale_after_minutes):
+            continue
+        if manager_session_is_read_only(session):
+            reason = "stale"
+        elif safe and manager_session_safe_repairable(session):
+            reason = "safe_stale_repair"
+        else:
+            manual_close.append({
+                "agent_id": session.get("agent_id"),
+                "lane": session.get("lane"),
+                "write_surface": session.get("write_surface"),
+                "command": f"scripts/qwendex manager close --agent-id {session.get('agent_id')} --reason operator_reviewed_stale --json",
+            })
+            continue
+        close_receipt = make_id("close")
+        conn.execute(
+            "UPDATE qwendex_agent_sessions SET status = 'closed', updated_at = ?, stop_reason = ?, close_receipt = ? WHERE agent_id = ?",
+            (now, reason, close_receipt, session["agent_id"]),
+        )
+        updated = conn.execute("SELECT * FROM qwendex_agent_sessions WHERE agent_id = ?", (session["agent_id"],)).fetchone()
+        closed = row_to_agent_session(updated) or {}
+        if reason == "safe_stale_repair":
+            closed_writers.append(closed)
+        else:
+            closed_read_only.append(closed)
+    conn.commit()
+    return {
+        "safe": safe,
+        "closed_count": len(closed_read_only) + len(closed_writers),
+        "closed_read_only_count": len(closed_read_only),
+        "closed_writer_count": len(closed_writers),
+        "manual_close_count": len(manual_close),
+        "closed_read_only": closed_read_only,
+        "closed_writers": closed_writers,
+        "manual_close": manual_close,
+        "stale_after_minutes": max(stale_after_minutes, 5),
+    }
 
 
 def high_value_add_lines(local_status: Mapping[str, Any], *, release_risk: str = "medium") -> list[str]:
@@ -1620,6 +1753,7 @@ def manager_mode_payload(
     kaveman_enabled: bool = False,
     legacy_mode: str = "",
     sessions: list[dict[str, Any]] | None = None,
+    health_mode: str = "advisory",
 ) -> dict[str, Any]:
     profile = manager_mode_profile(config, mode)
     summary = summarize_agent_sessions(sessions or [], stale_after_minutes=stale_after_minutes)
@@ -1677,7 +1811,15 @@ def manager_mode_payload(
         data["manager_deploy_policy"],
         int(data["active_subagents"]["count"]),
     )
-    if data["stale_writer_sessions"]["count"]:
+    health = manager_health_summary(
+        config,
+        sessions or [],
+        mode=profile["mode"],
+        stale_after_minutes=stale_after_minutes,
+        health_mode=health_mode,
+    )
+    data["manager_health"] = health
+    if data["stale_writer_sessions"]["count"] and normalize_health_mode(health_mode) == "strict":
         data["deployment_contract"] = {
             **data["deployment_contract"],
             "healthy": False,
@@ -1693,10 +1835,10 @@ def manager_mode_payload(
     return data
 
 
-def manager_status_surface_text(label: str, local_enabled: bool, kaveman_enabled: bool) -> str:
+def manager_status_surface_text(label: str, local_state: str, kaveman_enabled: bool) -> str:
     return (
         f"{{Qwendex}} Agent Manager: [{label}] | Kaveman: [{'Y' if kaveman_enabled else 'N'}] "
-        f"| Local: [{'Y' if local_enabled else 'N'}] (Alt+M/K/L)"
+        f"| Local: [{local_state_label(local_state)}] (Alt+M/K/L)"
     )
 
 
@@ -1708,14 +1850,10 @@ def codex_status_payload(config: Mapping[str, Any], *, write_path: Path | None =
         local_enabled = current_local_enabled(config, conn)
         kaveman_enabled = current_kaveman_enabled(config, conn)
         local_status = local_subagent_status(config, enabled=local_enabled, env=os.environ, probe=True)
-        if local_enabled and not local_status.get("usable"):
-            set_manager_setting(conn, "local_subagents_enabled", False)
-            conn.commit()
-            local_status = local_subagent_status(config, enabled=False, env=os.environ, probe=False)
     profile = manager_mode_profile(config, mode)
     text = manager_status_surface_text(
         profile["label"],
-        bool(local_status.get("enabled")) and bool(local_status.get("usable")),
+        str(local_status.get("local_state") or "unknown"),
         kaveman_enabled,
     )
     data = {
@@ -1729,6 +1867,7 @@ def codex_status_payload(config: Mapping[str, Any], *, write_path: Path | None =
         "local_enabled": bool(local_status.get("enabled")),
         "local_available": local_status.get("available"),
         "local_usable": bool(local_status.get("usable")),
+        "local_state": local_status.get("local_state"),
         "state_db": str(state_db_path(config)),
         "status_file_env": QWENDEX_CODEX_STATUS_FILE_ENV,
     }
@@ -1929,7 +2068,7 @@ impl ChatWidget {{
                     """            StatusSurfacePreviewItem::TaskProgress => "Tasks 0/0",
 """,
                     """            StatusSurfacePreviewItem::TaskProgress => "Tasks 0/0",
-            StatusSurfacePreviewItem::QwendexManager => "{Qwendex} Agent Manager: [Manager Mode] | Kaveman: [N] | Local: [Y] (Alt+M/K/L)",
+            StatusSurfacePreviewItem::QwendexManager => "{Qwendex} Agent Manager: [Manager Mode] | Kaveman: [N] | Local: [Ready] (Alt+M/K/L)",
 """,
                 ),
                 (
@@ -2748,10 +2887,13 @@ def llmstack_public_contract() -> dict[str, Any]:
 
 
 def command_check(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, Any]:
+    health_mode = normalize_health_mode(getattr(args, "health_mode", "advisory"))
     surface = required_surface_check()
     artifacts = [path for path in REQUIRED_SURFACE_FILES if (ROOT / path).exists()]
     status = "pass" if surface["status"] == "pass" else "fail"
     manager_issues: list[str] = []
+    manager_warnings: list[str] = []
+    manager_health: dict[str, Any] = {}
     with connect_state(config) as conn:
         mode = current_manager_mode(config, conn)
         local_status = local_subagent_status(config, enabled=current_local_enabled(config, conn), env=os.environ, probe=False)
@@ -2759,7 +2901,15 @@ def command_check(args: argparse.Namespace, config: dict[str, Any]) -> dict[str,
         reconcile_stale_manager_sessions(conn, stale_after_minutes=stale_after, now=utc_now())
         rows = conn.execute("SELECT * FROM qwendex_agent_sessions ORDER BY updated_at DESC").fetchall()
         sessions = [session for row in rows if (session := row_to_agent_session(row))]
-        manager_issues = manager_health_issues(config, sessions, mode=mode, stale_after_minutes=stale_after)
+        manager_health = manager_health_summary(
+            config,
+            sessions,
+            mode=mode,
+            stale_after_minutes=stale_after,
+            health_mode=health_mode,
+        )
+        manager_issues = list(manager_health["issues"])
+        manager_warnings = list(manager_health["warnings"])
     if manager_issues:
         status = "fail"
     manager_estimate = manager_self_estimate(
@@ -2772,13 +2922,29 @@ def command_check(args: argparse.Namespace, config: dict[str, Any]) -> dict[str,
     return stable_envelope(
         command="check",
         status=status,
-        summary="Qwendex surface is ready." if status == "pass" else "Qwendex surface is incomplete.",
+        summary=(
+            "Qwendex surface is ready."
+            if status == "pass" and not manager_warnings
+            else "Qwendex surface is ready with advisory warnings."
+            if status == "pass"
+            else "Qwendex surface is incomplete."
+        ),
         artifacts=artifacts,
-        next_actions=[] if status == "pass" else ["Run scripts/qwendex doctor --json"],
+        next_actions=(
+            [manager_health["repair_command"]]
+            if manager_warnings
+            else []
+            if status == "pass"
+            else ["Run scripts/qwendex doctor --health-mode strict --json"]
+        ),
         errors=[*surface["missing"], *manager_issues],
         data={
+            "manager_health_mode": health_mode,
+            "health_mode": health_mode,
+            "warnings": manager_warnings,
             "surface": surface,
-            "manager_health_issues": manager_issues,
+            "manager_health_issues": [*manager_issues, *manager_warnings],
+            "manager_health": manager_health,
             "default_seat": config["default_seat"],
             "routing": routing_policy(config),
             "manager_estimate": manager_estimate,
@@ -2788,6 +2954,7 @@ def command_check(args: argparse.Namespace, config: dict[str, Any]) -> dict[str,
 
 
 def command_doctor(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, Any]:
+    health_mode = normalize_health_mode(getattr(args, "health_mode", "advisory"))
     surface = required_surface_check()
     docs = public_docs_audit(PUBLIC_DOC_DIR)
     critical = list(surface["missing"])
@@ -2801,6 +2968,8 @@ def command_doctor(args: argparse.Namespace, config: dict[str, Any]) -> dict[str
     artifacts.extend(path for path in REQUIRED_SURFACE_FILES if (ROOT / path).exists())
     status = "pass" if not critical else "fail"
     manager_issues: list[str] = []
+    manager_warnings: list[str] = []
+    manager_health: dict[str, Any] = {}
     with connect_state(config) as conn:
         mode = current_manager_mode(config, conn)
         local_status = local_subagent_status(config, enabled=current_local_enabled(config, conn), env=os.environ, probe=False)
@@ -2808,7 +2977,15 @@ def command_doctor(args: argparse.Namespace, config: dict[str, Any]) -> dict[str
         reconcile_stale_manager_sessions(conn, stale_after_minutes=stale_after, now=utc_now())
         rows = conn.execute("SELECT * FROM qwendex_agent_sessions ORDER BY updated_at DESC").fetchall()
         sessions = [session for row in rows if (session := row_to_agent_session(row))]
-        manager_issues = manager_health_issues(config, sessions, mode=mode, stale_after_minutes=stale_after)
+        manager_health = manager_health_summary(
+            config,
+            sessions,
+            mode=mode,
+            stale_after_minutes=stale_after,
+            health_mode=health_mode,
+        )
+        manager_issues = list(manager_health["issues"])
+        manager_warnings = list(manager_health["warnings"])
     critical.extend(manager_issues)
     status = "pass" if not critical else "fail"
     manager_estimate = manager_self_estimate(
@@ -2821,13 +2998,29 @@ def command_doctor(args: argparse.Namespace, config: dict[str, Any]) -> dict[str
     return stable_envelope(
         command="doctor",
         status=status,
-        summary="Qwendex doctor found no critical issues." if status == "pass" else "Qwendex doctor found critical issues.",
+        summary=(
+            "Qwendex doctor found no critical issues."
+            if status == "pass" and not manager_warnings
+            else "Qwendex doctor found advisory warnings."
+            if status == "pass"
+            else "Qwendex doctor found critical issues."
+        ),
         artifacts=artifacts,
-        next_actions=["Run scripts/qwendex eval --json"] if status == "pass" else ["Repair listed critical issues."],
+        next_actions=(
+            [manager_health["repair_command"]]
+            if manager_warnings
+            else ["Run scripts/qwendex eval --json"]
+            if status == "pass"
+            else ["Repair listed critical issues."]
+        ),
         errors=critical,
         data={
+            "manager_health_mode": health_mode,
+            "health_mode": health_mode,
+            "warnings": manager_warnings,
             "critical_issues": critical,
-            "manager_health_issues": manager_issues,
+            "manager_health_issues": [*manager_issues, *manager_warnings],
+            "manager_health": manager_health,
             "surface": surface,
             "public_docs": docs,
             "config": {
@@ -3698,7 +3891,7 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
             data["state_db"] = str(state_db_path(config))
             data["codex_status_file"] = sync_codex_status_file_from_env(config)
             data["stale_reconciliation"] = reconciliation
-            contract_status = data["deployment_contract"]["status"]
+            contract_status = data["manager_health"]["status"]
             mode_changed = bool(args.toggle or args.cycle or args.set)
             status = "pass" if mode_changed else contract_status
             return stable_envelope(
@@ -3711,7 +3904,7 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
                 ),
                 next_actions=(
                     ["Spawn/register at least one manager lane or set orchestration.manager_deploy_policy to disabled."]
-                    if contract_status == "blocked"
+                    if contract_status in {"blocked", "warning"}
                     else data["next_actions"]
                 ),
                 data=data,
@@ -3761,11 +3954,6 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
             set_manager_setting(conn, "local_subagents_enabled", enabled)
             conn.commit()
             local_status = local_subagent_status(config, enabled=enabled, env=os.environ, probe=True)
-            if enabled and not local_status.get("usable"):
-                enabled = False
-                set_manager_setting(conn, "local_subagents_enabled", False)
-                conn.commit()
-                local_status = local_subagent_status(config, enabled=False, env=os.environ, probe=False)
             rows = conn.execute("SELECT * FROM qwendex_agent_sessions ORDER BY updated_at DESC LIMIT ?", (args.limit,)).fetchall()
             sessions = [row_to_agent_session(row) for row in rows]
             data = manager_mode_payload(
@@ -3813,14 +4001,14 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
             data["agent_sessions"] = [session for session in sessions if session]
             data["state_db"] = str(state_db_path(config))
             data["stale_reconciliation"] = reconciliation
-            status = data["deployment_contract"]["status"]
+            status = data["manager_health"]["status"]
             return stable_envelope(
                 command="manager",
                 status=status,
                 summary=f"Loaded {len(data['agent_sessions'])} Qwendex manager sessions.",
                 next_actions=(
-                    ["Spawn/register at least one manager lane or set orchestration.manager_deploy_policy to disabled."]
-                    if status == "blocked"
+                    [data["manager_health"]["repair_command"]]
+                    if status in {"blocked", "warning"}
                     else data["next_actions"]
                 ),
                 data=data,
@@ -3929,6 +4117,31 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
                 status="pass",
                 summary=f"Closed {reconciliation['closed_count']} stale Qwendex manager sessions.",
                 data=reconciliation,
+            )
+        if args.action == "repair":
+            if not args.safe:
+                return stable_envelope(
+                    command="manager",
+                    status="blocked",
+                    summary="Manager repair requires --safe.",
+                    errors=["missing --safe"],
+                )
+            repair = repair_manager_sessions(conn, stale_after_minutes=stale_after, now=now, safe=True)
+            repair["closed"] = [*repair["closed_read_only"], *repair["closed_writers"]]
+            repair["skipped_writer_count"] = repair["manual_close_count"]
+            repair["skipped_writers"] = repair["manual_close"]
+            errors = [item["command"] for item in repair["manual_close"]]
+            return stable_envelope(
+                command="manager",
+                status="blocked" if errors else "pass",
+                summary=(
+                    "Manager repair closed safe stale sessions; manual writer review remains."
+                    if errors
+                    else "Manager repair closed safe stale sessions."
+                ),
+                errors=errors,
+                next_actions=errors,
+                data=repair,
             )
     return stable_envelope(command="manager", status="blocked", summary=f"Unknown manager action: {args.action}", errors=[args.action])
 
@@ -4217,14 +4430,14 @@ def command_manager(args: argparse.Namespace, config: dict[str, Any]) -> dict[st
     )
     data["close_stale"] = args.close_stale
     data["stale_reconciliation"] = reconciliation
-    status = data["deployment_contract"]["status"]
+    status = data["manager_health"]["status"]
     return stable_envelope(
         command="manager",
         status=status,
         summary=f"Qwendex manager mode is {data['label']}.",
         next_actions=(
-            ["Spawn/register at least one manager lane or set orchestration.manager_deploy_policy to disabled."]
-            if status == "blocked"
+            [data["manager_health"]["repair_command"]]
+            if status in {"blocked", "warning"}
             else data["next_actions"]
         ),
         data=data,
@@ -4285,9 +4498,11 @@ def command_line() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     check = sub.add_parser("check")
+    check.add_argument("--health-mode", choices=["advisory", "strict"], default="advisory")
     check.add_argument("--json", action="store_true")
 
     doctor = sub.add_parser("doctor")
+    doctor.add_argument("--health-mode", choices=["advisory", "strict"], default="advisory")
     doctor.add_argument("--json", action="store_true")
 
     for name in ("up", "down", "restart"):
@@ -4414,7 +4629,7 @@ def command_line() -> argparse.ArgumentParser:
     learn.add_argument("--json", action="store_true")
 
     manager = sub.add_parser("manager")
-    manager.add_argument("action", nargs="?", choices=["status", "assign", "heartbeat", "close", "close-stale", "mode", "estimate", "kaveman", "local"])
+    manager.add_argument("action", nargs="?", choices=["status", "assign", "heartbeat", "close", "close-stale", "repair", "mode", "estimate", "kaveman", "local"])
     manager.add_argument("--mode", choices=["manual", "off", "auto", "lite", "medium", "heavy", "manager", "manager_only"], default="")
     manager.add_argument("--set", default="")
     manager.add_argument("--cycle", action="store_true")
@@ -4423,6 +4638,7 @@ def command_line() -> argparse.ArgumentParser:
     manager.add_argument("--max-subagents", type=int, default=0)
     manager.add_argument("--stale-after-minutes", type=int, default=0)
     manager.add_argument("--close-stale", action="store_true")
+    manager.add_argument("--safe", action="store_true")
     manager.add_argument("--agent-id", default="")
     manager.add_argument("--lane", default="")
     manager.add_argument("--task-id", default="")
@@ -4517,7 +4733,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def exit_code(data: Mapping[str, Any]) -> int:
-    return 0 if data.get("status") in {"pass", "ready"} else 1
+    return 0 if data.get("status") in {"pass", "ready", "standby", "warning"} else 1
 
 
 def main(argv: list[str] | None = None) -> int:

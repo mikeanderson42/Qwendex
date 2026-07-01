@@ -3,8 +3,9 @@
 ## 0.1.0-rc.2
 
 - Tightened Manager Mode lifecycle checks so stale read-only lanes are
-  reconciled during status refreshes, while stale writer lanes remain blocked
-  until the operator integrates or explicitly stops them.
+  reconciled during status refreshes, while stale writer lanes become daily
+  advisory warnings and strict-health blockers until the operator integrates or
+  explicitly stops them.
 - Added `manager close --agent-id ... --reason ... --json` as the explicit
   stop path for active or stale writer lanes.
 - Made `check`, `doctor`, `manager status`, and `codex-status` share the same
@@ -17,8 +18,9 @@
 - Added dev-environment hook visibility reporting. `qwendex-dev status-json`
   now records active isolated `CODEX_HOME` hook sources and warns when global
   `~/.codex/hooks.json` exists but the dev Codex home has none.
-- Added smoke coverage for stale manager reconciliation, stale writer blocking,
-  Kaveman TUI patch injection, and dev-hook visibility.
+- Added smoke coverage for stale manager reconciliation, stale writer advisory
+  and strict-health behavior, Kaveman TUI patch injection, and dev-hook
+  visibility.
 
 ## 0.1.0-rc.1
 

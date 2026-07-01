@@ -51,7 +51,18 @@ yolo-equivalent flag, `--dangerously-bypass-approvals-and-sandbox`. Use
 
 Codex sessions launched this way receive a dev-mode instruction to act as a
 senior Qwendex project developer: keep edits scoped, verify before staging, and
-keep generated `.qwendex-dev` state out of public artifacts.
+keep generated `.qwendex-dev` state out of public artifacts. The instruction
+also tells sessions to recover after context compaction from the newest user
+request, re-run Qwendex posture checks, inspect existing diffs/state before
+editing, and use `qwendex-dev snapshot` plus `scripts/qwendex context
+snapshot|reminder|compact-plan` at phase boundaries or before manual
+compaction. Manager Mode sessions must check Agent Manager/Kaveman/Local state
+at the start of substantial tasks, spawn bounded subagents early for
+independent non-blocking read, review, docs, or verification lanes, keep
+critical-path implementation local, use disjoint write scopes and explicit stop
+conditions, treat subagent output as advisory until integrated and verified,
+and close both spawned agents and matching Qwendex manager sessions after
+integration.
 
 The dev environment exposes these wrappers in `~/qwendex-dev/bin`:
 
