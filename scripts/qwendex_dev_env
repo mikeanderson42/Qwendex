@@ -102,7 +102,7 @@ write_codex_config() {
   cat > "$CODEX_HOME_DIR/config.toml" <<EOF
 approval_policy = "never"
 sandbox_mode = "workspace-write"
-persistent_instructions = "Qwendex dev environment active. Act as the senior Qwendex product maintainer: keep changes scoped, verify before staging, use qwendex-dev doctor/verify/review/stage, protect public/private boundaries, and keep generated .qwendex-dev state out of public artifacts. QWENDEX_ROOT, QWENDEX_STATE_DB, QWENDEX_LEDGER_DB, QWENDEX_RESULTS_ROOT, QWENDEX_CODEX_STATUS_FILE, and QWENDEX_DEV_ROOT are set by the launcher. Use qwendex, qwendex-dev, and llmstack for harness controls. When QWENDEX_CODEX_STATUS_FILE reports kaveman_enabled true, keep output terse and direct."
+persistent_instructions = "Qwendex dev environment active. Act as the senior Qwendex product maintainer: keep changes scoped, verify before staging, use qwendex-dev doctor/verify/review/stage, protect public/private boundaries, and keep generated .qwendex-dev state out of public artifacts. QWENDEX_ROOT, QWENDEX_STATE_DB, QWENDEX_LEDGER_DB, QWENDEX_RESULTS_ROOT, QWENDEX_CODEX_STATUS_FILE, and QWENDEX_DEV_ROOT are set by the launcher. Use qwendex, qwendex-dev, and llmstack for harness controls. After context compaction, resume from the newest user request, re-run the Qwendex posture checks, and inspect existing diffs/state before editing; use qwendex-dev snapshot and scripts/qwendex context snapshot/reminder/compact-plan at phase boundaries or before manual compaction so the next session has objective, decisions, evidence, open files, blockers, and next actions. At the start of substantial tasks, check Agent Manager/Kaveman/Local state. When Agent Manager is in Manager Mode and there are independent non-blocking read, review, docs, or verification lanes, spawn bounded subagents early with short prompts, disjoint write scopes, and explicit stop conditions; keep critical-path implementation local, avoid duplicate/conflicting writes, treat subagent output as advisory until integrated and verified, and close spawned agents and matching Qwendex manager sessions after integration. If subagents are not useful, say why briefly. When QWENDEX_CODEX_STATUS_FILE reports kaveman_enabled true, keep output terse and direct."
 
 [features]
 multi_agent = true
@@ -879,8 +879,12 @@ cmd_verify() {
   # shellcheck disable=SC1090
   source "$WORK_ROOT/env.sh"
   cd "$DEV_ROOT"
-  scripts/qwendex check --json > "$META_ROOT/qwendex_check.json"
-  scripts/qwendex doctor --json > "$META_ROOT/qwendex_doctor.json"
+  local health_mode="advisory"
+  if [[ "$tier" == "release" ]]; then
+    health_mode="strict"
+  fi
+  scripts/qwendex check --health-mode "$health_mode" --json > "$META_ROOT/qwendex_check.json"
+  scripts/qwendex doctor --health-mode "$health_mode" --json > "$META_ROOT/qwendex_doctor.json"
   scripts/qwendex codex-status --write "$STATUS_FILE" --json > "$META_ROOT/codex_status_write.json"
   scripts/qwendex codex-patch preflight --json > "$META_ROOT/codex_patch_preflight.json"
   if [[ "$tier" == "full" || "$tier" == "live" || "$tier" == "release" ]]; then

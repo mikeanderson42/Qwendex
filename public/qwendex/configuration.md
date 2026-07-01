@@ -97,6 +97,14 @@ scripts/qwendex route --task-class exec --json
 only when the local model alias is visible through the guarded Codex-facing
 endpoint; otherwise it falls back to the configured primary seat.
 
+Local routing separates intent from availability. `QWENDEX_LOCAL_SUBAGENTS=on`
+or `Local: [Ready]` means Qwendex may consider local subagent lanes and the
+probe has confirmed `local_model`. It still probes `local_probe_url` before
+choosing the `qwen` seat. `Local: [Off]` or `QWENDEX_LOCAL_SUBAGENTS=off` is
+operator intent to skip local lanes even when the endpoint is healthy. If local
+intent is on but the probe cannot confirm the alias, the state is
+`Local: [Unavailable]` and Qwendex falls back to `fallback_seat`.
+
 ## Orchestration
 
 `orchestration` controls manager defaults:
@@ -142,7 +150,14 @@ scripts/qwendex manager close-stale --stale-after-minutes 30 --json
 `manager_only` remains a compatibility alias for `manager`.
 
 `manager_deploy_policy` defaults to `auto`: when the selected mode is Manager
-Mode, Qwendex requires at least one active registered agent lane and reports a
-blocked manager status if no lane is active. Set `manager_deploy_policy` to
-`disabled` to opt out of that requirement; explicit manual manager lifecycle
-commands remain operator-directed.
+Mode, Qwendex expects at least one active registered agent lane. Routine
+advisory health reports no-lane Manager Mode as `standby`; strict release
+health reports it as blocked. Set `manager_deploy_policy` to `disabled` to opt
+out of that requirement; explicit manual manager lifecycle commands remain
+operator-directed.
+
+`manager repair --safe` is the public manager-state reconciliation path. The
+safe boundary is to reconcile read-only stale state and harmless empty stale
+writer lanes while keeping non-empty writer lanes open for operator review.
+Those remaining writer lanes are advisory warnings during daily health and
+blockers during strict health.

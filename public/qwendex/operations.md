@@ -23,6 +23,12 @@ scripts/qwendex doctor --json
 scripts/qwendex eval --json
 ```
 
+Qwendex keeps the advisory/strict health split explicit. Advisory health can
+emit Manager Mode warnings, repair hints, and high-value-add guidance without
+blocking a daily operator loop. Strict health is the mode for staging and
+release claims: missing required surface, public documentation audit failures,
+or Manager Mode health issues such as stale writer lanes must fail the command.
+
 ## Stack Control
 
 ```bash
@@ -120,21 +126,30 @@ scripts/qwendex manager status --json
 ```
 
 In a patched Codex TUI, `Alt+M` cycles Agent Manager, `Alt+K` toggles Kaveman,
-and `Alt+L` toggles Local. `Local: [N]` means Qwendex will skip local subagents
-even when the local model endpoint is healthy.
+and `Alt+L` toggles Local. `Local: [Off]` means Qwendex will skip local
+subagents even when the local model endpoint is healthy; `Local: [Unavailable]`
+means intent is on but the probe could not confirm a usable local route.
 
 Manager Mode defaults to `max_subagents: 10`, which is also the Qwendex product
 ceiling for concurrent subagent lanes.
 
 `manager_deploy_policy` defaults to `auto`: when the selected mode is Manager
-Mode, Qwendex requires at least one active registered agent lane and reports a
-blocked manager status if no lane is active. Set `manager_deploy_policy` to
-`disabled` to opt out of that requirement; explicit manual manager lifecycle
-commands remain operator-directed.
+Mode, Qwendex expects at least one active registered agent lane. Routine
+advisory health reports no-lane Manager Mode as `standby`; strict release
+health reports it as blocked. Set `manager_deploy_policy` to `disabled` to opt
+out of that requirement; explicit manual manager lifecycle commands remain
+operator-directed.
 
 Use `scripts/qwendex manager close --agent-id ... --reason integrated --json`
 after integrating or intentionally stopping a writer lane. `close-stale` only
 auto-closes stale read-only lanes.
+
+`scripts/qwendex manager repair --safe --json` is a bounded repair path for
+safe manager-state issues. It closes stale read-only lanes and harmless empty
+stale writer lanes, then leaves non-empty writer lanes open with an explicit
+manual `manager close --agent-id ... --reason ... --json` command. Those
+remaining stale writer lanes are advisory warnings during daily health and
+blockers during strict health.
 
 Every assigned lane records a context packet and remains advisory until the main
 session reviews receipts, touched files, validation status, blockers, and

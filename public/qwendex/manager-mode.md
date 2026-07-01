@@ -20,7 +20,7 @@ scripts/qwendex manager mode --toggle --json
 Visible indicators:
 
 ```text
-{Qwendex} Agent Manager: [Auto] | Kaveman: [N] | Local: [Y] (Alt+M/K/L)
+{Qwendex} Agent Manager: [Auto] | Kaveman: [N] | Local: [Ready] (Alt+M/K/L)
 ```
 
 `Alt+K` toggles Kaveman output mode:
@@ -46,10 +46,11 @@ When Local is `[N]`, Qwendex skips local Qwen even if the endpoint is healthy.
 ## Agent Deploy Policy
 
 `manager_deploy_policy` defaults to `auto`: when the selected mode is Manager
-Mode, Qwendex requires at least one active registered agent lane and reports a
-blocked manager status if no lane is active. Set `manager_deploy_policy` to
-`disabled` to opt out of that requirement; explicit manual manager lifecycle
-commands remain operator-directed.
+Mode, Qwendex expects at least one active registered agent lane. Routine
+advisory health reports no-lane Manager Mode as `standby`; strict release
+health reports it as blocked. Set `manager_deploy_policy` to `disabled` to opt
+out of that requirement; explicit manual manager lifecycle commands remain
+operator-directed.
 
 ## Mode Meaning
 
@@ -63,6 +64,35 @@ commands remain operator-directed.
 
 Legacy compatibility remains: the `manager_only` spelling maps to
 `Manager Mode`.
+
+## Status Semantics
+
+Manager status separates operator intent, advisory health, and blocking state:
+
+- `standby`: Manager Mode is off, not required by policy, or waiting for an
+  operator-selected lane. This is not a failed health state.
+- `warning`: Qwendex has advisory issues, such as non-blocking guidance or
+  local availability drift, but no writer lifecycle problem requires repair.
+- `blocked`: a required Manager Mode deployment contract is unmet, or a stale
+  writer lane requires integration or an explicit stop.
+
+Status JSON may expose these labels in manager health data before every wrapper
+or footer renders them. Treat the JSON fields as the source of truth and verify
+CLI help, smoke tests, and Codex footer receipts before documenting a label as a
+visible TUI state.
+
+Local state also has two dimensions:
+
+- `Local Ready`: local subagents are enabled and the configured local model
+  alias is visible through the guarded probe.
+- `Local Off`: the operator intentionally disabled local subagents; Qwendex
+  skips local Qwen even if the endpoint is healthy.
+- `Local Unavailable`: local subagents may be enabled, but the probe cannot
+  confirm the configured alias, so Qwendex falls back to the primary seat.
+
+`Local: [Ready]` means local intent is on and availability is proven.
+`Local: [Unavailable]` means intent is on but availability was not proven, so
+routes fall back to primary.
 
 ## Auto Estimator
 
@@ -102,7 +132,8 @@ Default manager settings:
 - Close completed agents after findings are integrated.
 - Status refreshes reconcile idle read-only agents after the stale window.
 - Do not close an active writer until its changes are integrated or stopped;
-  stale writer lanes keep Manager Mode blocked.
+  stale writer lanes are advisory warnings during daily health and blockers
+  during strict health.
 
 Durable lifecycle commands:
 
@@ -118,6 +149,12 @@ The CLI records `agent_id`, lane, task, owner, write surface, stop condition,
 artifacts, context packet, heartbeat time, validation status, stop reason, and
 close receipt metadata in the local Qwendex state DB. It does not forcibly
 interrupt an external process.
+
+`scripts/qwendex manager repair --safe --json` is the bounded safe repair path
+for manager state. It closes stale read-only lanes and harmless empty stale
+writer lanes, but leaves writer lanes with artifacts, receipt paths, exact
+files, or non-pending validation open. Those lanes return an explicit
+`manager close --agent-id ... --reason ... --json` command for operator review.
 
 ## High-Value Add
 

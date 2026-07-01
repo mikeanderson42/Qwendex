@@ -14,13 +14,14 @@ Qwendex owns a stable runtime contract:
   the footer text.
 - `qwendex manager mode --toggle --json` cycles Agent Manager duty levels.
 - `qwendex manager kaveman --toggle --json` toggles terse Kaveman output mode.
-- `qwendex manager local --toggle --json` toggles Local `[Y]` versus `[N]`.
+- `qwendex manager local --toggle --json` toggles local intent between
+  `Local: [Ready]`/`[Unavailable]` and `Local: [Off]`.
 - The Codex status-line item ID is `qwendex-manager`.
 
 The intended footer text is:
 
 ```text
-{Qwendex} Agent Manager: [Manager Mode] | Kaveman: [N] | Local: [Y] (Alt+M/K/L)
+{Qwendex} Agent Manager: [Manager Mode] | Kaveman: [N] | Local: [Ready] (Alt+M/K/L)
 ```
 
 ## Preflight

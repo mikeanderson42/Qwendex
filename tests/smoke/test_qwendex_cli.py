@@ -53,10 +53,14 @@ def test_qwendex_parser_exposes_public_commands():
     parser = qwendex.command_line()
 
     assert parser.parse_args(["check"]).command == "check"
+    assert parser.parse_args(["check", "--health-mode", "advisory"]).health_mode == "advisory"
+    assert parser.parse_args(["check", "--health-mode", "strict"]).health_mode == "strict"
     assert parser.parse_args(["up", "--dry-run"]).command == "up"
     assert parser.parse_args(["down", "--dry-run"]).command == "down"
     assert parser.parse_args(["restart", "--dry-run"]).command == "restart"
     assert parser.parse_args(["doctor"]).command == "doctor"
+    assert parser.parse_args(["doctor", "--health-mode", "advisory"]).health_mode == "advisory"
+    assert parser.parse_args(["doctor", "--health-mode", "strict"]).health_mode == "strict"
     assert parser.parse_args(["exec", "Reply exactly QWENDEX_OK"]).command == "exec"
     assert parser.parse_args(["exec", "Reply exactly QWENDEX_OK", "--seat", "auto"]).seat == "auto"
     assert parser.parse_args(["exec", "Reply exactly QWENDEX_OK", "--cwd", "/tmp/qwendex-project"]).cwd == "/tmp/qwendex-project"
@@ -76,6 +80,8 @@ def test_qwendex_parser_exposes_public_commands():
     assert parser.parse_args(["manager", "kaveman", "--toggle"]).action == "kaveman"
     assert parser.parse_args(["manager", "local", "--set", "off"]).action == "local"
     assert parser.parse_args(["manager", "estimate", "--prompt", "Fix a typo"]).action == "estimate"
+    assert parser.parse_args(["manager", "repair", "--safe"]).action == "repair"
+    assert parser.parse_args(["manager", "repair", "--safe"]).safe is True
     assert parser.parse_args(["codex-status", "--write", "/tmp/qwendex-status.json"]).command == "codex-status"
     assert parser.parse_args(["codex-patch", "preflight", "--codex-bin", "codex"]).command == "codex-patch"
     assert parser.parse_args(["codex-patch", "apply", "--source", "/tmp/codex", "--dry-run"]).dry_run is True
@@ -104,6 +110,56 @@ def test_qwendex_check_and_doctor_emit_stable_json(tmp_path):
     assert doctor["data"]["manager_estimate"]["reasoning_policy"]["main_session"]["reasoning_source"] == "user_selected"
     assert 1 <= len(check["data"]["high_value_add"]) <= 2
     assert 1 <= len(doctor["data"]["high_value_add"]) <= 2
+
+
+def test_qwendex_check_and_doctor_health_mode_handles_stale_writer(tmp_path):
+    state_db = tmp_path / "qwendex.sqlite"
+    env = {
+        "QWENDEX_STATE_DB": str(state_db),
+        "QWENDEX_MANAGER_DEPLOY_POLICY": "disabled",
+    }
+
+    json_result(
+        "manager",
+        "assign",
+        "--agent-id",
+        "stale-writer",
+        "--lane",
+        "implementation",
+        "--write-surface",
+        "tests/smoke/test_qwendex_cli.py",
+        "--json",
+        env=env,
+    )
+    with sqlite3.connect(state_db) as conn:
+        conn.execute("UPDATE qwendex_agent_sessions SET heartbeat_at = '2000-01-01T00:00:00Z'")
+
+    advisory_check = run_qwendex("check", "--health-mode", "advisory", "--json", env=env)
+    advisory_doctor = run_qwendex("doctor", "--health-mode", "advisory", "--json", env=env)
+    strict_check = run_qwendex("check", "--health-mode", "strict", "--json", env=env)
+    strict_doctor = run_qwendex("doctor", "--health-mode", "strict", "--json", env=env)
+
+    advisory_check_data = parse_json_result(advisory_check)
+    advisory_doctor_data = parse_json_result(advisory_doctor)
+    strict_check_data = parse_json_result(strict_check)
+    strict_doctor_data = parse_json_result(strict_doctor)
+
+    assert advisory_check.returncode == 0
+    assert advisory_check_data["status"] == "pass"
+    assert advisory_check_data["data"]["manager_health_mode"] == "advisory"
+    assert "stale manager writer sessions" in " ".join(advisory_check_data["data"]["manager_health_issues"])
+    assert advisory_doctor.returncode == 0
+    assert advisory_doctor_data["status"] == "pass"
+    assert advisory_doctor_data["data"]["manager_health_mode"] == "advisory"
+    assert "stale manager writer sessions" in " ".join(advisory_doctor_data["data"]["manager_health_issues"])
+    assert strict_check.returncode != 0
+    assert strict_check_data["status"] == "fail"
+    assert strict_check_data["data"]["manager_health_mode"] == "strict"
+    assert "stale manager writer sessions" in " ".join(strict_check_data["errors"])
+    assert strict_doctor.returncode != 0
+    assert strict_doctor_data["status"] == "fail"
+    assert strict_doctor_data["data"]["manager_health_mode"] == "strict"
+    assert "stale manager writer sessions" in " ".join(strict_doctor_data["errors"])
 
 
 def test_qwendex_llmstack_public_contract_and_dry_run_json(tmp_path):
@@ -358,6 +414,15 @@ def test_qwendex_dev_env_public_surface_is_visible_and_isolated():
     assert "codex-main" in text
     assert "QWENDEX_DEV_CODEX_BIN" in text
     assert "senior Qwendex product maintainer" in text
+    assert "After context compaction" in text
+    assert "resume from the newest user request" in text
+    assert "qwendex-dev snapshot" in text
+    assert "context snapshot/reminder/compact-plan" in text
+    assert "At the start of substantial tasks" in text
+    assert "spawn bounded subagents early" in text
+    assert "disjoint write scopes" in text
+    assert "treat subagent output as advisory" in text
+    assert "close spawned agents and matching Qwendex manager sessions" in text
     assert "cmd_verify" in text
     assert "cmd_bootstrap" in text
     assert "cmd_doctor" in text
@@ -532,7 +597,8 @@ def test_qwendex_codex_status_tracks_manager_state_and_writes_surface_file(tmp_p
     blocked_mode_data = parse_json_result(blocked_mode)
     assert blocked_mode.returncode == 0
     assert blocked_mode_data["status"] == "pass"
-    assert blocked_mode_data["data"]["deployment_contract"]["status"] == "blocked"
+    assert blocked_mode_data["data"]["deployment_contract"]["status"] == "standby"
+    assert blocked_mode_data["data"]["manager_health"]["status"] == "standby"
     json_result(
         "manager",
         "assign",
@@ -551,26 +617,26 @@ def test_qwendex_codex_status_tracks_manager_state_and_writes_surface_file(tmp_p
     status = json_result("codex-status", "--write", str(status_file), "--json", env=env)
     plain = run_qwendex("codex-status", "--plain", env=env)
 
-    assert status["data"]["text"] == "{Qwendex} Agent Manager: [Manager Mode] | Kaveman: [N] | Local: [Y] (Alt+M/K/L)"
-    assert plain.stdout.strip() == "{Qwendex} Agent Manager: [Manager Mode] | Kaveman: [N] | Local: [Y] (Alt+M/K/L)"
+    assert status["data"]["text"] == "{Qwendex} Agent Manager: [Manager Mode] | Kaveman: [N] | Local: [Ready] (Alt+M/K/L)"
+    assert plain.stdout.strip() == "{Qwendex} Agent Manager: [Manager Mode] | Kaveman: [N] | Local: [Ready] (Alt+M/K/L)"
     written = json.loads(status_file.read_text(encoding="utf-8"))
-    assert written["text"] == "{Qwendex} Agent Manager: [Manager Mode] | Kaveman: [N] | Local: [Y] (Alt+M/K/L)"
+    assert written["text"] == "{Qwendex} Agent Manager: [Manager Mode] | Kaveman: [N] | Local: [Ready] (Alt+M/K/L)"
     assert written["kaveman_enabled"] is False
     assert written["local_usable"] is True
 
     kaveman = json_result("manager", "kaveman", "--toggle", "--json", env=env)
     assert kaveman["data"]["kaveman_enabled"] is True
     written_after_kaveman = json.loads(status_file.read_text(encoding="utf-8"))
-    assert written_after_kaveman["text"] == "{Qwendex} Agent Manager: [Manager Mode] | Kaveman: [Y] | Local: [Y] (Alt+M/K/L)"
+    assert written_after_kaveman["text"] == "{Qwendex} Agent Manager: [Manager Mode] | Kaveman: [Y] | Local: [Ready] (Alt+M/K/L)"
     assert written_after_kaveman["kaveman_directive"]
 
     toggled = json_result("manager", "mode", "--toggle", "--json", env=env)
     assert toggled["data"]["mode"] == "off"
     written_after_toggle = json.loads(status_file.read_text(encoding="utf-8"))
-    assert written_after_toggle["text"] == "{Qwendex} Agent Manager: [Off] | Kaveman: [Y] | Local: [Y] (Alt+M/K/L)"
+    assert written_after_toggle["text"] == "{Qwendex} Agent Manager: [Off] | Kaveman: [Y] | Local: [Ready] (Alt+M/K/L)"
 
 
-def test_qwendex_codex_status_disables_unusable_local_state(tmp_path):
+def test_qwendex_codex_status_reports_unusable_local_state(tmp_path):
     status_file = tmp_path / "codex_status.json"
     env = {
         "QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite"),
@@ -582,10 +648,11 @@ def test_qwendex_codex_status_disables_unusable_local_state(tmp_path):
     status = json_result("codex-status", "--write", str(status_file), "--json", env=env)
     manager = json_result("manager", "status", "--json", env=env)
 
-    assert status["data"]["text"] == "{Qwendex} Agent Manager: [Auto] | Kaveman: [N] | Local: [N] (Alt+M/K/L)"
-    assert status["data"]["local_enabled"] is False
+    assert status["data"]["text"] == "{Qwendex} Agent Manager: [Auto] | Kaveman: [N] | Local: [Unavailable] (Alt+M/K/L)"
+    assert status["data"]["local_enabled"] is True
     assert status["data"]["local_usable"] is False
-    assert manager["data"]["local_subagents"]["enabled"] is False
+    assert status["data"]["local_state"] == "unavailable"
+    assert manager["data"]["local_subagents"]["enabled"] is True
 
 
 def test_qwendex_codex_patch_preflight_version_manifest(tmp_path):
@@ -653,6 +720,11 @@ def test_qwendex_codex_patch_apply_updates_supported_source_checkout(tmp_path):
     terminal_instructions = (
         source / "codex-rs/tui/src/terminal_visualization_instructions.rs"
     ).read_text(encoding="utf-8")
+    status_preview = (
+        source / "codex-rs/tui/src/bottom_pane/status_surface_preview.rs"
+    ).read_text(encoding="utf-8")
+    assert "Local: [Ready]" in status_preview
+    assert "Local: [Y]" not in status_preview
     assert "qwendex_kaveman_directive" in terminal_instructions
     assert "QWENDEX_CODEX_STATUS_FILE" in terminal_instructions
     assert "Qwendex Kaveman directive" in terminal_instructions
@@ -686,9 +758,33 @@ def test_qwendex_auto_route_falls_back_to_primary_when_local_qwen_is_unavailable
     assert route["status"] == "pass"
     assert route["data"]["seat"] == "primary"
     assert route["data"]["local_qwen"]["available"] is False
+    assert route["data"]["local_qwen_eligible"] is True
+    assert route["data"]["local_subagents"]["enabled"] is True
+    assert route["data"]["local_subagents"]["usable"] is False
     assert exec_data["data"]["seat"] == "primary"
     assert receipt["seat"] == "primary"
     assert receipt["model"] == "gpt-5.5"
+
+
+def test_qwendex_route_unavailable_probe_keeps_local_intent_and_falls_back_primary(tmp_path):
+    env = {
+        "QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite"),
+        "QWENDEX_FORCE_LOCAL_QWEN_UNAVAILABLE": "1",
+    }
+
+    route = json_result("route", "--task-class", "artifact summary", "--prefer-local", "--json", env=env)
+
+    assert route["data"]["seat"] == "primary"
+    assert route["data"]["reason"] == "fallback_seat"
+    assert route["data"]["reasoning_source"] == "fallback_policy"
+    assert route["data"]["token_saver_used"] is False
+    assert route["data"]["local_qwen_eligible"] is True
+    assert route["data"]["local_qwen"]["available"] is False
+    assert route["data"]["local_qwen"]["source"] == "env"
+    assert route["data"]["local_qwen"]["reason"] == "forced_unavailable"
+    assert route["data"]["local_subagents"]["enabled"] is True
+    assert route["data"]["local_subagents"]["available"] is False
+    assert route["data"]["local_subagents"]["usable"] is False
 
 
 def test_qwendex_route_force_available_false_falls_back_to_primary(tmp_path):
@@ -700,13 +796,14 @@ def test_qwendex_route_force_available_false_falls_back_to_primary(tmp_path):
     local = json_result("manager", "local", "--set", "on", "--json", env=env)
     route = json_result("route", "--task-class", "artifact summary", "--prefer-local", "--json", env=env)
 
-    assert local["data"]["local_subagents"]["enabled"] is False
+    assert local["data"]["local_subagents"]["enabled"] is True
+    assert local["data"]["local_subagents"]["local_state"] == "unavailable"
     assert local["data"]["local_subagents"]["available"] is False
     assert route["data"]["seat"] == "primary"
-    assert route["data"]["local_qwen"]["available"] is None
-    assert route["data"]["local_qwen"]["reason"] == "local_subagents_disabled"
+    assert route["data"]["local_qwen"]["available"] is False
+    assert route["data"]["local_qwen"]["reason"] == "forced_unavailable"
     assert route["data"]["token_saver_used"] is False
-    assert route["data"]["local_qwen_eligible"] is False
+    assert route["data"]["local_qwen_eligible"] is True
 
 
 def test_qwendex_route_prefer_local_respects_local_toggle_off(tmp_path):
@@ -727,6 +824,29 @@ def test_qwendex_route_prefer_local_respects_local_toggle_off(tmp_path):
     assert route["data"]["local_qwen"]["source"] == "not_probed"
     assert route["data"]["local_subagents"]["enabled"] is False
     assert route["data"]["local_subagents"]["usable"] is False
+
+
+def test_qwendex_local_off_route_never_selects_qwen(tmp_path):
+    env = {
+        "QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite"),
+        "QWENDEX_RESULTS_ROOT": str(tmp_path / "receipts"),
+        "QWENDEX_FORCE_LOCAL_QWEN_AVAILABLE": "1",
+    }
+
+    local = json_result("manager", "local", "--set", "off", "--json", env=env)
+    route = json_result("route", "--task-class", "exec", "--prefer-local", "--json", env=env)
+    exec_data = json_result("exec", "Reply exactly QWENDEX_OK", "--seat", "auto", "--json", env=env)
+    receipt = json.loads(Path(exec_data["artifacts"][0]).read_text(encoding="utf-8"))
+
+    assert local["data"]["local_subagents"]["enabled"] is False
+    assert route["data"]["seat"] == "primary"
+    assert route["data"]["local_qwen_eligible"] is False
+    assert route["data"]["token_saver_used"] is False
+    assert exec_data["data"]["seat"] == "primary"
+    assert exec_data["data"]["routing"]["seat"] == "primary"
+    assert exec_data["data"]["routing"]["local_qwen_eligible"] is False
+    assert receipt["seat"] == "primary"
+    assert receipt["model"] == "gpt-5.5"
 
 
 def test_qwendex_receipt_blocks_outside_json_reads(tmp_path):
@@ -885,7 +1005,7 @@ def test_qwendex_manager_mode_cycles_status_and_legacy_alias(tmp_path):
     assert auto["data"]["ui_indicator"] == "(Alt+M) Agent Manager: [ Auto ]"
     assert auto["data"]["kaveman_indicator"] == "(Alt+K) Kaveman: [N]"
     assert auto["data"]["kaveman_enabled"] is False
-    assert auto["data"]["local_indicator"] == "(Alt+L) Local: [Y]"
+    assert auto["data"]["local_indicator"] == "(Alt+L) Local: [Ready]"
     assert auto["data"]["offload_target"] == "auto"
     assert cycled["data"]["mode"] == "lite"
     assert status["data"]["mode"] == "lite"
@@ -893,8 +1013,8 @@ def test_qwendex_manager_mode_cycles_status_and_legacy_alias(tmp_path):
     assert status["data"]["stale_sessions"]["count"] == 0
     assert len(status["data"]["high_value_add"]) <= 2
 
-    assert legacy_result.returncode != 0
-    assert legacy["status"] == "blocked"
+    assert legacy_result.returncode == 0
+    assert legacy["status"] == "standby"
     assert legacy["data"]["mode"] == "manager"
     assert legacy["data"]["legacy_mode"] == "manager_only"
     assert legacy["data"]["label"] == "Manager Mode"
@@ -910,7 +1030,7 @@ def test_qwendex_manager_mode_cycles_status_and_legacy_alias(tmp_path):
     assert "LangGraph persistence" in " ".join(legacy["data"]["borrowed_patterns"])
     assert {"selected_model", "selected_reasoning", "reasoning_source", "escalation_reason", "token_saver_used", "local_qwen_eligible"} <= set(legacy["data"]["lane_template"][0])
 
-    assert disabled["status"] == "pass"
+    assert disabled["status"] == "ready"
     assert disabled["data"]["manager_deploy_policy"] == "disabled"
     assert disabled["data"]["deployment_contract"]["required"] is False
     assert disabled["data"]["deployment_contract"]["healthy"] is True
@@ -935,7 +1055,7 @@ def test_qwendex_manager_mode_toggle_cycles_full_duty_order(tmp_path):
     status = parse_json_result(status_result)
     assert status_result.returncode == 0
     assert status["data"]["mode"] == "off"
-    assert status["data"]["deployment_contract"]["status"] == "pass"
+    assert status["data"]["deployment_contract"]["status"] == "ready"
 
 
 def test_qwendex_manager_local_toggle_controls_local_lane_eligibility(tmp_path):
@@ -949,13 +1069,13 @@ def test_qwendex_manager_local_toggle_controls_local_lane_eligibility(tmp_path):
     on = json_result("manager", "local", "--toggle", "--json", env=env)
     estimate_on = json_result("manager", "estimate", "--prompt", "Summarize receipts from results/qwendex.", "--json", env=env)
 
-    assert off["data"]["local_indicator"] == "(Alt+L) Local: [N]"
+    assert off["data"]["local_indicator"] == "(Alt+L) Local: [Off]"
     assert off["data"]["local_subagents"]["enabled"] is False
     assert estimate_off["data"]["local_subagents"]["usable"] is False
     assert estimate_off["data"]["estimate"]["higher_reasoning_lanes"] == []
     assert estimate_off["data"]["reasoning_policy"]["default_lane"]["local_qwen_eligible"] is False
 
-    assert on["data"]["local_indicator"] == "(Alt+L) Local: [Y]"
+    assert on["data"]["local_indicator"] == "(Alt+L) Local: [Ready]"
     assert on["data"]["local_subagents"]["enabled"] is True
     assert estimate_on["data"]["local_subagents"]["usable"] is True
     assert estimate_on["data"]["reasoning_policy"]["default_lane"]["local_qwen_eligible"] is True
@@ -1051,7 +1171,7 @@ def test_qwendex_manager_assign_generates_context_packet_and_routing(tmp_path):
 
     status = json_result("manager", "status", "--json", env=env)
     assert status["data"]["active_subagents"]["count"] == 1
-    assert status["data"]["deployment_contract"]["status"] == "pass"
+    assert status["data"]["deployment_contract"]["status"] == "ready"
     assert status["data"]["subagent_state"]["receipts"] == ["results/qwendex/security-review.json"]
     assert status["data"]["subagent_state"]["validation_status"]["pending"] == 1
 
@@ -1092,7 +1212,7 @@ def test_qwendex_manager_reconciles_stale_read_only_and_blocks_stale_writers(tmp
 
     status_result = run_qwendex("manager", "status", "--stale-after-minutes", "5", "--json", env=env)
     status = parse_json_result(status_result)
-    assert status_result.returncode != 0
+    assert status_result.returncode == 0
     assert status["data"]["stale_reconciliation"]["closed_count"] == 1
     assert status["data"]["stale_reconciliation"]["closed"][0]["agent_id"] == "stale-reader"
     assert status["data"]["stale_reconciliation"]["skipped_writer_count"] == 1
@@ -1108,6 +1228,75 @@ def test_qwendex_manager_reconciles_stale_read_only_and_blocks_stale_writers(tmp
 
     cleared = json_result("manager", "status", "--stale-after-minutes", "5", "--json", env=env)
     assert cleared["data"]["stale_writer_sessions"]["count"] == 0
+
+
+def test_qwendex_manager_repair_safe_closes_only_harmless_stale_sessions(tmp_path):
+    state_db = tmp_path / "qwendex.sqlite"
+    env = {
+        "QWENDEX_STATE_DB": str(state_db),
+        "QWENDEX_MANAGER_DEPLOY_POLICY": "disabled",
+    }
+
+    json_result(
+        "manager",
+        "assign",
+        "--agent-id",
+        "stale-reader",
+        "--lane",
+        "review",
+        "--write-surface",
+        "read-only",
+        "--json",
+        env=env,
+    )
+    json_result(
+        "manager",
+        "assign",
+        "--agent-id",
+        "empty-writer",
+        "--lane",
+        "empty-writer",
+        "--write-surface",
+        "tests/smoke/test_qwendex_cli.py",
+        "--json",
+        env=env,
+    )
+    json_result(
+        "manager",
+        "assign",
+        "--agent-id",
+        "nonempty-writer",
+        "--lane",
+        "implementation",
+        "--write-surface",
+        "tests/smoke/test_qwendex_cli.py",
+        "--file",
+        "tests/smoke/test_qwendex_cli.py",
+        "--artifact",
+        "results/qwendex/nonempty.json",
+        "--json",
+        env=env,
+    )
+    with sqlite3.connect(state_db) as conn:
+        conn.execute("UPDATE qwendex_agent_sessions SET heartbeat_at = '2000-01-01T00:00:00Z'")
+
+    repair_result = run_qwendex("manager", "repair", "--safe", "--stale-after-minutes", "5", "--json", env=env)
+    repair = parse_json_result(repair_result)
+    status = run_qwendex("manager", "status", "--stale-after-minutes", "5", "--json", env=env)
+    status_data = parse_json_result(status)
+
+    assert repair_result.returncode != 0
+    assert repair["status"] == "blocked"
+    assert repair["data"]["safe"] is True
+    assert repair["data"]["closed_count"] == 2
+    assert {session["agent_id"] for session in repair["data"]["closed"]} == {"stale-reader", "empty-writer"}
+    assert repair["data"]["skipped_writer_count"] == 1
+    assert repair["data"]["skipped_writers"][0]["agent_id"] == "nonempty-writer"
+    assert "nonempty-writer" in " ".join(repair["errors"])
+    assert status.returncode == 0
+    assert status_data["status"] == "warning"
+    assert status_data["data"]["stale_writer_sessions"]["count"] == 1
+    assert status_data["data"]["stale_writer_sessions"]["agents"][0]["agent_id"] == "nonempty-writer"
 
 
 def test_qwendex_auto_manager_estimator_skill_contract():
