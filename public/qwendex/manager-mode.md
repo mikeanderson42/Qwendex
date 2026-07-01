@@ -41,7 +41,7 @@ scripts/qwendex manager local --toggle --json
 scripts/qwendex manager local --set off --json
 ```
 
-When Local is `[N]`, Qwendex skips local Qwen even if the endpoint is healthy.
+When Local is `[Off]`, Qwendex skips local Qwen even if the endpoint is healthy.
 
 ## Agent Deploy Policy
 

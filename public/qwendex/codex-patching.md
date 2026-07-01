@@ -24,6 +24,17 @@ The intended footer text is:
 {Qwendex} Agent Manager: [Manager Mode] | Kaveman: [N] | Local: [Ready] (Alt+M/K/L)
 ```
 
+The launched Codex process, the toggle commands, and the status file must share
+the same `QWENDEX_STATE_DB`. If the footer shows defaults such as `Auto` or
+`Kaveman: [N]` after a toggle, run:
+
+```bash
+scripts/qwendex codex-status --json
+```
+
+The JSON includes `data.state_db` and status-file diagnostics that identify a
+stale or cross-environment status file.
+
 ## Preflight
 
 Run preflight before opening a patched Codex build:

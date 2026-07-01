@@ -9,6 +9,7 @@ import importlib.util
 import json
 import os
 import re
+import shlex
 import shutil
 import sqlite3
 import subprocess
@@ -1857,7 +1858,56 @@ def manager_status_surface_text(label: str, local_state: str, kaveman_enabled: b
     )
 
 
+def status_file_state_db(payload: Any) -> str:
+    if not isinstance(payload, Mapping):
+        return ""
+    direct = payload.get("state_db")
+    if isinstance(direct, str):
+        return direct
+    nested = payload.get("data")
+    if isinstance(nested, Mapping) and isinstance(nested.get("state_db"), str):
+        return nested["state_db"]
+    return ""
+
+
+def codex_status_file_diagnostics(config: Mapping[str, Any], path: Path | None = None) -> dict[str, Any]:
+    raw = str(path or os.environ.get(QWENDEX_CODEX_STATUS_FILE_ENV, "")).strip()
+    active_state_db = str(state_db_path(config))
+    data: dict[str, Any] = {
+        "state_db": active_state_db,
+        "status_file": raw,
+        "status_file_exists": False,
+        "status_file_state_db": "",
+        "status_file_state_mismatch": False,
+        "warnings": [],
+        "next_actions": [],
+    }
+    if not raw:
+        return data
+    status_path = Path(raw).expanduser()
+    data["status_file"] = str(status_path)
+    if not status_path.exists():
+        return data
+    data["status_file_exists"] = True
+    try:
+        payload = json.loads(status_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        data["warnings"].append(f"Codex status file is unreadable: {status_path}")
+        data["next_actions"].append(f"scripts/qwendex codex-status --write {shlex.quote(str(status_path))} --json")
+        return data
+    status_state_db = status_file_state_db(payload)
+    data["status_file_state_db"] = status_state_db
+    if status_state_db and status_state_db != active_state_db:
+        data["status_file_state_mismatch"] = True
+        data["warnings"].append(
+            f"Codex status file was written from a different Qwendex state DB: {status_state_db}"
+        )
+        data["next_actions"].append(f"scripts/qwendex codex-status --write {shlex.quote(str(status_path))} --json")
+    return data
+
+
 def codex_status_payload(config: Mapping[str, Any], *, write_path: Path | None = None) -> dict[str, Any]:
+    status_file_diagnostics = codex_status_file_diagnostics(config, write_path)
     with connect_state(config) as conn:
         mode = current_manager_mode(config, conn)
         stale_after = mode_stale_after_minutes(config, mode)
@@ -1885,11 +1935,28 @@ def codex_status_payload(config: Mapping[str, Any], *, write_path: Path | None =
         "local_state": local_status.get("local_state"),
         "state_db": str(state_db_path(config)),
         "status_file_env": QWENDEX_CODEX_STATUS_FILE_ENV,
+        "status_file_diagnostics": status_file_diagnostics,
+        "warnings": list(status_file_diagnostics["warnings"]),
     }
+    if status_file_diagnostics["next_actions"]:
+        data["next_actions"] = list(status_file_diagnostics["next_actions"])
     if write_path is not None:
         target = write_path.expanduser()
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        file_data = dict(data)
+        file_data["status_file"] = str(target)
+        file_data["status_file_diagnostics"] = {
+            "state_db": str(state_db_path(config)),
+            "status_file": str(target),
+            "status_file_exists": True,
+            "status_file_state_db": str(state_db_path(config)),
+            "status_file_state_mismatch": False,
+            "warnings": [],
+            "next_actions": [],
+        }
+        file_data["warnings"] = []
+        file_data.pop("next_actions", None)
+        target.write_text(json.dumps(file_data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         data["status_file"] = str(target)
     return data
 
