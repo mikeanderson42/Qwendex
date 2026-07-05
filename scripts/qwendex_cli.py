@@ -201,6 +201,10 @@ CODEX_PATCH_MANIFESTS: dict[str, dict[str, Any]] = {
         ],
     },
 }
+CODEX_PATCH_MANIFESTS["0.142.5"] = {
+    **CODEX_PATCH_MANIFESTS["0.142.4"],
+    "codex_tag": "rust-v0.142.5",
+}
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "schema_version": "qwendex.config.v1",
@@ -2044,7 +2048,7 @@ def codex_source_patch_state(source: Path, manifest: Mapping[str, Any]) -> dict[
 
 def codex_source_patch_specs(version: str) -> list[dict[str, Any]]:
     marker = f"// {QWENDEX_CODEX_PATCH_MARKER}"
-    if version != "0.142.4":
+    if version not in CODEX_PATCH_MANIFESTS:
         return []
     return [
         {

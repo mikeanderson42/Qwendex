@@ -1043,7 +1043,10 @@ def test_qwendex_redacts_secret_like_values_from_output_and_receipts(tmp_path):
 
 
 def test_qwendex_manager_mode_cycles_status_and_legacy_alias(tmp_path):
-    env = {"QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite")}
+    env = {
+        "QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite"),
+        "QWENDEX_FORCE_LOCAL_QWEN_AVAILABLE": "1",
+    }
 
     auto = json_result("manager", "mode", "--set", "auto", "--json", env=env)
     cycled = json_result("manager", "mode", "--cycle", "--json", env=env)
