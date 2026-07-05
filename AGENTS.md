@@ -101,7 +101,9 @@ artifacts ignored, split commits by lane, and do not push unless explicitly
 requested.
 
 When generating Codex/Qwendex goals from this workspace, use the tracked project
-guide at `/home/tweak/repohome/jarvis/docs/jarvis/CHATGPT_PROJECT_GUIDE.md`.
+guide at `/home/tweak/repohome/jarvis/docs/jarvis/CHATGPT_PROJECT_GUIDE.md`
+and the repo-local `.codex/skills/operator-goal-compiler/` skill. If Mike says
+"the goal skill", treat it as this operator goal compiler workflow.
 Support both fresh-intent compilation and `next_goal_from_result` compilation:
 when Mike pastes a prior Codex closeout, extract verified state, branch/commit,
 dirty paths, validation results, STOP status, blockers, and the next frontier.
