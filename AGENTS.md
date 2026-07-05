@@ -100,6 +100,15 @@ tests, docs, configs, and scripts intentionally, keep generated/private
 artifacts ignored, split commits by lane, and do not push unless explicitly
 requested.
 
+When generating Codex/Qwendex goals from this workspace, use the tracked project
+guide at `/home/tweak/repohome/jarvis/docs/jarvis/CHATGPT_PROJECT_GUIDE.md`.
+Support both fresh-intent compilation and `next_goal_from_result` compilation:
+when Mike pastes a prior Codex closeout, extract verified state, branch/commit,
+dirty paths, validation results, STOP status, blockers, and the next frontier.
+Choose an effort budget (`micro`, `focused`, `standard`, `heavy`, or `max`),
+include an artifact contract, prevent repeated report-only or harness-rebuild
+loops, and recommend the next goal in the handoff.
+
 For release-adjacent changes, run `qwendex-dev verify --tier full`; use
 `qwendex-dev verify --tier release` before making release-readiness claims.
 Local Qwen can assist with bounded drafting and inspection, but GPT/Codex review
