@@ -63,7 +63,12 @@ record() {
 
 run_logged() {
   record "+ $*"
-  "$@" >> "$LOG_FILE" 2>&1
+  if "$@" >> "$LOG_FILE" 2>&1; then
+    return 0
+  fi
+  local rc=$?
+  record "command failed ($rc): $*"
+  return 0
 }
 
 system_install() {

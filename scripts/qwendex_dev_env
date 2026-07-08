@@ -1041,7 +1041,8 @@ case "$1" in
     cmd_sync
     ;;
   bootstrap)
-    cmd_bootstrap
+    shift
+    cmd_bootstrap "$@"
     ;;
   env)
     cmd_env
