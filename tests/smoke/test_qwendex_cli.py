@@ -113,7 +113,7 @@ def test_qwendex_version_matches_public_config_metadata():
     sample_config = json.loads((ROOT / "config" / "qwendex" / "qwendex.sample.json").read_text(encoding="utf-8"))
     version = json_result("version", "--json")
 
-    assert qwendex.VERSION == "0.1.0-rc.5"
+    assert qwendex.VERSION == "0.0.2-rc1"
     assert version["data"]["version"] == qwendex.VERSION
     assert project_config["version"] == qwendex.VERSION
     assert sample_config["version"] == qwendex.VERSION
@@ -646,9 +646,14 @@ def test_qwendex_codex_status_tracks_manager_state_and_writes_surface_file(tmp_p
     plain = run_qwendex("codex-status", "--plain", env=env)
 
     assert status["data"]["text"] == "{Qwendex} Agent Manager: [Manager Mode] | Kaveman: [N] | Local: [Ready] (Alt+M/K/L)"
+    assert status["data"]["mode"] == "manager"
+    assert status["data"]["agent_use"] == "Manager"
+    assert status["data"]["agent_policy_source"] == "manager-mode"
     assert plain.stdout.strip() == "{Qwendex} Agent Manager: [Manager Mode] | Kaveman: [N] | Local: [Ready] (Alt+M/K/L)"
     written = json.loads(status_file.read_text(encoding="utf-8"))
     assert written["text"] == "{Qwendex} Agent Manager: [Manager Mode] | Kaveman: [N] | Local: [Ready] (Alt+M/K/L)"
+    assert written["agent_use"] == "Manager"
+    assert written["agent_policy_source"] == "manager-mode"
     assert written["kaveman_enabled"] is False
     assert written["local_usable"] is True
 
@@ -1132,7 +1137,78 @@ def test_qwendex_manager_mode_toggle_cycles_full_duty_order(tmp_path):
     status = parse_json_result(status_result)
     assert status_result.returncode == 0
     assert status["data"]["mode"] == "off"
+    assert status["data"]["agent_policy"]["mode"] == "off"
+    assert status["data"]["agent_policy_source"] == "manager-mode"
+    assert status["data"]["agent_policy"]["root_can_spawn"] is False
     assert status["data"]["deployment_contract"]["status"] == "ready"
+
+
+def test_qwendex_selected_manager_mode_drives_agent_policy_and_hooks(tmp_path):
+    env = {"QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite")}
+
+    selected = json_result("manager", "mode", "--set", "manager", "--json", env=env)
+    policy = json_result("agent", "policy", "--json", env=env)
+    status = json_result("manager", "status", "--json", env=env)
+
+    assert selected["data"]["mode"] == "manager"
+    assert selected["data"]["agent_policy"]["mode"] == "manager"
+    assert selected["data"]["agent_policy_source"] == "manager-mode"
+    assert policy["data"]["agent_policy"]["mode"] == "manager"
+    assert policy["data"]["agent_policy"]["source"] == "manager-mode"
+    assert status["data"]["agent_use"] == "Manager"
+    assert status["data"]["agent_policy"]["require_agent_ledger"] is True
+
+    json_result(
+        "manager",
+        "assign",
+        "--agent-id",
+        "selected-manager-required",
+        "--lane",
+        "review",
+        "--task-id",
+        "selected-manager",
+        "--objective",
+        "prove selected manager mode gates finalization",
+        "--required",
+        "--json",
+        env=env,
+    )
+    blocked_stop_result = run_qwendex(
+        "agent",
+        "hook",
+        "Stop",
+        "--event-json",
+        json.dumps({"last_assistant_message": "Done."}),
+        "--json",
+        env=env,
+    )
+    blocked_stop = parse_json_result(blocked_stop_result)
+
+    assert blocked_stop_result.returncode != 0
+    assert blocked_stop["data"]["agent_policy"]["mode"] == "manager"
+    assert blocked_stop["data"]["agent_policy"]["source"] == "manager-mode"
+    assert blocked_stop["data"]["hook_result"]["event"] == "manager.stop_gate_continued"
+
+    off = json_result("manager", "mode", "--set", "off", "--json", env=env)
+    spawn_result = run_qwendex(
+        "agent",
+        "hook",
+        "PreToolUse",
+        "--event-json",
+        json.dumps({"tool_name": "spawn_agent"}),
+        "--json",
+        env=env,
+    )
+    spawn = parse_json_result(spawn_result)
+
+    assert off["data"]["agent_policy"]["mode"] == "off"
+    assert spawn_result.returncode != 0
+    assert spawn["data"]["agent_policy"]["mode"] == "off"
+    assert spawn["data"]["hook_result"]["event"] == "agent.spawn_rejected"
+
+    override = json_result("agent", "policy", "--json", env={**env, "QWENDEX_AGENT_USE": "Heavy"})
+    assert override["data"]["agent_policy"]["mode"] == "heavy"
+    assert override["data"]["agent_policy"]["source"] == "qwendex-env"
 
 
 def test_qwendex_manager_local_toggle_controls_local_lane_eligibility(tmp_path):

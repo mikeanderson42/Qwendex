@@ -1,6 +1,6 @@
 {
   "schema_version": "qwendex.config.v1",
-  "version": "0.1.0-rc.5",
+  "version": "0.0.2-rc1",
   "default_seat": "primary",
   "routing": {
     "mode": "token_saver",

@@ -6,6 +6,12 @@ in the local state DB, not by prompt memory alone.
 
 ## Select Mode
 
+By default, the selected Agent Manager mode is the backend `AgentPolicy`
+source. In the patched TUI, `Alt+M` runs
+`scripts/qwendex manager mode --toggle --json`; the selected mode is persisted
+in the local state DB and drives the policy reported by `agent`, `manager`,
+`check`, `doctor`, `codex-status`, and native `agent hook` gates.
+
 Use a CLI selector for one command:
 
 ```bash
@@ -20,10 +26,12 @@ scripts/qwendex agent status --json
 ```
 
 `QWENDEX_AGENT_USE` takes precedence over `CODEX_AGENT_USE`. The CLI
-`--agent-use` flag takes precedence over both. Valid values are `Lite`,
-`Medium`, `Heavy`, and `Manager`; common variants such as `manager-mode` are
-normalized. Invalid values fall back to `Medium` with a warning unless
-`QWENDEX_AGENT_USE_STRICT=1`, which blocks the command.
+`--agent-use` flag takes precedence over both. Valid values are `Off`, `Auto`,
+`Lite`, `Medium`, `Heavy`, and `Manager`; common variants such as
+`manager-mode` are normalized. Invalid explicit selectors fall back to `Medium`
+with a warning unless `QWENDEX_AGENT_USE_STRICT=1`, which blocks the command.
+When no explicit selector is present, the selected Agent Manager mode is the
+source.
 
 Each CLI invocation computes an effective `AgentPolicy` once, exports these
 values to subprocesses, and includes them in diagnostics:

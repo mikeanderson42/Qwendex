@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.1.0-rc.5"
+VERSION = "0.0.2-rc1"
 CONFIG_DIR = ROOT / "config" / "qwendex"
 DEFAULT_PROJECT_CONFIG = CONFIG_DIR / "qwendex.json"
 DEFAULT_USER_CONFIG = Path.home() / ".config" / "qwendex" / "config.json"
@@ -139,19 +139,23 @@ MANAGER_MODE_LABELS = {
     "heavy": "Heavy",
     "manager": "Manager Mode",
 }
-AGENT_USE_ORDER = ("lite", "medium", "heavy", "manager")
+AGENT_USE_ORDER = ("off", "auto", "lite", "medium", "heavy", "manager")
 AGENT_USE_LABELS = {
+    "off": "Off",
+    "auto": "Auto",
     "lite": "Lite",
     "medium": "Medium",
     "heavy": "Heavy",
     "manager": "Manager",
 }
 AGENT_USE_ALIASES = {
+    "off": "off",
+    "disabled": "off",
+    "auto": "auto",
     "lite": "lite",
     "light": "lite",
     "medium": "medium",
     "default": "medium",
-    "auto": "medium",
     "heavy": "heavy",
     "manager": "manager",
     "manager_mode": "manager",
@@ -676,6 +680,40 @@ def agent_policy_defaults(mode: str) -> dict[str, Any]:
         "policy_variant": "qwendex-cli-v1",
     }
     table: dict[str, dict[str, Any]] = {
+        "off": {
+            "min_threads": 0,
+            "max_threads": 0,
+            "max_depth": 0,
+            "root_can_spawn": False,
+            "require_agent_ledger": False,
+            "require_verifier_for_edits": False,
+            "require_final_report_contract": False,
+            "require_routing_reason": False,
+            "forbid_fork_context": True,
+            "default_fork_context": False,
+            "max_inherited_context_bytes": 0,
+            "agent_idle_timeout_ms": 0,
+            "wait_timeout_ms": 0,
+            "close_timeout_ms": 5000,
+            "max_resteer_attempts": 0,
+        },
+        "auto": {
+            "min_threads": 2,
+            "max_threads": 4,
+            "max_depth": 1,
+            "root_can_spawn": True,
+            "require_agent_ledger": False,
+            "require_verifier_for_edits": False,
+            "require_final_report_contract": True,
+            "require_routing_reason": False,
+            "forbid_fork_context": False,
+            "default_fork_context": False,
+            "max_inherited_context_bytes": 16000,
+            "agent_idle_timeout_ms": 300000,
+            "wait_timeout_ms": 120000,
+            "close_timeout_ms": 7500,
+            "max_resteer_attempts": 1,
+        },
         "lite": {
             "min_threads": 0,
             "max_threads": 1,
@@ -762,6 +800,7 @@ def resolve_agent_policy(
     *,
     cli_agent_use: str = "",
     env: Mapping[str, str] | None = None,
+    selected_manager_mode: str = "",
 ) -> dict[str, Any]:
     del config
     source_env = env or os.environ
@@ -776,12 +815,15 @@ def resolve_agent_policy(
     elif source_env.get("CODEX_AGENT_USE"):
         selector_source = "codex-env"
         selector = str(source_env["CODEX_AGENT_USE"])
+    elif selected_manager_mode:
+        selector_source = "manager-mode"
+        selector = selected_manager_mode
     mode = normalize_agent_use_mode(selector)
     warnings: list[str] = []
     errors: list[str] = []
     strict = env_flag(source_env.get("QWENDEX_AGENT_USE_STRICT")) is True
     if mode not in AGENT_USE_ORDER:
-        message = f"invalid agent use selector {selector!r}; expected Lite, Medium, Heavy, or Manager"
+        message = f"invalid agent use selector {selector!r}; expected Off, Auto, Lite, Medium, Heavy, or Manager"
         if strict:
             errors.append(message)
             mode = "medium"
@@ -829,7 +871,11 @@ def apply_agent_policy_env(policy: Mapping[str, Any]) -> None:
 
 
 def policy_mode_for_manager(args: argparse.Namespace, config: Mapping[str, Any], fallback_mode: str) -> str:
-    policy = resolve_agent_policy(config, cli_agent_use=getattr(args, "agent_use", ""))
+    policy = resolve_agent_policy(
+        config,
+        cli_agent_use=getattr(args, "agent_use", ""),
+        selected_manager_mode=fallback_mode,
+    )
     if policy["errors"]:
         raise ValueError("; ".join(policy["errors"]))
     if policy["source"] != "default" and not getattr(args, "mode", ""):
@@ -2021,6 +2067,14 @@ def current_manager_mode(config: Mapping[str, Any], conn: sqlite3.Connection, ex
     return normalize_manager_mode(config.get("orchestration", {}).get("mode")) or "auto"
 
 
+def selected_manager_mode_for_policy(config: Mapping[str, Any], explicit: str = "") -> str:
+    try:
+        with connect_state(config) as conn:
+            return current_manager_mode(config, conn, explicit=explicit)
+    except (OSError, sqlite3.Error, ValueError):
+        return normalize_manager_mode(explicit) or normalize_manager_mode(config.get("orchestration", {}).get("mode")) or "auto"
+
+
 def current_local_enabled(config: Mapping[str, Any], conn: sqlite3.Connection) -> bool:
     stored = get_manager_setting(conn, "local_subagents_enabled", None)
     parsed = normalize_local_toggle(stored)
@@ -2395,7 +2449,7 @@ def manager_mode_payload(
     agent_policy: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     profile = manager_mode_profile(config, mode)
-    resolved_agent_policy = dict(agent_policy or resolve_agent_policy(config))
+    resolved_agent_policy = dict(agent_policy or resolve_agent_policy(config, selected_manager_mode=profile["mode"]))
     summary = summarize_agent_sessions(sessions or [], stale_after_minutes=stale_after_minutes)
     data = {
         "mode": profile["mode"],
@@ -2538,10 +2592,10 @@ def codex_status_file_diagnostics(config: Mapping[str, Any], path: Path | None =
 
 def codex_status_payload(config: Mapping[str, Any], *, write_path: Path | None = None) -> dict[str, Any]:
     status_file_diagnostics = codex_status_file_diagnostics(config, write_path)
-    agent_policy = resolve_agent_policy(config)
     with connect_state(config) as conn:
         mode = current_manager_mode(config, conn)
-        if agent_policy["source"] != "default":
+        agent_policy = resolve_agent_policy(config, selected_manager_mode=mode)
+        if agent_policy["source"] not in {"default", "manager-mode"}:
             mode = str(agent_policy["mode"])
         stale_after = mode_stale_after_minutes(config, mode)
         reconcile_stale_manager_sessions(conn, stale_after_minutes=stale_after, now=utc_now())
@@ -3606,7 +3660,6 @@ def llmstack_public_contract() -> dict[str, Any]:
 
 def command_check(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, Any]:
     health_mode = normalize_health_mode(getattr(args, "health_mode", "advisory"))
-    agent_policy = resolve_agent_policy(config, cli_agent_use=getattr(args, "agent_use", ""))
     surface = required_surface_check()
     artifacts = [path for path in REQUIRED_SURFACE_FILES if (ROOT / path).exists()]
     status = "pass" if surface["status"] == "pass" else "fail"
@@ -3615,6 +3668,7 @@ def command_check(args: argparse.Namespace, config: dict[str, Any]) -> dict[str,
     manager_health: dict[str, Any] = {}
     with connect_state(config) as conn:
         mode = current_manager_mode(config, conn)
+        agent_policy = resolve_agent_policy(config, cli_agent_use=getattr(args, "agent_use", ""), selected_manager_mode=mode)
         local_status = local_subagent_status(config, enabled=current_local_enabled(config, conn), env=os.environ, probe=False)
         stale_after = mode_stale_after_minutes(config, mode)
         reconcile_stale_manager_sessions(conn, stale_after_minutes=stale_after, now=utc_now())
@@ -3676,7 +3730,6 @@ def command_check(args: argparse.Namespace, config: dict[str, Any]) -> dict[str,
 
 def command_doctor(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, Any]:
     health_mode = normalize_health_mode(getattr(args, "health_mode", "advisory"))
-    agent_policy = resolve_agent_policy(config, cli_agent_use=getattr(args, "agent_use", ""))
     surface = required_surface_check()
     docs = public_docs_audit(PUBLIC_DOC_DIR)
     critical = list(surface["missing"])
@@ -3694,6 +3747,7 @@ def command_doctor(args: argparse.Namespace, config: dict[str, Any]) -> dict[str
     manager_health: dict[str, Any] = {}
     with connect_state(config) as conn:
         mode = current_manager_mode(config, conn)
+        agent_policy = resolve_agent_policy(config, cli_agent_use=getattr(args, "agent_use", ""), selected_manager_mode=mode)
         local_status = local_subagent_status(config, enabled=current_local_enabled(config, conn), env=os.environ, probe=False)
         stale_after = mode_stale_after_minutes(config, mode)
         reconcile_stale_manager_sessions(conn, stale_after_minutes=stale_after, now=utc_now())
@@ -4536,7 +4590,7 @@ def manager_estimate_envelope(
 ) -> dict[str, Any]:
     estimate = estimate_task(config, prompt=prompt.strip(), local_status=local_status)
     profile = manager_mode_profile(config, mode)
-    resolved_agent_policy = dict(agent_policy or resolve_agent_policy(config))
+    resolved_agent_policy = dict(agent_policy or resolve_agent_policy(config, selected_manager_mode=profile["mode"]))
     data = {
         "mode": profile["mode"],
         "label": profile["label"],
@@ -4563,11 +4617,11 @@ def manager_estimate_envelope(
 
 
 def command_estimate(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, Any]:
-    agent_policy = resolve_agent_policy(config, cli_agent_use=getattr(args, "agent_use", ""))
-    if agent_policy["errors"]:
-        return stable_envelope(command="estimate", status="blocked", summary="Invalid Qwendex agent policy.", errors=list(agent_policy["errors"]), data={"agent_policy": agent_policy})
     with connect_state(config) as conn:
         mode = current_manager_mode(config, conn)
+        agent_policy = resolve_agent_policy(config, cli_agent_use=getattr(args, "agent_use", ""), selected_manager_mode=mode)
+        if agent_policy["errors"]:
+            return stable_envelope(command="estimate", status="blocked", summary="Invalid Qwendex agent policy.", errors=list(agent_policy["errors"]), data={"agent_policy": agent_policy})
         mode = policy_mode_for_manager(args, config, mode)
         local_status = local_subagent_status(config, enabled=current_local_enabled(config, conn), env=os.environ, probe=True)
     return manager_estimate_envelope(
@@ -4615,6 +4669,8 @@ def read_hook_event(args: argparse.Namespace) -> dict[str, Any]:
 def agent_mode_context(agent_policy: Mapping[str, Any]) -> str:
     mode = str(agent_policy.get("mode") or "medium")
     contracts = {
+        "off": "Off mode: do not spawn subagents unless explicitly requested; keep work in the main session.",
+        "auto": "Auto mode: use the task estimate to decide whether bounded specialist lanes are useful.",
         "lite": "Lite mode: prefer direct work. Do not spawn subagents unless explicitly requested or required by policy.",
         "medium": "Medium mode: use a small number of specialists when exploration or verification materially improves quality.",
         "heavy": "Heavy mode: use scoped specialist lanes for non-trivial repo work. Verifier evidence is required for meaningful edits.",
@@ -4793,11 +4849,11 @@ def pre_tool_gate(config: Mapping[str, Any], event: Mapping[str, Any], agent_pol
                 "event": "agent.release_command_rejected",
                 "reason": "Release/publish commands require an explicit release gate approval.",
             }
-    if tool_lower == "spawn_agent" and agent_policy.get("mode") == "lite" and not event.get("explicit_user_request"):
+    if tool_lower == "spawn_agent" and agent_policy.get("mode") in {"off", "lite"} and not event.get("explicit_user_request"):
         return {
             "decision": "block",
             "event": "agent.spawn_rejected",
-            "reason": "Lite mode disables subagents unless the user explicitly requested one.",
+            "reason": f"{agent_policy.get('agent_use')} mode disables subagents unless the user explicitly requested one.",
         }
     if write_attempt:
         paths = event_file_paths(event)
@@ -5007,8 +5063,8 @@ def agent_plan_profiles(prompt: str, mode: str, estimate: Mapping[str, Any]) -> 
     explicit_team = prompt_requests_team(prompt)
     if prompt_is_trivial(prompt, task_class) and not explicit_team:
         return [], "direct_trivial"
-    if mode == "lite" and not explicit_team:
-        return [], "direct_lite_policy"
+    if mode in {"off", "lite"} and not explicit_team:
+        return [], f"direct_{mode}_policy"
     profiles: list[str]
     if task_class == "release acceptance" or "publish" in text or "release" in text:
         profiles = ["release_manager", "verifier"]
@@ -5127,7 +5183,11 @@ def build_agent_team_plan(
         "estimate": estimate,
         "routing_reason": reason,
         "direct_work": direct_work,
-        "direct_work_exception": "No agents used because the task is trivial or policy is Lite." if direct_work else "",
+        "direct_work_exception": (
+            f"No agents used because the task is trivial or policy is {agent_policy.get('agent_use')}."
+            if direct_work
+            else ""
+        ),
         "profiles": profiles,
         "assignments": assignments,
         "team": DEFAULT_MANAGER_TEAM,
@@ -5181,7 +5241,11 @@ def agent_metrics_payload(config: Mapping[str, Any], agent_policy: Mapping[str, 
 
 
 def command_agent(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, Any]:
-    agent_policy = resolve_agent_policy(config, cli_agent_use=getattr(args, "agent_use", ""))
+    agent_policy = resolve_agent_policy(
+        config,
+        cli_agent_use=getattr(args, "agent_use", ""),
+        selected_manager_mode=selected_manager_mode_for_policy(config),
+    )
     if agent_policy["errors"]:
         return stable_envelope(command="agent", status="blocked", summary="Invalid Qwendex agent policy.", errors=list(agent_policy["errors"]), data={"agent_policy": agent_policy})
     action = args.action or "status"
@@ -5434,11 +5498,11 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
     if not args.action:
         return None
     now = utc_now()
-    agent_policy = resolve_agent_policy(config, cli_agent_use=getattr(args, "agent_use", ""))
-    if agent_policy["errors"]:
-        return stable_envelope(command="manager", status="blocked", summary="Invalid Qwendex agent policy.", errors=list(agent_policy["errors"]), data={"agent_policy": agent_policy})
     with connect_state(config) as conn:
         mode = current_manager_mode(config, conn)
+        agent_policy = resolve_agent_policy(config, cli_agent_use=getattr(args, "agent_use", ""), selected_manager_mode=mode)
+        if agent_policy["errors"]:
+            return stable_envelope(command="manager", status="blocked", summary="Invalid Qwendex agent policy.", errors=list(agent_policy["errors"]), data={"agent_policy": agent_policy})
         if args.action not in {"mode"}:
             mode = policy_mode_for_manager(args, config, mode)
         stale_after = mode_stale_after_minutes(config, mode, args.stale_after_minutes)
@@ -5466,6 +5530,9 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
                 mode = requested
                 set_manager_setting(conn, "selected_mode", mode)
                 conn.commit()
+            agent_policy = resolve_agent_policy(config, cli_agent_use=getattr(args, "agent_use", ""), selected_manager_mode=mode)
+            if agent_policy["errors"]:
+                return stable_envelope(command="manager", status="blocked", summary="Invalid Qwendex agent policy.", errors=list(agent_policy["errors"]), data={"agent_policy": agent_policy})
             stale_after = mode_stale_after_minutes(config, mode, args.stale_after_minutes)
             reconciliation = reconcile_stale_manager_sessions(conn, stale_after_minutes=stale_after, now=now)
             rows = conn.execute("SELECT * FROM qwendex_agent_sessions ORDER BY updated_at DESC LIMIT ?", (args.limit,)).fetchall()
@@ -6017,11 +6084,11 @@ def command_manager(args: argparse.Namespace, config: dict[str, Any]) -> dict[st
     state_response = command_manager_state(args, config)
     if state_response is not None:
         return state_response
-    agent_policy = resolve_agent_policy(config, cli_agent_use=getattr(args, "agent_use", ""))
-    if agent_policy["errors"]:
-        return stable_envelope(command="manager", status="blocked", summary="Invalid Qwendex agent policy.", errors=list(agent_policy["errors"]), data={"agent_policy": agent_policy})
     with connect_state(config) as conn:
         mode = current_manager_mode(config, conn, explicit=args.mode)
+        agent_policy = resolve_agent_policy(config, cli_agent_use=getattr(args, "agent_use", ""), selected_manager_mode=mode)
+        if agent_policy["errors"]:
+            return stable_envelope(command="manager", status="blocked", summary="Invalid Qwendex agent policy.", errors=list(agent_policy["errors"]), data={"agent_policy": agent_policy})
         mode = policy_mode_for_manager(args, config, mode)
         local_status = local_subagent_status(config, enabled=current_local_enabled(config, conn), env=os.environ, probe=True)
         kaveman_enabled = current_kaveman_enabled(config, conn)
@@ -6346,7 +6413,14 @@ def human_print(data: dict[str, Any]) -> None:
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
     config = load_qwendex_config(project_config=args.config)
-    agent_policy = resolve_agent_policy(config, cli_agent_use=getattr(args, "agent_use", ""))
+    agent_policy = resolve_agent_policy(
+        config,
+        cli_agent_use=getattr(args, "agent_use", ""),
+        selected_manager_mode=selected_manager_mode_for_policy(
+            config,
+            explicit=getattr(args, "mode", "") if getattr(args, "command", "") == "manager" else "",
+        ),
+    )
     if agent_policy["errors"]:
         return stable_envelope(
             command=getattr(args, "command", "unknown"),

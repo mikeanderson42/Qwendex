@@ -163,11 +163,13 @@ the endpoint is healthy. `Local: [Unavailable]` means intent remains on, but the
 probe did not confirm a usable local route; Qwendex falls back to the configured
 primary seat.
 
-Agent Management selectors are also available through `--agent-use`,
-`QWENDEX_AGENT_USE`, and `CODEX_AGENT_USE`. They compute a session
-`AgentPolicy`, policy hash, subprocess env exports, and root/child management
-tool-surface metadata. See [Agent Management](public/qwendex/agent-management.md)
-for the public `qwendex agent ...` commands.
+Agent Management defaults to the selected Agent Manager mode from `Alt+M` or
+`scripts/qwendex manager mode ...`. Explicit selectors are also available
+through `--agent-use`, `QWENDEX_AGENT_USE`, and `CODEX_AGENT_USE`. The resolved
+mode computes a session `AgentPolicy`, policy hash, subprocess env exports, and
+root/child management tool-surface metadata. See
+[Agent Management](public/qwendex/agent-management.md) for the public
+`qwendex agent ...` commands.
 
 ## Codex TUI Integration
 
@@ -263,7 +265,7 @@ claims require GPT/Codex review and the appropriate Qwendex verification tier.
 
 ## Current Release Candidate / Known Limits
 
-This checkout is seeded as `v0.1.0-rc.5`. The latest captured max-depth
+This checkout is seeded as `v0.0.2-rc1`. The latest captured max-depth
 validation summary in this repository is still
 [`docs/validation/v0.1.0-rc.1-validation_summary.json`](docs/validation/v0.1.0-rc.1-validation_summary.json)
 until a newer release validation run is recorded.

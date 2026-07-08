@@ -17,6 +17,13 @@ Off -> Auto -> Lite -> Medium -> Heavy -> Manager Mode
 scripts/qwendex manager mode --toggle --json
 ```
 
+The selected Agent Manager mode is the default backend `AgentPolicy` source.
+`codex-status`, `manager status`, `agent policy`, and native `agent hook` gates
+read the same persisted mode, so the visible footer and backend enforcement
+move together when `Alt+M` changes modes. Explicit `--agent-use`,
+`QWENDEX_AGENT_USE`, or `CODEX_AGENT_USE` selectors still override the selected
+mode for that CLI session.
+
 Visible indicators:
 
 ```text
@@ -163,10 +170,12 @@ scripts/qwendex --agent-use Manager agent plan --prompt "Team, update routing an
 scripts/qwendex agent hook Stop --event-json '{"last_assistant_message":"Agent outcomes: ..."}' --json
 ```
 
-Use `QWENDEX_AGENT_USE` or `CODEX_AGENT_USE` to select `Lite`, `Medium`,
-`Heavy`, or `Manager` for a CLI session. The resolved `AgentPolicy`, source,
-and policy hash are included in `agent`, `manager`, `check`, and `doctor`
-diagnostics. Native `agent hook` stop gates read the same ledger and block
+Use `Alt+M`, `scripts/qwendex manager mode ...`, `QWENDEX_AGENT_USE`, or
+`CODEX_AGENT_USE` to select `Off`, `Auto`, `Lite`, `Medium`, `Heavy`, or
+`Manager` for a CLI session. Explicit selectors override the selected manager
+mode. The resolved `AgentPolicy`, source, and policy hash are included in
+`agent`, `manager`, `check`, `doctor`, and `codex-status` diagnostics. Native
+`agent hook` stop gates read the same ledger and block
 Manager Mode finalization when required lanes remain active, verifier evidence
 is missing after edits, or the final response omits agent outcomes, validation,
 and risks. The first release also uses a single-writer file-lock strategy in

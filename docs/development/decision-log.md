@@ -54,19 +54,32 @@ stay visible.
 
 ## AgentPolicy Facade Boundary
 
-Decision: Qwendex computes `AgentPolicy` in the CLI facade from `--agent-use`,
-`QWENDEX_AGENT_USE`, or `CODEX_AGENT_USE`, then exposes the policy hash and
-subprocess env exports through `agent`, `manager`, `check`, and `doctor`. The
-CLI also owns native `agent hook` gate evaluation for prompt context,
-subagent final-report contracts, Manager stop gates, and pre-tool denials.
-Native Codex tool-registry filtering and automatic/global hook installation
-remain labeled integration boundaries until a patched Codex build proves them
-end to end.
+Decision: Qwendex computes `AgentPolicy` in the CLI facade from explicit
+`--agent-use`, `QWENDEX_AGENT_USE`, or `CODEX_AGENT_USE` selectors, falling
+back to the selected Agent Manager mode when no explicit selector is present.
+It then exposes the policy hash and subprocess env exports through `agent`,
+`manager`, `check`, `doctor`, and `codex-status`. The CLI also owns native
+`agent hook` gate evaluation for prompt context, subagent final-report
+contracts, Manager stop gates, and pre-tool denials. Native Codex tool-registry
+filtering and automatic/global hook installation remain labeled integration
+boundaries until a patched Codex build proves them end to end.
 
 Reason: the current Qwendex product surface is the Python CLI and SQLite
 manager ledger. Enforcing the selector and gates there gives operators a
 connected, testable policy surface without making false claims about stock
 Codex runtime tool filtering.
+
+## Selected Manager Mode As Policy Source
+
+Decision: when no explicit `--agent-use`, `QWENDEX_AGENT_USE`, or
+`CODEX_AGENT_USE` selector is present, Qwendex resolves `AgentPolicy` from the
+persisted Agent Manager mode selected by `scripts/qwendex manager mode ...` or
+the patched TUI `Alt+M` shortcut.
+
+Reason: the visible Agent Manager footer and backend enforcement must agree.
+Manager Mode should activate manager stop gates, and Off mode should block
+automatic subagent spawning, without requiring a separate environment variable
+that can drift from the UI state.
 
 ## Agent Write Safety
 

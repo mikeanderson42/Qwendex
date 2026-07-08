@@ -128,18 +128,26 @@ intent is on but the probe cannot confirm the alias, the state is
 - `close_stale_policy`: close completed agents after integration and idle
   read-only agents after the stale window
 
-Agent-use selectors are session-level runtime policy inputs, not project config
-defaults:
+`QWENDEX_MANAGER_MODE` and `QWENDEX_ORCHESTRATION_MODE` override the configured
+default mode for a fresh state DB. Once `scripts/qwendex manager mode ...` or
+`Alt+M` persists a selected mode, that local state is the active mode source
+until it is changed again.
+
+Agent-use selectors are session-level runtime policy inputs. When no explicit
+selector is set, the selected Agent Manager mode is the backend `AgentPolicy`
+source:
 
 ```bash
+scripts/qwendex manager mode --set manager --json
 scripts/qwendex --agent-use Manager agent policy --json
 QWENDEX_AGENT_USE=Heavy scripts/qwendex agent status --json
 CODEX_AGENT_USE=Lite scripts/qwendex check --json
 ```
 
 Precedence is CLI `--agent-use`, then `QWENDEX_AGENT_USE`, then
-`CODEX_AGENT_USE`, then `Medium`. Invalid values fall back to `Medium` with a
-warning unless `QWENDEX_AGENT_USE_STRICT=1` is set.
+`CODEX_AGENT_USE`, then the selected Agent Manager mode. If no mode has been
+persisted, `orchestration.mode` is the default. Invalid explicit values fall
+back to `Medium` with a warning unless `QWENDEX_AGENT_USE_STRICT=1` is set.
 
 The CLI exposes these settings with:
 

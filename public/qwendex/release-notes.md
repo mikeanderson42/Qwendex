@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.0.2-rc1
+
+- Fixed Agent Manager mode consistency so the selected `Alt+M` mode is the
+  default backend `AgentPolicy` source for `agent`, `manager`, `check`,
+  `doctor`, `codex-status`, and native `agent hook` gates.
+- Added backend policy support for `Off` and `Auto`, including Off-mode
+  automatic subagent spawn rejection.
+- Added smoke coverage proving selected Manager Mode blocks finalization while
+  required lanes are active, and selected Off mode blocks automatic subagent
+  spawning.
+
 ## 0.1.0-rc.5
 
 - Added Codex CLI `0.143.0` to the Qwendex TUI patch manifest.
