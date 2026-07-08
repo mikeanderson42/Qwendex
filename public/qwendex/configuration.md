@@ -128,10 +128,25 @@ intent is on but the probe cannot confirm the alias, the state is
 - `close_stale_policy`: close completed agents after integration and idle
   read-only agents after the stale window
 
+Agent-use selectors are session-level runtime policy inputs, not project config
+defaults:
+
+```bash
+scripts/qwendex --agent-use Manager agent policy --json
+QWENDEX_AGENT_USE=Heavy scripts/qwendex agent status --json
+CODEX_AGENT_USE=Lite scripts/qwendex check --json
+```
+
+Precedence is CLI `--agent-use`, then `QWENDEX_AGENT_USE`, then
+`CODEX_AGENT_USE`, then `Medium`. Invalid values fall back to `Medium` with a
+warning unless `QWENDEX_AGENT_USE_STRICT=1` is set.
+
 The CLI exposes these settings with:
 
 ```bash
 scripts/qwendex manager --json
+scripts/qwendex agent policy --json
+scripts/qwendex agent status --json
 scripts/qwendex manager mode --set auto --json
 scripts/qwendex manager kaveman --toggle --json
 scripts/qwendex manager local --toggle --json

@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.1.0-rc.3"
+VERSION = "0.1.0-rc.4"
 CONFIG_DIR = ROOT / "config" / "qwendex"
 DEFAULT_PROJECT_CONFIG = CONFIG_DIR / "qwendex.json"
 DEFAULT_USER_CONFIG = Path.home() / ".config" / "qwendex" / "config.json"
@@ -42,6 +42,7 @@ PUBLIC_DOC_FILES = (
     "operations.md",
     "seat-handoff.md",
     "learning-loop.md",
+    "agent-management.md",
     "manager-mode.md",
     "codex-patching.md",
     "dev-environment.md",
@@ -137,6 +138,153 @@ MANAGER_MODE_LABELS = {
     "medium": "Medium",
     "heavy": "Heavy",
     "manager": "Manager Mode",
+}
+AGENT_USE_ORDER = ("lite", "medium", "heavy", "manager")
+AGENT_USE_LABELS = {
+    "lite": "Lite",
+    "medium": "Medium",
+    "heavy": "Heavy",
+    "manager": "Manager",
+}
+AGENT_USE_ALIASES = {
+    "lite": "lite",
+    "light": "lite",
+    "medium": "medium",
+    "default": "medium",
+    "auto": "medium",
+    "heavy": "heavy",
+    "manager": "manager",
+    "manager_mode": "manager",
+    "manager_only": "manager",
+}
+AGENT_TERMINAL_STATUSES = {"completed", "blocked", "failed", "closed", "tombstoned"}
+AGENT_HOOK_EVENTS = {
+    "SessionStart",
+    "UserPromptSubmit",
+    "SubagentStart",
+    "SubagentStop",
+    "Stop",
+    "PreToolUse",
+    "PostToolUse",
+    "PreCompact",
+    "PostCompact",
+}
+MANAGED_AGENT_HOOKS = {
+    "UserPromptSubmit": {"matcher": "", "timeout": 5},
+    "SubagentStart": {"matcher": ".*", "timeout": 5},
+    "SubagentStop": {"matcher": ".*", "timeout": 5},
+    "Stop": {"matcher": "", "timeout": 5},
+    "PreToolUse": {"matcher": ".*", "timeout": 5},
+    "PreCompact": {"matcher": "", "timeout": 5},
+    "PostCompact": {"matcher": "", "timeout": 5},
+}
+READ_ONLY_AGENT_PROFILES = {"explorer", "verifier", "docs_researcher", "audit", "review"}
+ROOT_ONLY_AGENT_TOOLS = {"spawn_agent", "close_agent", "wait_agent", "resume_agent", "agent_ledger_update_status"}
+WRITE_TOOL_NAMES = {"write", "edit", "apply_patch", "create_file", "delete_file", "move_file"}
+RELEASE_COMMAND_RE = re.compile(
+    r"(^|\s)(npm|pnpm|yarn)\s+.*\bpublish\b|"
+    r"(^|\s)cargo\s+publish\b|"
+    r"(^|\s)gh\s+release\s+create\b|"
+    r"(^|\s)git\s+push\s+(--tags|origin\s+(main|master))\b"
+)
+DEFAULT_AGENT_PROFILES: dict[str, dict[str, Any]] = {
+    "explorer": {
+        "name": "explorer",
+        "description": "Read-only repo explorer that maps affected files, symbols, tests, risks, and implementation paths.",
+        "role": "exploration",
+        "model_reasoning_effort": "medium",
+        "sandbox_mode": "read-only",
+        "tools_allow": ["read", "search", "status"],
+        "tools_deny": ["write", "spawn_agent", "close_agent"],
+        "can_spawn": False,
+        "final_report_required": True,
+        "default_required": True,
+        "nickname_candidates": ["Atlas", "Scout", "Mapper"],
+    },
+    "implementer": {
+        "name": "implementer",
+        "description": "Scoped implementation worker for narrow code changes.",
+        "role": "implementation",
+        "model_reasoning_effort": "high",
+        "sandbox_mode": "workspace-write",
+        "tools_allow": ["read", "search", "write", "test", "status"],
+        "tools_deny": ["spawn_agent", "close_agent"],
+        "can_spawn": False,
+        "final_report_required": True,
+        "default_required": True,
+        "nickname_candidates": ["Builder", "Patch", "Forge"],
+    },
+    "verifier": {
+        "name": "verifier",
+        "description": "Read-only verifier for tests, regressions, dirty state, and unsupported claims.",
+        "role": "verification",
+        "model_reasoning_effort": "high",
+        "sandbox_mode": "read-only",
+        "tools_allow": ["read", "search", "test", "status"],
+        "tools_deny": ["write", "spawn_agent", "close_agent"],
+        "can_spawn": False,
+        "final_report_required": True,
+        "default_required": True,
+        "nickname_candidates": ["Audit", "FIDO", "Check"],
+    },
+    "docs_researcher": {
+        "name": "docs_researcher",
+        "description": "Documentation/API specialist for version-specific external or local docs verification.",
+        "role": "docs",
+        "model_reasoning_effort": "medium",
+        "sandbox_mode": "read-only",
+        "tools_allow": ["read", "search", "web"],
+        "tools_deny": ["write", "spawn_agent", "close_agent"],
+        "can_spawn": False,
+        "final_report_required": True,
+        "default_required": False,
+        "nickname_candidates": ["Docs", "Reference", "PAO"],
+    },
+    "release_manager": {
+        "name": "release_manager",
+        "description": "Release/versioning specialist for changelog, semver, tags, and publish checklist.",
+        "role": "release",
+        "model_reasoning_effort": "medium",
+        "sandbox_mode": "workspace-write",
+        "tools_allow": ["read", "search", "write", "test", "status"],
+        "tools_deny": ["publish", "push_tags", "spawn_agent", "close_agent"],
+        "can_spawn": False,
+        "final_report_required": True,
+        "default_required": False,
+        "nickname_candidates": ["Release", "Surgeon", "Ship"],
+    },
+    "scribe": {
+        "name": "scribe",
+        "description": "Background run logger that preserves decisions, raw outputs, and final artifacts.",
+        "role": "logging",
+        "model_reasoning_effort": "low",
+        "sandbox_mode": "workspace-write",
+        "tools_allow": ["read", "write-run-artifacts"],
+        "tools_deny": ["write-source", "spawn_agent", "close_agent"],
+        "can_spawn": False,
+        "final_report_required": False,
+        "default_required": False,
+        "nickname_candidates": ["Scribe", "Log", "Archive"],
+    },
+}
+DEFAULT_MANAGER_TEAM = {
+    "name": "manager",
+    "description": "Default Qwendex Manager Mode team.",
+    "default_mode": "Manager",
+    "members": ["explorer", "implementer", "verifier", "docs_researcher", "release_manager", "scribe"],
+    "required_lanes_by_task": {
+        "repo_exploration": ["explorer"],
+        "code_edit_small": ["implementer", "verifier"],
+        "code_edit_complex": ["explorer", "implementer", "verifier"],
+        "docs_api_uncertainty": ["docs_researcher"],
+        "release_publish": ["release_manager", "verifier"],
+    },
+    "routing_rules": [
+        "quick questions go direct when no repo, docs, or edit work is needed",
+        "read-heavy repo mapping uses explorer in Heavy/Manager",
+        "non-trivial edits use implementer plus verifier in Heavy/Manager",
+        "release tasks use release_manager plus verifier and require explicit publish approval",
+    ],
 }
 MANAGER_REASONING_LEVELS = {"low", "medium", "high", "xhigh"}
 MANAGER_DEPLOY_POLICIES = {"auto", "disabled"}
@@ -505,6 +653,184 @@ def env_flag(value: str | None) -> bool | None:
 def normalize_manager_mode(value: Any) -> str:
     text = str(value or "").strip().lower().replace(" ", "_")
     return MANAGER_MODE_ALIASES.get(text, text)
+
+
+def normalize_agent_use_mode(value: Any) -> str:
+    text = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    return AGENT_USE_ALIASES.get(text, text)
+
+
+def agent_policy_defaults(mode: str) -> dict[str, Any]:
+    common = {
+        "mode": mode,
+        "agent_use": AGENT_USE_LABELS[mode],
+        "child_can_spawn": False,
+        "release_slot_on_final_status": True,
+        "tombstone_uncloseable_agents": True,
+        "emit_agent_status_events": True,
+        "mirror_ledger_to_files": mode in {"heavy", "manager"},
+        "policy_variant": "qwendex-cli-v1",
+    }
+    table: dict[str, dict[str, Any]] = {
+        "lite": {
+            "min_threads": 0,
+            "max_threads": 1,
+            "max_depth": 0,
+            "root_can_spawn": False,
+            "require_agent_ledger": False,
+            "require_verifier_for_edits": False,
+            "require_final_report_contract": False,
+            "require_routing_reason": False,
+            "forbid_fork_context": True,
+            "default_fork_context": False,
+            "max_inherited_context_bytes": 0,
+            "agent_idle_timeout_ms": 0,
+            "wait_timeout_ms": 0,
+            "close_timeout_ms": 5000,
+            "max_resteer_attempts": 0,
+        },
+        "medium": {
+            "min_threads": 2,
+            "max_threads": 4,
+            "max_depth": 1,
+            "root_can_spawn": True,
+            "require_agent_ledger": False,
+            "require_verifier_for_edits": False,
+            "require_final_report_contract": True,
+            "require_routing_reason": False,
+            "forbid_fork_context": False,
+            "default_fork_context": False,
+            "max_inherited_context_bytes": 16000,
+            "agent_idle_timeout_ms": 300000,
+            "wait_timeout_ms": 120000,
+            "close_timeout_ms": 7500,
+            "max_resteer_attempts": 1,
+        },
+        "heavy": {
+            "min_threads": 4,
+            "max_threads": 8,
+            "max_depth": 1,
+            "root_can_spawn": True,
+            "require_agent_ledger": True,
+            "require_verifier_for_edits": True,
+            "require_final_report_contract": True,
+            "require_routing_reason": True,
+            "forbid_fork_context": True,
+            "default_fork_context": False,
+            "max_inherited_context_bytes": 8192,
+            "agent_idle_timeout_ms": 240000,
+            "wait_timeout_ms": 90000,
+            "close_timeout_ms": 10000,
+            "max_resteer_attempts": 1,
+        },
+        "manager": {
+            "min_threads": 8,
+            "max_threads": MANAGER_MAX_SUBAGENTS_LIMIT,
+            "max_depth": 1,
+            "root_can_spawn": True,
+            "require_agent_ledger": True,
+            "require_verifier_for_edits": True,
+            "require_final_report_contract": True,
+            "require_routing_reason": True,
+            "forbid_fork_context": True,
+            "default_fork_context": False,
+            "max_inherited_context_bytes": 4096,
+            "agent_idle_timeout_ms": 180000,
+            "wait_timeout_ms": 60000,
+            "close_timeout_ms": 10000,
+            "max_resteer_attempts": 2,
+        },
+    }
+    return {**common, **table[mode]}
+
+
+def agent_policy_hash(policy: Mapping[str, Any]) -> str:
+    hashed = {
+        key: value
+        for key, value in policy.items()
+        if key not in {"policy_hash", "source", "selector", "warnings", "errors", "env"}
+    }
+    return hashlib.sha256(json.dumps(hashed, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def resolve_agent_policy(
+    config: Mapping[str, Any],
+    *,
+    cli_agent_use: str = "",
+    env: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    del config
+    source_env = env or os.environ
+    selector_source = "default"
+    selector = "Medium"
+    if cli_agent_use:
+        selector_source = "cli"
+        selector = cli_agent_use
+    elif source_env.get("QWENDEX_AGENT_USE"):
+        selector_source = "qwendex-env"
+        selector = str(source_env["QWENDEX_AGENT_USE"])
+    elif source_env.get("CODEX_AGENT_USE"):
+        selector_source = "codex-env"
+        selector = str(source_env["CODEX_AGENT_USE"])
+    mode = normalize_agent_use_mode(selector)
+    warnings: list[str] = []
+    errors: list[str] = []
+    strict = env_flag(source_env.get("QWENDEX_AGENT_USE_STRICT")) is True
+    if mode not in AGENT_USE_ORDER:
+        message = f"invalid agent use selector {selector!r}; expected Lite, Medium, Heavy, or Manager"
+        if strict:
+            errors.append(message)
+            mode = "medium"
+        else:
+            warnings.append(f"{message}; falling back to Medium")
+            mode = "medium"
+            selector_source = f"{selector_source}-fallback"
+    policy = agent_policy_defaults(mode)
+    policy.update({
+        "source": selector_source,
+        "selector": selector,
+        "warnings": warnings,
+        "errors": errors,
+    })
+    policy["policy_hash"] = agent_policy_hash(policy)
+    policy["env"] = {
+        "QWENDEX_EFFECTIVE_AGENT_USE": policy["agent_use"],
+        "QWENDEX_AGENT_POLICY_HASH": policy["policy_hash"],
+        "QWENDEX_AGENT_POLICY_SOURCE": selector_source,
+    }
+    policy["tool_surface"] = {
+        "root_management_tools": [
+            "spawn_agent",
+            "send_input",
+            "resume_agent",
+            "wait_agent",
+            "close_agent",
+            "list_agents",
+            "agent_ledger_list",
+            "agent_ledger_get",
+            "agent_ledger_update_status",
+            "agent_ledger_mark_required",
+            "agent_ledger_resteer",
+            "agent_ledger_tombstone",
+        ] if policy["root_can_spawn"] else [],
+        "child_management_tools": ["report_agent_result"] if mode != "lite" else [],
+        "denied_child_tools": ["spawn_agent", "close_agent", "wait_agent", "resume_agent", "agent_ledger_update_status"],
+    }
+    return policy
+
+
+def apply_agent_policy_env(policy: Mapping[str, Any]) -> None:
+    for key, value in policy.get("env", {}).items():
+        os.environ[str(key)] = str(value)
+
+
+def policy_mode_for_manager(args: argparse.Namespace, config: Mapping[str, Any], fallback_mode: str) -> str:
+    policy = resolve_agent_policy(config, cli_agent_use=getattr(args, "agent_use", ""))
+    if policy["errors"]:
+        raise ValueError("; ".join(policy["errors"]))
+    if policy["source"] != "default" and not getattr(args, "mode", ""):
+        return str(policy["mode"])
+    return fallback_mode
 
 
 def normalize_local_toggle(value: Any) -> bool | None:
@@ -1321,6 +1647,15 @@ def ensure_state_schema(conn: sqlite3.Connection) -> None:
           receipt_path TEXT NOT NULL,
           created_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS qwendex_agent_file_locks (
+          lock_id TEXT PRIMARY KEY,
+          agent_id TEXT NOT NULL,
+          path TEXT NOT NULL,
+          lock_type TEXT NOT NULL,
+          acquired_at TEXT NOT NULL,
+          released_at TEXT NOT NULL,
+          reason TEXT NOT NULL
+        );
         """
     )
     ensure_table_column(conn, "qwendex_agent_sessions", "context_packet_json", "TEXT NOT NULL DEFAULT '{}'")
@@ -1373,6 +1708,282 @@ def row_to_handoff(row: sqlite3.Row | None) -> dict[str, Any] | None:
 
 def row_to_evidence(row: sqlite3.Row | None) -> dict[str, Any] | None:
     return dict(row) if row is not None else None
+
+
+def row_to_file_lock(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    return dict(row) if row is not None else None
+
+
+def artifact_for_kind(artifacts: list[Any], suffix: str) -> str:
+    for item in artifacts:
+        text = str(item or "")
+        if text.endswith(suffix):
+            return text
+    return ""
+
+
+def agent_outcomes_for_sessions(sessions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    outcomes: list[dict[str, Any]] = []
+    for session in sessions:
+        artifacts = list(session.get("artifacts", []))
+        outcomes.append({
+            "agent_id": session.get("agent_id", ""),
+            "lane": session.get("lane", ""),
+            "task_id": session.get("task_id", ""),
+            "status": session.get("status", ""),
+            "validation_status": session.get("validation_status", ""),
+            "required": session_is_required(session),
+            "raw_output_artifact": artifact_for_kind(artifacts, "/raw-output.md"),
+            "compact_report_artifact": artifact_for_kind(artifacts, "/compact-report.json"),
+            "aggregate_raw_output_artifact": artifact_for_kind(artifacts, "/raw-agent-output.md"),
+            "artifacts": artifacts,
+        })
+    return outcomes
+
+
+def normalize_lock_path(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    path = Path(raw).expanduser()
+    if path.is_absolute():
+        try:
+            return rel(path.resolve())
+        except ValueError:
+            return str(path.resolve())
+    return str(Path(raw).as_posix()).lstrip("./")
+
+
+def event_file_paths(event: Mapping[str, Any]) -> list[str]:
+    values: list[Any] = []
+    for key in ("path", "file", "file_path", "target_path"):
+        if event.get(key):
+            values.append(event[key])
+    for key in ("paths", "files", "files_changed"):
+        item = event.get(key)
+        if isinstance(item, list):
+            values.extend(item)
+        elif item:
+            values.append(item)
+    tool_input = event.get("tool_input")
+    if isinstance(tool_input, Mapping):
+        for key in ("path", "file", "file_path", "target_path"):
+            if tool_input.get(key):
+                values.append(tool_input[key])
+        for key in ("paths", "files", "files_changed"):
+            item = tool_input.get(key)
+            if isinstance(item, list):
+                values.extend(item)
+            elif item:
+                values.append(item)
+    normalized: list[str] = []
+    for item in values:
+        if isinstance(item, Mapping):
+            item = item.get("path") or item.get("file") or item.get("file_path") or ""
+        path = normalize_lock_path(str(item))
+        if path and path not in normalized:
+            normalized.append(path)
+    return normalized
+
+
+def active_file_locks(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT * FROM qwendex_agent_file_locks WHERE released_at = '' ORDER BY acquired_at, path"
+    ).fetchall()
+    return [lock for row in rows if (lock := row_to_file_lock(row))]
+
+
+def release_agent_locks(conn: sqlite3.Connection, agent_id: str, *, now: str) -> list[dict[str, Any]]:
+    if not agent_id:
+        return []
+    rows = conn.execute(
+        "SELECT * FROM qwendex_agent_file_locks WHERE agent_id = ? AND released_at = ''",
+        (agent_id,),
+    ).fetchall()
+    conn.execute(
+        "UPDATE qwendex_agent_file_locks SET released_at = ? WHERE agent_id = ? AND released_at = ''",
+        (now, agent_id),
+    )
+    return [lock for row in rows if (lock := row_to_file_lock(row))]
+
+
+def scribe_path_allowed(path: str) -> bool:
+    normalized = normalize_lock_path(path)
+    return normalized.startswith(".qwendex/runs/")
+
+
+def safe_artifact_component(value: str, fallback: str) -> str:
+    text = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(value or "").strip()).strip(".-")
+    return (text[:96] or fallback).strip(".-") or fallback
+
+
+def final_report_sections(message: str) -> dict[str, str]:
+    sections: dict[str, list[str]] = {}
+    current = ""
+    for line in (message or "").splitlines():
+        match = re.match(r"^\s*([A-Za-z][A-Za-z0-9_ -]{0,48})\s*:\s*(.*)$", line)
+        if match:
+            current = match.group(1).strip().lower().replace("-", "_").replace(" ", "_")
+            sections.setdefault(current, [])
+            if match.group(2).strip():
+                sections[current].append(match.group(2).strip())
+            continue
+        if current:
+            sections.setdefault(current, []).append(line.rstrip())
+    return {key: "\n".join(value).strip() for key, value in sections.items()}
+
+
+def compact_agent_report(
+    *,
+    agent_id: str,
+    session: Mapping[str, Any],
+    message: str,
+    final_status: Mapping[str, Any],
+    now: str,
+) -> dict[str, Any]:
+    sections = final_report_sections(message)
+    task_name = sections.get("task_name") or str(session.get("stop_condition") or session.get("lane") or "")
+    summary = sections.get("summary")
+    if not summary:
+        lines = [line.strip() for line in message.splitlines() if line.strip() and line.strip() != "FINAL_REPORT"]
+        summary = "\n".join(lines[:8])
+    return {
+        "schema_version": "qwendex.agent_report.v1",
+        "agent_id": agent_id,
+        "lane": session.get("lane", ""),
+        "task_id": session.get("task_id", ""),
+        "task_name": task_name,
+        "status": final_status.get("status", ""),
+        "validation_status": final_status.get("validation_status", ""),
+        "summary": summary[:2000],
+        "files_inspected": sections.get("files_inspected", ""),
+        "files_changed": sections.get("files_changed", ""),
+        "commands_run": sections.get("commands_run", ""),
+        "evidence": sections.get("evidence", ""),
+        "blockers": sections.get("blockers", ""),
+        "remaining_risk": sections.get("remaining_risk", ""),
+        "next_recommended_action": sections.get("next_recommended_action", ""),
+        "created_at": now,
+    }
+
+
+def write_agent_output_artifacts(
+    *,
+    event: Mapping[str, Any],
+    session: Mapping[str, Any],
+    agent_id: str,
+    message: str,
+    report_message: str,
+    final_status: Mapping[str, Any],
+    now: str,
+) -> dict[str, Any]:
+    run_id = safe_artifact_component(
+        str(event.get("run_id") or event.get("session_id") or session.get("task_id") or "session"),
+        "session",
+    )
+    safe_agent_id = safe_artifact_component(agent_id, "agent")
+    run_dir = ROOT / ".qwendex" / "runs" / run_id
+    agent_dir = run_dir / safe_agent_id
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    raw_path = agent_dir / "raw-output.md"
+    compact_path = agent_dir / "compact-report.json"
+    aggregate_path = run_dir / "raw-agent-output.md"
+    raw_path.write_text(message, encoding="utf-8")
+    compact = compact_agent_report(
+        agent_id=agent_id,
+        session=session,
+        message=report_message,
+        final_status=final_status,
+        now=now,
+    )
+    compact["raw_output_artifact"] = rel(raw_path)
+    compact["compact_report_artifact"] = rel(compact_path)
+    compact["aggregate_raw_output_artifact"] = rel(aggregate_path)
+    compact_path.write_text(json_dumps(compact) + "\n", encoding="utf-8")
+    existing = aggregate_path.read_text(encoding="utf-8") if aggregate_path.exists() else "# Raw Agent Outputs\n"
+    entry = (
+        f"\n## {agent_id} - {session.get('lane', '')} - {now}\n\n"
+        f"Raw output: {rel(raw_path)}\n\n"
+        f"Compact report: {rel(compact_path)}\n"
+    )
+    aggregate_path.write_text(existing.rstrip() + entry + "\n", encoding="utf-8")
+    artifacts = [rel(raw_path), rel(compact_path), rel(aggregate_path)]
+    return {"artifacts": artifacts, "compact_report": compact}
+
+
+def acquire_file_locks(
+    conn: sqlite3.Connection,
+    *,
+    agent_id: str,
+    paths: list[str],
+    lock_type: str,
+    now: str,
+    reason: str,
+) -> dict[str, Any]:
+    normalized_paths = [path for path in (normalize_lock_path(item) for item in paths) if path]
+    active = active_file_locks(conn)
+    conflicts: list[dict[str, Any]] = []
+    if lock_type == "write":
+        for lock in active:
+            if lock.get("agent_id") == agent_id:
+                continue
+            same_path = lock.get("path") in normalized_paths
+            other_writer = lock.get("lock_type") == "write"
+            if same_path or other_writer:
+                conflicts.append(lock)
+    if conflicts:
+        return {"acquired": [], "conflicts": conflicts, "active_locks": active}
+    acquired: list[dict[str, Any]] = []
+    for path in normalized_paths:
+        existing = conn.execute(
+            """
+            SELECT * FROM qwendex_agent_file_locks
+            WHERE agent_id = ? AND path = ? AND lock_type = ? AND released_at = ''
+            """,
+            (agent_id, path, lock_type),
+        ).fetchone()
+        if existing is not None:
+            lock = row_to_file_lock(existing)
+            if lock:
+                acquired.append(lock)
+            continue
+        lock_id = make_id("lock")
+        conn.execute(
+            """
+            INSERT INTO qwendex_agent_file_locks
+            (lock_id, agent_id, path, lock_type, acquired_at, released_at, reason)
+            VALUES (?, ?, ?, ?, ?, '', ?)
+            """,
+            (lock_id, agent_id, path, lock_type, now, reason),
+        )
+        row = conn.execute("SELECT * FROM qwendex_agent_file_locks WHERE lock_id = ?", (lock_id,)).fetchone()
+        lock = row_to_file_lock(row)
+        if lock:
+            acquired.append(lock)
+    return {"acquired": acquired, "conflicts": [], "active_locks": active_file_locks(conn)}
+
+
+def file_lock_summary(config: Mapping[str, Any]) -> dict[str, Any]:
+    try:
+        with connect_state(config) as conn:
+            active = active_file_locks(conn)
+    except sqlite3.Error as exc:
+        return {
+            "strategy": "single_writer",
+            "status": "error",
+            "active_count": 0,
+            "active": [],
+            "error": str(exc),
+        }
+    active_writers = [lock for lock in active if lock.get("lock_type") == "write"]
+    return {
+        "strategy": "single_writer",
+        "status": "locked" if active_writers else "ready",
+        "active_count": len(active),
+        "active_writer_count": len(active_writers),
+        "active": active,
+        "active_writers": active_writers,
+    }
 
 
 def get_manager_setting(conn: sqlite3.Connection, key: str, default: Any) -> Any:
@@ -1454,6 +2065,7 @@ def reconcile_stale_manager_sessions(
             "UPDATE qwendex_agent_sessions SET status = 'closed', updated_at = ?, stop_reason = 'stale', close_receipt = ? WHERE agent_id = ?",
             (now, close_receipt, session["agent_id"]),
         )
+        release_agent_locks(conn, str(session["agent_id"]), now=now)
         updated = conn.execute("SELECT * FROM qwendex_agent_sessions WHERE agent_id = ?", (session["agent_id"],)).fetchone()
         closed.append(row_to_agent_session(updated) or {})
     conn.commit()
@@ -1480,7 +2092,7 @@ def summarize_agent_sessions(
     stale_ids = {session.get("agent_id") for session in stale}
     active = [session for session in active_all if session.get("agent_id") not in stale_ids]
     stale_writers = [session for session in stale if not manager_session_is_read_only(session)]
-    open_sessions = [session for session in sessions if session.get("status") != "closed"]
+    open_sessions = [session for session in sessions if str(session.get("status") or "") not in AGENT_TERMINAL_STATUSES]
     receipts = [
         session.get("context_packet", {}).get("receipt_path", "")
         for session in open_sessions
@@ -1505,6 +2117,7 @@ def summarize_agent_sessions(
         "active_subagents": {"count": len(active), "agents": active},
         "stale_sessions": {"count": len(stale), "agents": stale},
         "stale_writer_sessions": {"count": len(stale_writers), "agents": stale_writers},
+        "agent_outcomes": agent_outcomes_for_sessions(sessions),
         "subagent_state": {
             "context_used": sum(int(session.get("context_packet", {}).get("context_budget") or 0) for session in open_sessions),
             "files_touched": files_touched,
@@ -1651,6 +2264,7 @@ def repair_manager_sessions(
             "UPDATE qwendex_agent_sessions SET status = 'closed', updated_at = ?, stop_reason = ?, close_receipt = ? WHERE agent_id = ?",
             (now, reason, close_receipt, session["agent_id"]),
         )
+        release_agent_locks(conn, str(session["agent_id"]), now=now)
         updated = conn.execute("SELECT * FROM qwendex_agent_sessions WHERE agent_id = ?", (session["agent_id"],)).fetchone()
         closed = row_to_agent_session(updated) or {}
         if reason == "safe_stale_repair":
@@ -1774,12 +2388,20 @@ def manager_mode_payload(
     legacy_mode: str = "",
     sessions: list[dict[str, Any]] | None = None,
     health_mode: str = "advisory",
+    agent_policy: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     profile = manager_mode_profile(config, mode)
+    resolved_agent_policy = dict(agent_policy or resolve_agent_policy(config))
     summary = summarize_agent_sessions(sessions or [], stale_after_minutes=stale_after_minutes)
     data = {
         "mode": profile["mode"],
         "label": profile["label"],
+        "agent_use": resolved_agent_policy["agent_use"],
+        "agent_policy": resolved_agent_policy,
+        "agent_policy_hash": resolved_agent_policy["policy_hash"],
+        "agent_policy_source": resolved_agent_policy["source"],
+        "agent_policy_warnings": list(resolved_agent_policy.get("warnings", [])),
+        "write_safety": file_lock_summary(config),
         "legacy_mode": legacy_mode,
         "ui_indicator": manager_ui_indicator(config, profile["mode"]),
         "kaveman_indicator": kaveman_indicator(config, kaveman_enabled),
@@ -1912,8 +2534,11 @@ def codex_status_file_diagnostics(config: Mapping[str, Any], path: Path | None =
 
 def codex_status_payload(config: Mapping[str, Any], *, write_path: Path | None = None) -> dict[str, Any]:
     status_file_diagnostics = codex_status_file_diagnostics(config, write_path)
+    agent_policy = resolve_agent_policy(config)
     with connect_state(config) as conn:
         mode = current_manager_mode(config, conn)
+        if agent_policy["source"] != "default":
+            mode = str(agent_policy["mode"])
         stale_after = mode_stale_after_minutes(config, mode)
         reconcile_stale_manager_sessions(conn, stale_after_minutes=stale_after, now=utc_now())
         local_enabled = current_local_enabled(config, conn)
@@ -1929,6 +2554,9 @@ def codex_status_payload(config: Mapping[str, Any], *, write_path: Path | None =
         "text": text,
         "mode": profile["mode"],
         "label": profile["label"],
+        "agent_use": agent_policy["agent_use"],
+        "agent_policy_hash": agent_policy["policy_hash"],
+        "agent_policy_source": agent_policy["source"],
         "kaveman": "Y" if kaveman_enabled else "N",
         "kaveman_enabled": kaveman_enabled,
         "kaveman_directive": kaveman_directive(config) if kaveman_enabled else "",
@@ -2974,6 +3602,7 @@ def llmstack_public_contract() -> dict[str, Any]:
 
 def command_check(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, Any]:
     health_mode = normalize_health_mode(getattr(args, "health_mode", "advisory"))
+    agent_policy = resolve_agent_policy(config, cli_agent_use=getattr(args, "agent_use", ""))
     surface = required_surface_check()
     artifacts = [path for path in REQUIRED_SURFACE_FILES if (ROOT / path).exists()]
     status = "pass" if surface["status"] == "pass" else "fail"
@@ -3028,6 +3657,8 @@ def command_check(args: argparse.Namespace, config: dict[str, Any]) -> dict[str,
             "manager_health_mode": health_mode,
             "health_mode": health_mode,
             "warnings": manager_warnings,
+            "agent_policy": agent_policy,
+            "agent_policy_hash": agent_policy["policy_hash"],
             "surface": surface,
             "manager_health_issues": [*manager_issues, *manager_warnings],
             "manager_health": manager_health,
@@ -3041,6 +3672,7 @@ def command_check(args: argparse.Namespace, config: dict[str, Any]) -> dict[str,
 
 def command_doctor(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, Any]:
     health_mode = normalize_health_mode(getattr(args, "health_mode", "advisory"))
+    agent_policy = resolve_agent_policy(config, cli_agent_use=getattr(args, "agent_use", ""))
     surface = required_surface_check()
     docs = public_docs_audit(PUBLIC_DOC_DIR)
     critical = list(surface["missing"])
@@ -3104,6 +3736,8 @@ def command_doctor(args: argparse.Namespace, config: dict[str, Any]) -> dict[str
             "manager_health_mode": health_mode,
             "health_mode": health_mode,
             "warnings": manager_warnings,
+            "agent_policy": agent_policy,
+            "agent_policy_hash": agent_policy["policy_hash"],
             "critical_issues": critical,
             "manager_health_issues": [*manager_issues, *manager_warnings],
             "manager_health": manager_health,
@@ -3894,12 +4528,19 @@ def manager_estimate_envelope(
     prompt: str,
     mode: str,
     local_status: Mapping[str, Any],
+    agent_policy: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     estimate = estimate_task(config, prompt=prompt.strip(), local_status=local_status)
     profile = manager_mode_profile(config, mode)
+    resolved_agent_policy = dict(agent_policy or resolve_agent_policy(config))
     data = {
         "mode": profile["mode"],
         "label": profile["label"],
+        "agent_use": resolved_agent_policy["agent_use"],
+        "agent_policy": resolved_agent_policy,
+        "agent_policy_hash": resolved_agent_policy["policy_hash"],
+        "agent_policy_source": resolved_agent_policy["source"],
+        "agent_policy_warnings": list(resolved_agent_policy.get("warnings", [])),
         "ui_indicator": manager_ui_indicator(config, profile["mode"]),
         "local_indicator": local_status["indicator"],
         "local_subagents": local_status,
@@ -3918,8 +4559,12 @@ def manager_estimate_envelope(
 
 
 def command_estimate(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, Any]:
+    agent_policy = resolve_agent_policy(config, cli_agent_use=getattr(args, "agent_use", ""))
+    if agent_policy["errors"]:
+        return stable_envelope(command="estimate", status="blocked", summary="Invalid Qwendex agent policy.", errors=list(agent_policy["errors"]), data={"agent_policy": agent_policy})
     with connect_state(config) as conn:
         mode = current_manager_mode(config, conn)
+        mode = policy_mode_for_manager(args, config, mode)
         local_status = local_subagent_status(config, enabled=current_local_enabled(config, conn), env=os.environ, probe=True)
     return manager_estimate_envelope(
         config,
@@ -3927,15 +4572,871 @@ def command_estimate(args: argparse.Namespace, config: dict[str, Any]) -> dict[s
         prompt=args.prompt,
         mode=mode,
         local_status=local_status,
+        agent_policy=agent_policy,
     )
+
+
+def parse_timeout_ms(value: str, default_ms: int) -> int:
+    text = str(value or "").strip().lower()
+    if not text:
+        return default_ms
+    try:
+        if text.endswith("ms"):
+            return max(0, int(float(text[:-2])))
+        if text.endswith("s"):
+            return max(0, int(float(text[:-1]) * 1000))
+        return max(0, int(float(text) * 1000))
+    except ValueError:
+        return default_ms
+
+
+def read_hook_event(args: argparse.Namespace) -> dict[str, Any]:
+    raw = str(getattr(args, "event_json", "") or "").strip()
+    if raw:
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            raise ValueError("hook event JSON must be an object")
+        return data
+    if not sys.stdin.isatty():
+        try:
+            data = json.load(sys.stdin)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"hook event JSON is invalid: {exc}") from exc
+        if not isinstance(data, dict):
+            raise ValueError("hook event JSON must be an object")
+        return data
+    return {}
+
+
+def agent_mode_context(agent_policy: Mapping[str, Any]) -> str:
+    mode = str(agent_policy.get("mode") or "medium")
+    contracts = {
+        "lite": "Lite mode: prefer direct work. Do not spawn subagents unless explicitly requested or required by policy.",
+        "medium": "Medium mode: use a small number of specialists when exploration or verification materially improves quality.",
+        "heavy": "Heavy mode: use scoped specialist lanes for non-trivial repo work. Verifier evidence is required for meaningful edits.",
+        "manager": (
+            "Manager Mode: you are the root orchestrator and context curator. "
+            "For non-trivial repo work, maintain an agent ledger and use scoped specialists. "
+            "Do not finalize until required agents have FINAL_REPORT, BLOCKED, FAILED, or TOMBSTONED status with evidence. "
+            "Small trivial tasks may be handled directly with a recorded direct-work exception."
+        ),
+    }
+    return f"Active Qwendex agent mode: {agent_policy.get('agent_use')}. {contracts.get(mode, contracts['medium'])}"
+
+
+def subagent_start_context(event: Mapping[str, Any], agent_policy: Mapping[str, Any]) -> str:
+    agent_id = str(event.get("agent_id") or "unknown")
+    agent_type = str(event.get("agent_type") or event.get("profile") or "unknown")
+    task_name = str(event.get("task_name") or event.get("task") or "assigned task")
+    return (
+        f"You are Qwendex subagent {agent_id} of type {agent_type}. "
+        f"Parent mode is {agent_policy.get('agent_use')}. Execute {task_name} now. "
+        "Do not merely acknowledge or stand by. Do not spawn subagents. "
+        "End with FINAL_REPORT, BLOCKED, or FAILED. Required FINAL_REPORT fields: "
+        "status, agent_id, task_name, summary, files_inspected, files_changed, "
+        "commands_run, evidence, artifacts, blockers, remaining_risk, next_recommended_action."
+    )
+
+
+def parse_worker_final_status(message: str) -> dict[str, Any]:
+    text = message or ""
+    if re.search(r"\bBLOCKED\b", text):
+        return {"has_contract": True, "status": "blocked", "validation_status": "fail", "reason": "blocked_contract"}
+    if re.search(r"\bFAILED\b", text):
+        return {"has_contract": True, "status": "failed", "validation_status": "fail", "reason": "failed_contract"}
+    if not re.search(r"\bFINAL_REPORT\b", text):
+        return {"has_contract": False, "status": "", "validation_status": "pending", "reason": "missing_final_contract"}
+    status_match = re.search(r"(?im)^\s*status\s*:\s*([a-z_-]+)", text)
+    reported = status_match.group(1).strip().lower() if status_match else "completed"
+    if reported in {"blocked", "block"}:
+        status = "blocked"
+        validation = "fail"
+    elif reported in {"failed", "fail", "failure"}:
+        status = "failed"
+        validation = "fail"
+    else:
+        status = "completed"
+        validation = "pass"
+    return {"has_contract": True, "status": status, "validation_status": validation, "reason": "final_report"}
+
+
+def update_agent_from_final_contract(
+    conn: sqlite3.Connection,
+    *,
+    agent_id: str,
+    final_status: Mapping[str, Any],
+    now: str,
+    artifacts: list[str] | None = None,
+) -> dict[str, Any] | None:
+    if not agent_id or not final_status.get("has_contract"):
+        return None
+    row = conn.execute("SELECT * FROM qwendex_agent_sessions WHERE agent_id = ?", (agent_id,)).fetchone()
+    if row is None:
+        return None
+    stored_artifacts = json_loads_list(row["artifacts_json"])
+    for artifact in artifacts or []:
+        if artifact and artifact not in stored_artifacts:
+            stored_artifacts.append(artifact)
+    conn.execute(
+        """
+        UPDATE qwendex_agent_sessions
+        SET status = ?, validation_status = ?, heartbeat_at = ?, updated_at = ?, stop_reason = ?, artifacts_json = ?
+        WHERE agent_id = ?
+        """,
+        (
+            str(final_status.get("status") or "completed"),
+            str(final_status.get("validation_status") or "pending"),
+            now,
+            now,
+            str(final_status.get("reason") or "final_report"),
+            json_dumps(stored_artifacts),
+            agent_id,
+        ),
+    )
+    release_agent_locks(conn, agent_id, now=now)
+    conn.commit()
+    updated = conn.execute("SELECT * FROM qwendex_agent_sessions WHERE agent_id = ?", (agent_id,)).fetchone()
+    return row_to_agent_session(updated)
+
+
+def session_is_required(session: Mapping[str, Any]) -> bool:
+    packet = session.get("context_packet", {})
+    if isinstance(packet, Mapping) and "required" in packet:
+        return bool(packet.get("required"))
+    return True
+
+
+def verifier_passed(sessions: list[dict[str, Any]]) -> bool:
+    for session in sessions:
+        lane_text = " ".join([
+            str(session.get("lane") or ""),
+            str(session.get("context_packet", {}).get("task_class") or ""),
+            str(session.get("owner") or ""),
+        ]).lower()
+        if "verif" in lane_text or "review" in lane_text:
+            if str(session.get("status") or "") in AGENT_TERMINAL_STATUSES and str(session.get("validation_status") or "") != "fail":
+                return True
+    return False
+
+
+def final_mentions_agent_outcomes(message: str) -> bool:
+    return bool(re.search(r"(?i)\b(agent outcomes|agent ledger|agents?|validation|risks?)\b", message or ""))
+
+
+def event_command_text(event: Mapping[str, Any]) -> str:
+    parts: list[str] = []
+    for key in ("command", "cmd", "shell_command"):
+        if isinstance(event.get(key), str):
+            parts.append(str(event[key]))
+    tool_input = event.get("tool_input")
+    if isinstance(tool_input, Mapping):
+        for key in ("command", "cmd"):
+            if isinstance(tool_input.get(key), str):
+                parts.append(str(tool_input[key]))
+    return "\n".join(parts)
+
+
+def event_tool_name(event: Mapping[str, Any]) -> str:
+    for key in ("tool_name", "tool", "name"):
+        if isinstance(event.get(key), str) and event.get(key):
+            return str(event[key]).strip()
+    return ""
+
+
+def event_profile(event: Mapping[str, Any]) -> str:
+    for key in ("profile", "agent_type", "role", "lane"):
+        if isinstance(event.get(key), str) and event.get(key):
+            return str(event[key]).strip().lower()
+    return ""
+
+
+def event_agent_id(event: Mapping[str, Any]) -> str:
+    for key in ("agent_id", "owner_agent_id", "session_agent_id"):
+        if isinstance(event.get(key), str) and event.get(key):
+            return str(event[key]).strip()
+    return ""
+
+
+def event_is_write_attempt(tool_lower: str, command: str) -> bool:
+    return tool_lower in WRITE_TOOL_NAMES or bool(re.search(r">\s*[^&]|tee\s+|apply_patch|sed\s+-i|python3?\s+.*\bwrite_text\b", command))
+
+
+def pre_tool_gate(config: Mapping[str, Any], event: Mapping[str, Any], agent_policy: Mapping[str, Any]) -> dict[str, Any]:
+    tool = event_tool_name(event)
+    tool_lower = tool.lower()
+    depth = int(event.get("depth") or event.get("spawn_depth") or 0)
+    profile = event_profile(event)
+    agent_id = event_agent_id(event)
+    command = event_command_text(event)
+    write_attempt = event_is_write_attempt(tool_lower, command)
+    if depth > 0 and tool_lower in ROOT_ONLY_AGENT_TOOLS:
+        return {
+            "decision": "block",
+            "event": "agent.spawn_rejected",
+            "reason": f"Child agents cannot use root-only management tool {tool}.",
+        }
+    if profile in READ_ONLY_AGENT_PROFILES and write_attempt:
+        return {
+            "decision": "block",
+            "event": "agent.write_rejected",
+            "reason": f"Read-only profile {profile} cannot write files.",
+        }
+    if RELEASE_COMMAND_RE.search(command):
+        approved = bool(event.get("release_approved")) or env_flag(os.environ.get("QWENDEX_RELEASE_APPROVED")) is True
+        if not approved:
+            return {
+                "decision": "block",
+                "event": "agent.release_command_rejected",
+                "reason": "Release/publish commands require an explicit release gate approval.",
+            }
+    if tool_lower == "spawn_agent" and agent_policy.get("mode") == "lite" and not event.get("explicit_user_request"):
+        return {
+            "decision": "block",
+            "event": "agent.spawn_rejected",
+            "reason": "Lite mode disables subagents unless the user explicitly requested one.",
+        }
+    if write_attempt:
+        paths = event_file_paths(event)
+        if not agent_id:
+            return {
+                "decision": "block",
+                "event": "agent.write_lock_rejected",
+                "reason": "Write attempts must include agent_id so Qwendex can record file ownership.",
+            }
+        if not paths:
+            return {
+                "decision": "block",
+                "event": "agent.write_lock_rejected",
+                "reason": "Write attempts must include at least one target file path for Qwendex file-lock tracking.",
+            }
+        if profile == "scribe":
+            denied = [path for path in paths if not scribe_path_allowed(path)]
+            if denied:
+                return {
+                    "decision": "block",
+                    "event": "agent.write_rejected",
+                    "reason": "Scribe can write only under .qwendex/runs.",
+                    "denied_paths": denied,
+                }
+        with connect_state(config) as conn:
+            lock_result = acquire_file_locks(
+                conn,
+                agent_id=agent_id,
+                paths=paths,
+                lock_type="write",
+                now=utc_now(),
+                reason=f"{tool or 'tool'} PreToolUse",
+            )
+            if lock_result["conflicts"]:
+                return {
+                    "decision": "block",
+                    "event": "agent.file_lock_conflict",
+                    "reason": "First-release Manager Mode uses a single writer in the base worktree.",
+                    **lock_result,
+                }
+            conn.commit()
+        return {
+            "event": "agent.file_locks_acquired",
+            "agent_id": agent_id,
+            **lock_result,
+        }
+    return {}
+
+
+def evaluate_agent_hook(
+    config: Mapping[str, Any],
+    *,
+    event_name: str,
+    event: Mapping[str, Any],
+    agent_policy: Mapping[str, Any],
+) -> tuple[str, dict[str, Any], dict[str, Any]]:
+    canonical = event_name or str(event.get("hookEventName") or event.get("event") or "")
+    if canonical not in AGENT_HOOK_EVENTS:
+        return "blocked", {"decision": "block", "reason": f"Unsupported Qwendex agent hook event: {canonical}"}, {}
+    if event.get("stop_hook_active"):
+        return "pass", {"continue": True}, {}
+    if canonical in {"SessionStart", "UserPromptSubmit"}:
+        return "pass", {
+            "hookSpecificOutput": {
+                "hookEventName": canonical,
+                "additionalContext": agent_mode_context(agent_policy),
+            }
+        }, {}
+    if canonical == "SubagentStart":
+        return "pass", {
+            "hookSpecificOutput": {
+                "hookEventName": "SubagentStart",
+                "additionalContext": subagent_start_context(event, agent_policy),
+            }
+        }, {}
+    if canonical == "SubagentStop":
+        final_message = str(event.get("last_assistant_message") or event.get("message") or event.get("raw_output") or "")
+        raw_message = str(event.get("raw_output") or event.get("transcript") or final_message)
+        final_status = parse_worker_final_status(final_message)
+        if not final_status["has_contract"]:
+            return "blocked", {
+                "decision": "block",
+                "event": "agent.final_contract_missing",
+                "reason": "Subagent response must end with FINAL_REPORT, BLOCKED, or FAILED with evidence.",
+            }, {"final_status": final_status}
+        updated: dict[str, Any] | None = None
+        capture: dict[str, Any] = {}
+        agent_id = str(event.get("agent_id") or "")
+        if agent_id:
+            with connect_state(config) as conn:
+                row = conn.execute("SELECT * FROM qwendex_agent_sessions WHERE agent_id = ?", (agent_id,)).fetchone()
+                session = row_to_agent_session(row) or {}
+                now = utc_now()
+                try:
+                    capture = write_agent_output_artifacts(
+                        event=event,
+                        session=session,
+                        agent_id=agent_id,
+                        message=raw_message,
+                        report_message=final_message,
+                        final_status=final_status,
+                        now=now,
+                    )
+                except OSError as exc:
+                    return "blocked", {
+                        "decision": "block",
+                        "event": "agent.output_capture_failed",
+                        "reason": f"Failed to preserve raw agent output: {exc}",
+                    }, {"final_status": final_status}
+                updated = update_agent_from_final_contract(
+                    conn,
+                    agent_id=agent_id,
+                    final_status=final_status,
+                    now=now,
+                    artifacts=list(capture.get("artifacts", [])),
+                )
+        return "pass", {
+            "event": f"agent.{final_status['status']}",
+            "status": final_status["status"],
+            "agent_id": agent_id,
+            "artifacts": list(capture.get("artifacts", [])),
+        }, {"final_status": final_status, "agent_session": updated, **capture}
+    if canonical == "Stop":
+        if str(agent_policy.get("mode")) != "manager":
+            return "pass", {}, {}
+        with connect_state(config) as conn:
+            rows = conn.execute("SELECT * FROM qwendex_agent_sessions ORDER BY updated_at DESC").fetchall()
+        sessions = [session for row in rows if (session := row_to_agent_session(row))]
+        incomplete = [
+            session
+            for session in sessions
+            if session_is_required(session) and str(session.get("status") or "") not in AGENT_TERMINAL_STATUSES
+        ]
+        if incomplete:
+            names = ", ".join(f"{item.get('agent_id')}:{item.get('status')}" for item in incomplete[:5])
+            return "blocked", {
+                "decision": "block",
+                "event": "manager.stop_gate_continued",
+                "reason": f"Manager Mode ledger has incomplete required agents: {names}.",
+            }, {"incomplete_required_agents": incomplete}
+        edit_happened = bool(event.get("edit_happened") or event.get("files_changed"))
+        if edit_happened and agent_policy.get("require_verifier_for_edits") and not verifier_passed(sessions):
+            return "blocked", {
+                "decision": "block",
+                "event": "manager.verifier_required",
+                "reason": "Verifier evidence is required for this Manager Mode edit.",
+            }, {"agent_sessions": sessions}
+        last_message = str(event.get("last_assistant_message") or "")
+        if sessions and not final_mentions_agent_outcomes(last_message):
+            return "blocked", {
+                "decision": "block",
+                "event": "manager.final_contract_missing",
+                "reason": "Final Manager Mode response must include agent outcomes, validation, and unresolved risks.",
+            }, {"agent_sessions": sessions}
+        return "pass", {"event": "manager.finalized"}, {"agent_sessions": sessions}
+    if canonical == "PreToolUse":
+        result = pre_tool_gate(config, event, agent_policy)
+        return ("blocked" if result.get("decision") == "block" else "pass"), result, {}
+    if canonical in {"PostToolUse", "PreCompact", "PostCompact"}:
+        return "pass", {"event": f"agent.{canonical}", "status": "recorded"}, {}
+    return "pass", {}, {}
+
+
+def managed_agent_hook_config(command_base: str = "") -> dict[str, Any]:
+    base = str(command_base or ROOT / "scripts" / "qwendex").strip()
+    hooks: dict[str, list[dict[str, Any]]] = {}
+    for event_name, spec in MANAGED_AGENT_HOOKS.items():
+        hooks[event_name] = [{
+            "matcher": spec["matcher"],
+            "hooks": [{
+                "type": "command",
+                "command": f"{base} agent hook {event_name} --json",
+                "timeout": spec["timeout"],
+            }],
+        }]
+    return {"hooks": hooks}
+
+
+def write_managed_hook_config(path: Path, payload: Mapping[str, Any], *, force: bool) -> Path:
+    target = path.expanduser()
+    if target.is_dir():
+        target = target / "hooks.json"
+    if not target.is_absolute():
+        target = ROOT / target
+    if target.exists() and not force:
+        raise FileExistsError(f"hook config already exists: {target}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json_dumps(payload) + "\n", encoding="utf-8")
+    return target
+
+
+def prompt_requests_team(prompt: str) -> bool:
+    return bool(re.search(r"(?i)\b(team|squad|manager mode|subagents?|use agents?|spawn agents?|fan out)\b", prompt or ""))
+
+
+def prompt_is_trivial(prompt: str, task_class: str) -> bool:
+    words = re.findall(r"\w+", prompt or "")
+    risky = task_class in {"security", "release acceptance", "architecture"}
+    work_verbs = re.search(r"(?i)\b(add|change|edit|implement|refactor|test|verify|release|publish|ship|write)\b", prompt or "")
+    return len(words) <= 12 and not risky and not work_verbs
+
+
+def agent_plan_profiles(prompt: str, mode: str, estimate: Mapping[str, Any]) -> tuple[list[str], str]:
+    text = prompt.lower()
+    task_class = str(estimate.get("task_class") or "bounded patch")
+    recommended = str(estimate.get("recommended_mode") or "medium")
+    explicit_team = prompt_requests_team(prompt)
+    if prompt_is_trivial(prompt, task_class) and not explicit_team:
+        return [], "direct_trivial"
+    if mode == "lite" and not explicit_team:
+        return [], "direct_lite_policy"
+    profiles: list[str]
+    if task_class == "release acceptance" or "publish" in text or "release" in text:
+        profiles = ["release_manager", "verifier"]
+    elif task_class in {"security", "architecture"}:
+        profiles = ["explorer", "verifier"]
+        if re.search(r"(?i)\b(add|change|edit|implement|patch|fix)\b", prompt):
+            profiles.insert(1, "implementer")
+    elif task_class == "docs draft":
+        profiles = ["docs_researcher"]
+        if re.search(r"(?i)\b(edit|update|write|add)\b", prompt):
+            profiles.extend(["implementer", "verifier"])
+    elif task_class == "artifact summary":
+        profiles = ["explorer"]
+    elif recommended in {"heavy", "manager"} or explicit_team:
+        profiles = ["explorer", "implementer", "verifier"]
+    else:
+        profiles = ["implementer", "verifier"]
+    if mode == "medium" and not explicit_team:
+        profiles = [profile for profile in profiles if profile in {"implementer", "verifier", "docs_researcher", "release_manager"}][:2]
+    if mode == "manager" and profiles and "scribe" not in profiles:
+        profiles.append("scribe")
+    deduped: list[str] = []
+    for profile in profiles:
+        if profile in DEFAULT_AGENT_PROFILES and profile not in deduped:
+            deduped.append(profile)
+    return deduped, "team_routing"
+
+
+def agent_profile_lane(profile: str) -> str:
+    return {
+        "explorer": "exploration",
+        "implementer": "implementation",
+        "verifier": "verification",
+        "docs_researcher": "docs-research",
+        "release_manager": "release-management",
+        "scribe": "scribe",
+    }.get(profile, profile)
+
+
+def agent_profile_write_surface(profile: str) -> str:
+    profile_data = DEFAULT_AGENT_PROFILES.get(profile, {})
+    sandbox = str(profile_data.get("sandbox_mode") or "")
+    if sandbox == "read-only":
+        return "read-only"
+    if profile == "scribe":
+        return ".qwendex/runs"
+    return "declared-scope"
+
+
+def build_agent_team_plan(
+    config: Mapping[str, Any],
+    *,
+    prompt: str,
+    task_id: str,
+    agent_policy: Mapping[str, Any],
+    local_status: Mapping[str, Any],
+) -> dict[str, Any]:
+    estimate = estimate_task(config, prompt=prompt, local_status=local_status)
+    mode = str(agent_policy.get("mode") or "medium")
+    profiles, reason = agent_plan_profiles(prompt, mode, estimate)
+    effective_task_id = task_id or make_id("task")
+    assignments: list[dict[str, Any]] = []
+    task_slug = safe_artifact_component(effective_task_id, "task")
+    for index, profile in enumerate(profiles, start=1):
+        lane = agent_profile_lane(profile)
+        required = bool(DEFAULT_AGENT_PROFILES.get(profile, {}).get("default_required", True))
+        agent_id = safe_artifact_component(f"{task_slug}-{profile}-{index}", f"{profile}-{index}")
+        stop_condition = (
+            "return FINAL_REPORT with summary, files, commands, evidence, artifacts, blockers, and remaining risk"
+            if profile != "scribe"
+            else "record run decisions and artifact paths under .qwendex/runs"
+        )
+        command = [
+            "scripts/qwendex",
+            "manager",
+            "assign",
+            "--agent-id",
+            agent_id,
+            "--lane",
+            lane,
+            "--task-id",
+            effective_task_id,
+            "--owner",
+            profile,
+            "--write-surface",
+            agent_profile_write_surface(profile),
+            "--stop-condition",
+            stop_condition,
+        ]
+        command.append("--required" if required else "--optional")
+        command.append("--json")
+        assignments.append({
+            "agent_id": agent_id,
+            "profile": profile,
+            "lane": lane,
+            "required": required,
+            "write_surface": agent_profile_write_surface(profile),
+            "stop_condition": stop_condition,
+            "assign_command": " ".join(shlex.quote(part) for part in command),
+            "routing": lane_model_reasoning(
+                config,
+                task_class=str(estimate.get("task_class") or "bounded patch"),
+                lane=lane,
+                risk=str(estimate.get("risk") or "medium"),
+                local_status=local_status,
+            ),
+        })
+    direct_work = not assignments
+    return {
+        "schema_version": "qwendex.agent_plan.v1",
+        "mode": mode,
+        "agent_use": agent_policy.get("agent_use"),
+        "task_id": effective_task_id,
+        "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+        "task_class": estimate.get("task_class"),
+        "estimate": estimate,
+        "routing_reason": reason,
+        "direct_work": direct_work,
+        "direct_work_exception": "No agents used because the task is trivial or policy is Lite." if direct_work else "",
+        "profiles": profiles,
+        "assignments": assignments,
+        "team": DEFAULT_MANAGER_TEAM,
+    }
+
+
+def agent_metrics_payload(config: Mapping[str, Any], agent_policy: Mapping[str, Any]) -> dict[str, Any]:
+    with connect_state(config) as conn:
+        rows = conn.execute("SELECT * FROM qwendex_agent_sessions ORDER BY updated_at DESC").fetchall()
+        sessions = [session for row in rows if (session := row_to_agent_session(row))]
+        locks = active_file_locks(conn)
+    status_counts: dict[str, int] = {}
+    validation_counts: dict[str, int] = {}
+    required_incomplete = 0
+    terminal_count = 0
+    terminal_with_final_contract = 0
+    for session in sessions:
+        status = str(session.get("status") or "unknown")
+        validation = str(session.get("validation_status") or "pending")
+        status_counts[status] = status_counts.get(status, 0) + 1
+        validation_counts[validation] = validation_counts.get(validation, 0) + 1
+        if session_is_required(session) and status not in AGENT_TERMINAL_STATUSES:
+            required_incomplete += 1
+        if status in AGENT_TERMINAL_STATUSES:
+            terminal_count += 1
+            if session.get("artifacts") or str(session.get("stop_reason") or "") in {"final_report", "blocked_contract", "failed_contract"}:
+                terminal_with_final_contract += 1
+    active_writers = [lock for lock in locks if lock.get("lock_type") == "write"]
+    final_contract_compliance = (
+        round(terminal_with_final_contract / terminal_count, 4)
+        if terminal_count
+        else None
+    )
+    return {
+        "schema_version": "qwendex.agent_metrics.v1",
+        "agent_use": agent_policy.get("agent_use"),
+        "agent_policy_hash": agent_policy.get("policy_hash"),
+        "session_count": len(sessions),
+        "active_count": status_counts.get("active", 0),
+        "terminal_count": terminal_count,
+        "status_counts": status_counts,
+        "validation_counts": validation_counts,
+        "required_incomplete_count": required_incomplete,
+        "final_contract_compliance": final_contract_compliance,
+        "active_file_lock_count": len(locks),
+        "active_writer_count": len(active_writers),
+        "managed_hook_event_count": len(MANAGED_AGENT_HOOKS),
+        "built_in_profile_count": len(DEFAULT_AGENT_PROFILES),
+        "raw_output_artifact_count": sum(1 for session in sessions for artifact in session.get("artifacts", []) if str(artifact).endswith("/raw-output.md")),
+    }
+
+
+def command_agent(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, Any]:
+    agent_policy = resolve_agent_policy(config, cli_agent_use=getattr(args, "agent_use", ""))
+    if agent_policy["errors"]:
+        return stable_envelope(command="agent", status="blocked", summary="Invalid Qwendex agent policy.", errors=list(agent_policy["errors"]), data={"agent_policy": agent_policy})
+    action = args.action or "status"
+    if action == "hook":
+        event = read_hook_event(args)
+        status, hook_result, extra = evaluate_agent_hook(
+            config,
+            event_name=args.target or str(event.get("hookEventName") or event.get("event") or ""),
+            event=event,
+            agent_policy=agent_policy,
+        )
+        return stable_envelope(
+            command="agent",
+            status=status,
+            summary=f"Qwendex agent hook {args.target or event.get('event', '')} returned {status}.",
+            errors=[hook_result.get("reason", "")] if status == "blocked" and hook_result.get("reason") else [],
+            data={"hook_result": hook_result, "event": event, "agent_policy": agent_policy, **extra},
+        )
+    if action == "policy":
+        return stable_envelope(
+            command="agent",
+            status="pass",
+            summary=f"Qwendex AgentPolicy is {agent_policy['agent_use']}.",
+            data={"agent_policy": agent_policy},
+        )
+    if action == "hook-config":
+        hook_payload = managed_agent_hook_config(command_base=getattr(args, "qwendex_command", ""))
+        artifacts: list[str] = []
+        if getattr(args, "write", None):
+            if not getattr(args, "approve", False):
+                return stable_envelope(
+                    command="agent",
+                    status="blocked",
+                    summary="Writing managed hook config requires --approve.",
+                    errors=["explicit approval required"],
+                    data={"hook_config": hook_payload, "agent_policy": agent_policy},
+                )
+            try:
+                written = write_managed_hook_config(Path(args.write), hook_payload, force=bool(getattr(args, "force", False)))
+            except OSError as exc:
+                return stable_envelope(
+                    command="agent",
+                    status="blocked",
+                    summary="Managed hook config was not written.",
+                    errors=[str(exc)],
+                    data={"hook_config": hook_payload, "agent_policy": agent_policy},
+                )
+            artifacts.append(str(written))
+        return stable_envelope(
+            command="agent",
+            status="pass",
+            summary="Rendered Qwendex managed agent hook config.",
+            artifacts=artifacts,
+            data={
+                "hook_config": hook_payload,
+                "managed_events": sorted(MANAGED_AGENT_HOOKS),
+                "agent_policy": agent_policy,
+            },
+        )
+    if action == "plan":
+        prompt = str(getattr(args, "prompt", "") or "").strip()
+        if not prompt:
+            return stable_envelope(command="agent", status="blocked", summary="Agent plan requires --prompt.", errors=["missing prompt"], data={"agent_policy": agent_policy})
+        with connect_state(config) as conn:
+            local_status = local_subagent_status(config, enabled=current_local_enabled(config, conn), env=os.environ, probe=False)
+        plan = build_agent_team_plan(
+            config,
+            prompt=prompt,
+            task_id=str(getattr(args, "task_id", "") or ""),
+            agent_policy=agent_policy,
+            local_status=local_status,
+        )
+        return stable_envelope(
+            command="agent",
+            status="pass",
+            summary="Built Qwendex agent team plan." if not plan["direct_work"] else "Built Qwendex direct-work plan.",
+            next_actions=[assignment["assign_command"] for assignment in plan["assignments"]],
+            data={"agent_plan": plan, "agent_policy": agent_policy},
+        )
+    if action == "metrics":
+        metrics = agent_metrics_payload(config, agent_policy)
+        return stable_envelope(
+            command="agent",
+            status="pass",
+            summary=f"Loaded Qwendex agent metrics for {metrics['session_count']} sessions.",
+            data={"agent_metrics": metrics, "agent_policy": agent_policy},
+        )
+    if action == "profiles":
+        return stable_envelope(
+            command="agent",
+            status="pass",
+            summary=f"Loaded {len(DEFAULT_AGENT_PROFILES)} Qwendex built-in agent profiles.",
+            data={"profiles": DEFAULT_AGENT_PROFILES, "profile_order": sorted(DEFAULT_AGENT_PROFILES)},
+        )
+    if action == "team":
+        return stable_envelope(
+            command="agent",
+            status="pass",
+            summary="Loaded Qwendex default manager team.",
+            data={"team": DEFAULT_MANAGER_TEAM, "profiles": DEFAULT_AGENT_PROFILES},
+        )
+    if action == "locks":
+        locks = file_lock_summary(config)
+        return stable_envelope(
+            command="agent",
+            status="pass" if locks["status"] in {"ready", "locked"} else "blocked",
+            summary=f"Qwendex file-lock strategy is {locks['strategy']} with {locks['active_count']} active locks.",
+            data={"write_safety": locks, "agent_policy": agent_policy},
+        )
+    now = utc_now()
+    with connect_state(config) as conn:
+        mode = current_manager_mode(config, conn)
+        mode = policy_mode_for_manager(args, config, mode)
+        local_status = local_subagent_status(config, enabled=current_local_enabled(config, conn), env=os.environ, probe=True)
+        kaveman_enabled = current_kaveman_enabled(config, conn)
+        stale_after = mode_stale_after_minutes(config, mode, args.stale_after_minutes)
+        reconciliation = reconcile_stale_manager_sessions(conn, stale_after_minutes=stale_after, now=now)
+        target = args.target or args.agent_id
+        if action == "close":
+            if not target:
+                return stable_envelope(command="agent", status="blocked", summary="Agent close requires an agent id or all.", errors=["missing agent_id"])
+            reason = args.reason or "operator_closed"
+            close_timeout_ms = parse_timeout_ms(args.timeout, int(agent_policy["close_timeout_ms"]))
+            if target == "all":
+                rows = conn.execute("SELECT * FROM qwendex_agent_sessions WHERE status = 'active'").fetchall()
+                ids = [str(row["agent_id"]) for row in rows]
+            else:
+                row = conn.execute("SELECT * FROM qwendex_agent_sessions WHERE agent_id = ?", (target,)).fetchone()
+                if row is None:
+                    return stable_envelope(command="agent", status="blocked", summary=f"Agent session not found: {target}", errors=[target])
+                ids = [target]
+            closed: list[dict[str, Any]] = []
+            for agent_id in ids:
+                close_receipt = make_id("close")
+                conn.execute(
+                    "UPDATE qwendex_agent_sessions SET status = 'closed', updated_at = ?, stop_reason = ?, close_receipt = ? WHERE agent_id = ?",
+                    (now, reason, close_receipt, agent_id),
+                )
+                release_agent_locks(conn, agent_id, now=now)
+                updated = conn.execute("SELECT * FROM qwendex_agent_sessions WHERE agent_id = ?", (agent_id,)).fetchone()
+                session = row_to_agent_session(updated)
+                if session:
+                    closed.append(session)
+            conn.commit()
+            return stable_envelope(
+                command="agent",
+                status="pass",
+                summary=f"Closed {len(closed)} Qwendex agent session{'s' if len(closed) != 1 else ''}.",
+                data={
+                    "closed": closed,
+                    "closed_count": len(closed),
+                    "close_timeout_ms": close_timeout_ms,
+                    "bounded_close": True,
+                    "agent_policy": agent_policy,
+                },
+            )
+        if action == "tombstone":
+            if not target or target == "all":
+                return stable_envelope(command="agent", status="blocked", summary="Agent tombstone requires one agent id.", errors=["missing agent_id"])
+            row = conn.execute("SELECT * FROM qwendex_agent_sessions WHERE agent_id = ?", (target,)).fetchone()
+            if row is None:
+                return stable_envelope(command="agent", status="blocked", summary=f"Agent session not found: {target}", errors=[target])
+            reason = args.reason or "operator_tombstoned"
+            close_receipt = make_id("tombstone")
+            conn.execute(
+                "UPDATE qwendex_agent_sessions SET status = 'tombstoned', updated_at = ?, stop_reason = ?, close_receipt = ? WHERE agent_id = ?",
+                (now, reason, close_receipt, target),
+            )
+            release_agent_locks(conn, target, now=now)
+            conn.commit()
+            updated = conn.execute("SELECT * FROM qwendex_agent_sessions WHERE agent_id = ?", (target,)).fetchone()
+            return stable_envelope(
+                command="agent",
+                status="warning",
+                summary=f"Tombstoned Qwendex agent session {target}.",
+                data={"agent_session": row_to_agent_session(updated), "agent_policy": agent_policy},
+            )
+        rows = conn.execute("SELECT * FROM qwendex_agent_sessions ORDER BY updated_at DESC LIMIT ?", (args.limit,)).fetchall()
+        sessions = [session for row in rows if (session := row_to_agent_session(row))]
+        if action in {"status", "list", "wait"}:
+            data = manager_mode_payload(
+                config,
+                mode=mode,
+                local_status=local_status,
+                max_subagents=manager_mode_profile(config, mode)["max_subagents"],
+                stale_after_minutes=stale_after,
+                kaveman_enabled=kaveman_enabled,
+                sessions=sessions,
+                agent_policy=agent_policy,
+            )
+            data["agent_sessions"] = sessions
+            data["state_db"] = str(state_db_path(config))
+            data["stale_reconciliation"] = reconciliation
+            if action == "list":
+                return stable_envelope(command="agent", status="pass", summary=f"Loaded {len(sessions)} Qwendex agent sessions.", data=data)
+            if action == "wait":
+                active = data["active_subagents"]["count"]
+                status = "standby" if active else "pass"
+                return stable_envelope(
+                    command="agent",
+                    status=status,
+                    summary=(
+                        f"{active} Qwendex agent session{'s are' if active != 1 else ' is'} still active."
+                        if active
+                        else "No Qwendex agent sessions are active."
+                    ),
+                    data=data,
+                )
+            return stable_envelope(
+                command="agent",
+                status=data["manager_health"]["status"],
+                summary=f"Qwendex Agent Use is {agent_policy['agent_use']}; loaded {len(sessions)} agent sessions.",
+                next_actions=(
+                    [data["manager_health"]["repair_command"]]
+                    if data["manager_health"]["status"] in {"blocked", "warning"}
+                    else data["next_actions"]
+                ),
+                data=data,
+            )
+        if action in {"inspect", "logs"}:
+            if not target:
+                return stable_envelope(command="agent", status="blocked", summary=f"Agent {action} requires an agent id.", errors=["missing agent_id"])
+            row = conn.execute("SELECT * FROM qwendex_agent_sessions WHERE agent_id = ?", (target,)).fetchone()
+            if row is None:
+                return stable_envelope(command="agent", status="blocked", summary=f"Agent session not found: {target}", errors=[target])
+            session = row_to_agent_session(row) or {}
+            if action == "logs":
+                return stable_envelope(
+                    command="agent",
+                    status="pass",
+                    summary=f"Loaded Qwendex agent log metadata for {target}.",
+                    artifacts=list(session.get("artifacts", [])),
+                    data={
+                        "agent_session": session,
+                        "log_capture": "metadata-only",
+                        "raw_output_artifacts": list(session.get("artifacts", [])),
+                        "agent_policy": agent_policy,
+                    },
+                )
+            return stable_envelope(
+                command="agent",
+                status="pass",
+                summary=f"Loaded Qwendex agent session {target}.",
+                data={"agent_session": session, "agent_policy": agent_policy},
+            )
+    return stable_envelope(command="agent", status="blocked", summary=f"Unknown agent action: {action}", errors=[action])
 
 
 def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, Any] | None:
     if not args.action:
         return None
     now = utc_now()
+    agent_policy = resolve_agent_policy(config, cli_agent_use=getattr(args, "agent_use", ""))
+    if agent_policy["errors"]:
+        return stable_envelope(command="manager", status="blocked", summary="Invalid Qwendex agent policy.", errors=list(agent_policy["errors"]), data={"agent_policy": agent_policy})
     with connect_state(config) as conn:
         mode = current_manager_mode(config, conn)
+        if args.action not in {"mode"}:
+            mode = policy_mode_for_manager(args, config, mode)
         stale_after = mode_stale_after_minutes(config, mode, args.stale_after_minutes)
         max_subagents = args.max_subagents or manager_mode_profile(config, mode)["max_subagents"]
         local_status = local_subagent_status(config, enabled=current_local_enabled(config, conn), env=os.environ, probe=True)
@@ -3973,6 +5474,7 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
                 stale_after_minutes=mode_stale_after_minutes(config, mode, args.stale_after_minutes),
                 kaveman_enabled=kaveman_enabled,
                 sessions=[session for session in sessions if session],
+                agent_policy=agent_policy,
             )
             data["state_db"] = str(state_db_path(config))
             data["codex_status_file"] = sync_codex_status_file_from_env(config)
@@ -4017,6 +5519,7 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
                 stale_after_minutes=stale_after,
                 kaveman_enabled=kaveman_enabled,
                 sessions=[session for session in sessions if session],
+                agent_policy=agent_policy,
             )
             data["state_db"] = str(state_db_path(config))
             data["codex_status_file"] = sync_codex_status_file_from_env(config)
@@ -4050,6 +5553,7 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
                 stale_after_minutes=stale_after,
                 kaveman_enabled=kaveman_enabled,
                 sessions=[session for session in sessions if session],
+                agent_policy=agent_policy,
             )
             data["state_db"] = str(state_db_path(config))
             data["codex_status_file"] = sync_codex_status_file_from_env(config)
@@ -4068,6 +5572,7 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
                 prompt=args.prompt,
                 mode=mode,
                 local_status=local_status,
+                agent_policy=agent_policy,
             )
         if args.action == "status":
             rows = conn.execute(
@@ -4083,6 +5588,7 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
                 stale_after_minutes=stale_after,
                 kaveman_enabled=kaveman_enabled,
                 sessions=[session for session in sessions if session],
+                agent_policy=agent_policy,
             )
             data["agent_sessions"] = [session for session in sessions if session]
             data["state_db"] = str(state_db_path(config))
@@ -4106,10 +5612,14 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
             task_class = args.task_class or infer_task_class(args.lane)
             risk = args.risk or ("high" if task_class in {"security", "architecture", "release acceptance"} else "medium")
             routing = lane_model_reasoning(config, task_class=task_class, lane=args.lane, risk=risk, local_status=local_status)
+            required = not bool(getattr(args, "optional", False))
+            if getattr(args, "required", False):
+                required = True
             context_packet = {
                 "objective": args.objective or args.stop_condition,
                 "task_class": task_class,
                 "allowed_scope": args.write_surface,
+                "required": required,
                 "exact_files": args.file or [],
                 "needed_docs": args.needed_doc or [],
                 "stop_condition": args.stop_condition,
@@ -4188,6 +5698,7 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
                 "UPDATE qwendex_agent_sessions SET status = 'closed', updated_at = ?, stop_reason = ?, close_receipt = ? WHERE agent_id = ?",
                 (now, reason, close_receipt, args.agent_id),
             )
+            release_agent_locks(conn, args.agent_id, now=now)
             conn.commit()
             row = conn.execute("SELECT * FROM qwendex_agent_sessions WHERE agent_id = ?", (args.agent_id,)).fetchone()
             return stable_envelope(
@@ -4322,16 +5833,34 @@ def command_context(args: argparse.Namespace, config: dict[str, Any]) -> dict[st
             return stable_envelope(command="context", status="blocked", summary=f"No context snapshot found for {args.task_id}.", errors=[args.task_id])
         if args.action == "compact-plan":
             budget = args.budget or snapshot.get("budget") or config["context"]["compact_limit"]
+            agent_rows = conn.execute(
+                "SELECT * FROM qwendex_agent_sessions WHERE task_id = ? ORDER BY updated_at DESC",
+                (args.task_id,),
+            ).fetchall()
+            agent_sessions = [session for row in agent_rows if (session := row_to_agent_session(row))]
+            active_locks = active_file_locks(conn)
             plan = {
                 "task_id": args.task_id,
                 "budget": budget,
                 "summary": snapshot["objective"],
-                "keep": ["objective", "decisions", "open_files", "evidence_refs", "blocked_items", "next_actions"],
+                "keep": [
+                    "objective",
+                    "decisions",
+                    "open_files",
+                    "evidence_refs",
+                    "blocked_items",
+                    "next_actions",
+                    "agent_outcomes",
+                    "file_locks",
+                ],
                 "decisions": snapshot["decisions"][:10],
                 "open_files": snapshot["open_files"][:20],
                 "evidence_refs": snapshot["evidence_refs"][:20],
                 "blocked_items": snapshot["blocked_items"],
                 "next_actions": snapshot["next_actions"][:10],
+                "agent_outcomes": agent_outcomes_for_sessions(agent_sessions),
+                "file_locks": active_locks,
+                "raw_output_policy": "preserve raw child output in artifact paths; inject compact reports into root context",
             }
             return stable_envelope(command="context", status="pass", summary=f"Built compact plan for {args.task_id}.", data={"compact_plan": plan})
         if args.action == "pack":
@@ -4343,6 +5872,11 @@ def command_context(args: argparse.Namespace, config: dict[str, Any]) -> dict[st
                 "SELECT * FROM qwendex_handoffs WHERE task_id = ? ORDER BY created_at DESC LIMIT ?",
                 (args.task_id, args.limit),
             ).fetchall()
+            agent_rows = conn.execute(
+                "SELECT * FROM qwendex_agent_sessions WHERE task_id = ? ORDER BY updated_at DESC LIMIT ?",
+                (args.task_id, args.limit),
+            ).fetchall()
+            agent_sessions = [session for row in agent_rows if (session := row_to_agent_session(row))]
             return stable_envelope(
                 command="context",
                 status="pass",
@@ -4351,6 +5885,9 @@ def command_context(args: argparse.Namespace, config: dict[str, Any]) -> dict[st
                     "snapshot": snapshot,
                     "evidence": [row_to_evidence(row) for row in evidence_rows],
                     "handoffs": [row_to_handoff(row) for row in handoff_rows],
+                    "agent_outcomes": agent_outcomes_for_sessions(agent_sessions),
+                    "agent_sessions": agent_sessions,
+                    "file_locks": active_file_locks(conn),
                 },
             )
     return stable_envelope(command="context", status="blocked", summary=f"Unknown context action: {args.action}", errors=[args.action])
@@ -4476,8 +6013,12 @@ def command_manager(args: argparse.Namespace, config: dict[str, Any]) -> dict[st
     state_response = command_manager_state(args, config)
     if state_response is not None:
         return state_response
+    agent_policy = resolve_agent_policy(config, cli_agent_use=getattr(args, "agent_use", ""))
+    if agent_policy["errors"]:
+        return stable_envelope(command="manager", status="blocked", summary="Invalid Qwendex agent policy.", errors=list(agent_policy["errors"]), data={"agent_policy": agent_policy})
     with connect_state(config) as conn:
         mode = current_manager_mode(config, conn, explicit=args.mode)
+        mode = policy_mode_for_manager(args, config, mode)
         local_status = local_subagent_status(config, enabled=current_local_enabled(config, conn), env=os.environ, probe=True)
         kaveman_enabled = current_kaveman_enabled(config, conn)
         stale_after = mode_stale_after_minutes(config, mode, args.stale_after_minutes)
@@ -4513,6 +6054,7 @@ def command_manager(args: argparse.Namespace, config: dict[str, Any]) -> dict[st
         kaveman_enabled=kaveman_enabled,
         legacy_mode=legacy_mode,
         sessions=[session for session in sessions if session],
+        agent_policy=agent_policy,
     )
     data["close_stale"] = args.close_stale
     data["stale_reconciliation"] = reconciliation
@@ -4581,6 +6123,7 @@ def command_version(args: argparse.Namespace, config: dict[str, Any]) -> dict[st
 def command_line() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Qwendex public CLI")
     parser.add_argument("--config", type=Path, help="project Qwendex config")
+    parser.add_argument("--agent-use", default="", help="effective agent policy: Lite, Medium, Heavy, or Manager")
     sub = parser.add_subparsers(dest="command", required=True)
 
     check = sub.add_parser("check")
@@ -4626,6 +6169,28 @@ def command_line() -> argparse.ArgumentParser:
     estimate = sub.add_parser("estimate")
     estimate.add_argument("--prompt", default="")
     estimate.add_argument("--json", action="store_true")
+
+    agent = sub.add_parser("agent")
+    agent.add_argument(
+        "action",
+        nargs="?",
+        choices=["status", "list", "inspect", "logs", "wait", "close", "tombstone", "policy", "profiles", "team", "plan", "metrics", "hook", "hook-config", "locks"],
+        default="status",
+    )
+    agent.add_argument("target", nargs="?")
+    agent.add_argument("--agent-id", default="")
+    agent.add_argument("--timeout", default="10s")
+    agent.add_argument("--reason", default="")
+    agent.add_argument("--event-json", default="")
+    agent.add_argument("--qwendex-command", default="")
+    agent.add_argument("--write", type=Path)
+    agent.add_argument("--approve", action="store_true")
+    agent.add_argument("--force", action="store_true")
+    agent.add_argument("--prompt", default="")
+    agent.add_argument("--task-id", default="")
+    agent.add_argument("--limit", type=int, default=20)
+    agent.add_argument("--stale-after-minutes", type=int, default=0)
+    agent.add_argument("--json", action="store_true")
 
     eval_parser = sub.add_parser("eval")
     eval_parser.add_argument("--case", default="")
@@ -4742,6 +6307,8 @@ def command_line() -> argparse.ArgumentParser:
     manager.add_argument("--risk", choices=["low", "medium", "high"], default="")
     manager.add_argument("--review-requirement", default="manager review required")
     manager.add_argument("--artifact", action="append")
+    manager.add_argument("--required", action="store_true")
+    manager.add_argument("--optional", action="store_true")
     manager.add_argument("--limit", type=int, default=20)
     manager.add_argument("--shortcut", action="store_true")
     manager.add_argument("--json", action="store_true")
@@ -4775,6 +6342,16 @@ def human_print(data: dict[str, Any]) -> None:
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
     config = load_qwendex_config(project_config=args.config)
+    agent_policy = resolve_agent_policy(config, cli_agent_use=getattr(args, "agent_use", ""))
+    if agent_policy["errors"]:
+        return stable_envelope(
+            command=getattr(args, "command", "unknown"),
+            status="blocked",
+            summary="Invalid Qwendex agent policy.",
+            errors=list(agent_policy["errors"]),
+            data={"agent_policy": agent_policy},
+        )
+    apply_agent_policy_env(agent_policy)
     if args.command == "check":
         return command_check(args, config)
     if args.command == "doctor":
@@ -4789,6 +6366,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         return command_route(args, config)
     if args.command == "estimate":
         return command_estimate(args, config)
+    if args.command == "agent":
+        return command_agent(args, config)
     if args.command == "eval":
         return command_eval(args, config)
     if args.command == "receipt":

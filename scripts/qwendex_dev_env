@@ -882,6 +882,9 @@ cmd_verify() {
   local health_mode="advisory"
   if [[ "$tier" == "release" ]]; then
     health_mode="strict"
+    local release_state_db="$WORK_ROOT/state/release_verify_qwendex.sqlite"
+    rm -f "$release_state_db" "$release_state_db-shm" "$release_state_db-wal"
+    export QWENDEX_STATE_DB="$release_state_db"
   fi
   scripts/qwendex check --health-mode "$health_mode" --json > "$META_ROOT/qwendex_check.json"
   scripts/qwendex doctor --health-mode "$health_mode" --json > "$META_ROOT/qwendex_doctor.json"
@@ -897,8 +900,11 @@ cmd_verify() {
     scripts/llm harness-gate --json > "$META_ROOT/llm_harness_gate.json" || true
     python3 scripts/local_qwen_harness_eval.py --all --results-root "$RESULTS_ROOT/llm_harness_eval_$stamp" --ledger-db "$LOCAL_HARNESS_LEDGER_DB" --json > "$META_ROOT/llm_harness_eval_all.json"
   fi
-  if [[ "$tier" == "live" || "$tier" == "release" ]]; then
+  local release_require_live="${QWENDEX_RELEASE_REQUIRE_LIVE:-0}"
+  if [[ "$tier" == "live" || ( "$tier" == "release" && "$release_require_live" =~ ^(1|true|yes|on)$ ) ]]; then
     scripts/run_local_qwen_codex.sh --check > "$META_ROOT/local_qwen_launcher_check.txt"
+  elif [[ "$tier" == "release" ]]; then
+    printf 'skipped: local stack live check is separate; run qwendex-dev verify --tier live when intentionally running it.\n' > "$META_ROOT/local_qwen_launcher_check.txt"
   fi
   write_dev_status_json "verify-$tier" >/dev/null
   if [[ "$tier" == "release" ]]; then

@@ -16,6 +16,7 @@ for a scoped change.
 | Public-doc overclaiming | Public docs are naming-audited and release-reviewed |
 | Adapter drift | Launcher checks verify model alias, context, guard profile, and status contract |
 | Stale delegation state | Manager sessions record heartbeat, stop condition, stop reason, and close metadata in local state |
+| Unsafe agent tool use | Agent pre-tool gates deny recursive child spawn, read-only writes, conflicting write locks, and release/publish commands without approval |
 
 ## Denied Auto-Adopt Paths
 
@@ -38,5 +39,7 @@ known secret-shaped strings, but receipts can still contain non-secret private
 context in output snippets.
 
 Tool capability manifests with per-tool network/write scopes are planned but not
-yet enforced by the public CLI. Until then, public docs describe bounded tool
-policy and eval-covered delegates, not a general permission engine.
+yet enforced as a general permission engine. The public CLI does enforce the
+Agent Management pre-tool gate for its managed events, including the
+single-writer file-lock strategy; stock Codex tool-registry filtering remains a
+separate patched-runtime integration boundary.

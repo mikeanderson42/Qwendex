@@ -1,5 +1,35 @@
 # Release Notes
 
+## Unreleased
+
+## 0.1.0-rc.4
+
+- Added first-class AgentPolicy diagnostics for `--agent-use`,
+  `QWENDEX_AGENT_USE`, and `CODEX_AGENT_USE`, including policy hashes and
+  subprocess env exports.
+- Added `scripts/qwendex agent ...` aliases for policy, status, list, inspect,
+  logs, wait, close, tombstone, profiles, and team inspection over the existing
+  manager ledger.
+- Added `scripts/qwendex agent plan --prompt ...` to turn the effective
+  AgentPolicy and built-in team roster into direct-work exceptions or concrete
+  `manager assign` commands.
+- Added `scripts/qwendex agent metrics --json` for ledger counts,
+  final-contract compliance, raw-output artifact counts, active writer counts,
+  and managed hook/profile observability.
+- Added native `scripts/qwendex agent hook ...` gate evaluation for prompt
+  context, subagent final-report contracts, Manager stop gates, read-only write
+  denial, child recursive-spawn denial, and release/publish command approval.
+- Added SQLite-backed agent file locks with `scripts/qwendex agent locks --json`
+  and first-release single-writer enforcement for base-worktree writes.
+- Added Manager Mode raw-output preservation under ignored `.qwendex/runs/`
+  artifacts, plus compact agent outcomes in `agent logs`, `manager status`,
+  `context compact-plan`, and `context pack`.
+- Added `scripts/qwendex agent hook-config` to render or approval-write
+  managed hook wiring that invokes the native Qwendex agent gate evaluator.
+- Documented the current CLI enforcement boundary for Agent Management while
+  keeping native Codex tool-registry filtering and automatic/global hook
+  installation labeled as future patched-runtime integration work.
+
 ## 0.1.0-rc.3
 
 - Fixed route receipts so `local_subagents.local_state`, availability,

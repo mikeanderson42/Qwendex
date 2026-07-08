@@ -33,8 +33,10 @@ qwendex-dev verify --tier release
 `doctor`, Codex status writing, and Codex patch preflight receipts under the
 dev results tree. `full` adds public JSON config validation, the offline
 Qwendex eval suite, harness gate, and local harness eval receipts. `release`
-adds the live launcher check and writes the release summary; use it only when
-the local stack is intentionally running.
+uses strict checks with an isolated release state DB and writes the release
+summary. `live` runs the live launcher check; set
+`QWENDEX_RELEASE_REQUIRE_LIVE=1` only when the local stack is intentionally
+running and release should include that live check.
 
 Harness gates:
 

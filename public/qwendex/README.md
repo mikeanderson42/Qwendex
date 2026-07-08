@@ -35,6 +35,7 @@ gates.
 - [Operations](operations.md)
 - [Seat Handoff](seat-handoff.md)
 - [Learning Loop](learning-loop.md)
+- [Agent Management](agent-management.md)
 - [Manager Mode](manager-mode.md)
 - [Codex TUI Patching](codex-patching.md)
 - [Dev Environment](dev-environment.md)

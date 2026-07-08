@@ -131,6 +131,8 @@ scripts/qwendex manager local --toggle --json
 scripts/qwendex manager kaveman --toggle --json
 scripts/qwendex manager estimate --prompt "..." --json
 scripts/qwendex manager status --json
+scripts/qwendex --agent-use Manager agent policy --json
+scripts/qwendex agent status --json
 ```
 
 `manager_deploy_policy` defaults to `auto`: when the selected mode is Manager
@@ -160,6 +162,12 @@ available. `Local: [Off]` means local subagents are intentionally off even if
 the endpoint is healthy. `Local: [Unavailable]` means intent remains on, but the
 probe did not confirm a usable local route; Qwendex falls back to the configured
 primary seat.
+
+Agent Management selectors are also available through `--agent-use`,
+`QWENDEX_AGENT_USE`, and `CODEX_AGENT_USE`. They compute a session
+`AgentPolicy`, policy hash, subprocess env exports, and root/child management
+tool-surface metadata. See [Agent Management](public/qwendex/agent-management.md)
+for the public `qwendex agent ...` commands.
 
 ## Codex TUI Integration
 
@@ -208,8 +216,9 @@ bridge/parser behavior, shared contracts, or release-adjacent changes. Use
 `qwendex-dev verify --tier quick` runs lint, smoke tests, `scripts/qwendex
 check`, `scripts/qwendex doctor`, Codex status writing, and Codex patch
 preflight. `full` adds JSON config validation, the offline Qwendex eval suite,
-and local harness eval/gate receipts. `release` includes the live launcher check
-and writes the release summary; run it only when the local stack is
+and local harness eval/gate receipts. `release` uses strict checks with an
+isolated release state DB and writes the release summary. Run `live`, or set
+`QWENDEX_RELEASE_REQUIRE_LIVE=1` for `release`, only when the local stack is
 intentionally available.
 
 ## Verification And Release Gates
@@ -254,7 +263,7 @@ claims require GPT/Codex review and the appropriate Qwendex verification tier.
 
 ## Current Release Candidate / Known Limits
 
-This checkout is seeded as `v0.1.0-rc.3`. The latest captured max-depth
+This checkout is seeded as `v0.1.0-rc.4`. The latest captured max-depth
 validation summary in this repository is still
 [`docs/validation/v0.1.0-rc.1-validation_summary.json`](docs/validation/v0.1.0-rc.1-validation_summary.json)
 until a newer release validation run is recorded.

@@ -5,6 +5,7 @@ __pycache__/
 .mypy_cache/
 .venv/
 .qwendex-dev/
+.qwendex/runs/
 venv/
 /bin/
 /open.ps1

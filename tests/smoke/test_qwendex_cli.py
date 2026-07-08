@@ -82,6 +82,16 @@ def test_qwendex_parser_exposes_public_commands():
     assert parser.parse_args(["manager", "estimate", "--prompt", "Fix a typo"]).action == "estimate"
     assert parser.parse_args(["manager", "repair", "--safe"]).action == "repair"
     assert parser.parse_args(["manager", "repair", "--safe"]).safe is True
+    assert parser.parse_args(["--agent-use", "Manager", "agent", "policy"]).agent_use == "Manager"
+    assert parser.parse_args(["agent", "status"]).command == "agent"
+    assert parser.parse_args(["agent", "inspect", "agent-1"]).target == "agent-1"
+    assert parser.parse_args(["agent", "close", "all", "--timeout", "1s"]).action == "close"
+    assert parser.parse_args(["agent", "profiles"]).action == "profiles"
+    assert parser.parse_args(["agent", "team"]).action == "team"
+    assert parser.parse_args(["agent", "plan", "--prompt", "Ship it"]).action == "plan"
+    assert parser.parse_args(["agent", "hook", "Stop", "--event-json", "{}"]).action == "hook"
+    assert parser.parse_args(["agent", "hook-config"]).action == "hook-config"
+    assert parser.parse_args(["agent", "locks"]).action == "locks"
     assert parser.parse_args(["codex-status", "--write", "/tmp/qwendex-status.json"]).command == "codex-status"
     assert parser.parse_args(["codex-patch", "preflight", "--codex-bin", "codex"]).command == "codex-patch"
     assert parser.parse_args(["codex-patch", "apply", "--source", "/tmp/codex", "--dry-run"]).dry_run is True
@@ -103,7 +113,7 @@ def test_qwendex_version_matches_public_config_metadata():
     sample_config = json.loads((ROOT / "config" / "qwendex" / "qwendex.sample.json").read_text(encoding="utf-8"))
     version = json_result("version", "--json")
 
-    assert qwendex.VERSION == "0.1.0-rc.3"
+    assert qwendex.VERSION == "0.1.0-rc.4"
     assert version["data"]["version"] == qwendex.VERSION
     assert project_config["version"] == qwendex.VERSION
     assert sample_config["version"] == qwendex.VERSION
@@ -458,6 +468,7 @@ def test_qwendex_dev_env_public_surface_is_visible_and_isolated():
     assert "verify --tier quick|full|live|release" in text
     assert "QWENDEX_LEDGER_DB" in text
     assert "LOCAL_QWEN_HARNESS_LEDGER_DB" in text
+    assert "release_verify_qwendex.sqlite" in text
     assert "dev_status.json" in text
     assert "release_validation_summary.json" in text
     assert "contract_marker_counts" in text
@@ -1185,6 +1196,531 @@ def test_qwendex_manager_estimate_is_bounded_and_reasoning_agnostic():
     assert len(heavy["data"]["high_value_add"]) <= 2
 
 
+def test_qwendex_agent_policy_selector_precedence_fallback_and_strict(tmp_path):
+    env = {
+        "QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite"),
+        "QWENDEX_AGENT_USE": "manager-mode",
+    }
+    env_policy = json_result("agent", "policy", "--json", env=env)
+    cli_policy = json_result(
+        "--agent-use",
+        "Lite",
+        "agent",
+        "policy",
+        "--json",
+        env={**env, "QWENDEX_AGENT_USE": "Manager"},
+    )
+    fallback = json_result(
+        "agent",
+        "policy",
+        "--json",
+        env={"QWENDEX_STATE_DB": str(tmp_path / "fallback.sqlite"), "QWENDEX_AGENT_USE": "sideways"},
+    )
+    strict_result = run_qwendex(
+        "agent",
+        "policy",
+        "--json",
+        env={
+            "QWENDEX_STATE_DB": str(tmp_path / "strict.sqlite"),
+            "QWENDEX_AGENT_USE": "sideways",
+            "QWENDEX_AGENT_USE_STRICT": "1",
+        },
+    )
+    strict = parse_json_result(strict_result)
+
+    assert env_policy["data"]["agent_policy"]["mode"] == "manager"
+    assert env_policy["data"]["agent_policy"]["source"] == "qwendex-env"
+    assert len(env_policy["data"]["agent_policy"]["policy_hash"]) == 64
+    assert env_policy["data"]["agent_policy"]["env"]["QWENDEX_EFFECTIVE_AGENT_USE"] == "Manager"
+    assert env_policy["data"]["agent_policy"]["require_agent_ledger"] is True
+    assert env_policy["data"]["agent_policy"]["child_can_spawn"] is False
+    assert "spawn_agent" in env_policy["data"]["agent_policy"]["tool_surface"]["root_management_tools"]
+    assert "spawn_agent" in env_policy["data"]["agent_policy"]["tool_surface"]["denied_child_tools"]
+
+    assert cli_policy["data"]["agent_policy"]["mode"] == "lite"
+    assert cli_policy["data"]["agent_policy"]["source"] == "cli"
+    assert cli_policy["data"]["agent_policy"]["root_can_spawn"] is False
+
+    assert fallback["data"]["agent_policy"]["mode"] == "medium"
+    assert fallback["data"]["agent_policy"]["warnings"]
+    assert fallback["data"]["agent_policy"]["source"] == "qwendex-env-fallback"
+
+    assert strict_result.returncode != 0
+    assert strict["status"] == "blocked"
+    assert "invalid agent use selector" in " ".join(strict["errors"])
+
+
+def test_qwendex_agent_status_alias_tracks_manager_ledger_and_bounded_close(tmp_path):
+    env = {
+        "QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite"),
+        "QWENDEX_FORCE_LOCAL_QWEN_AVAILABLE": "1",
+    }
+
+    assigned = json_result(
+        "manager",
+        "assign",
+        "--agent-id",
+        "agent-ledger-1",
+        "--lane",
+        "verification",
+        "--task-id",
+        "task-agent",
+        "--write-surface",
+        "read-only",
+        "--json",
+        env=env,
+    )
+    status = json_result("--agent-use", "Manager", "agent", "status", "--json", env=env)
+    inspected = json_result("agent", "inspect", "agent-ledger-1", "--json", env=env)
+    closed = json_result("agent", "close", "agent-ledger-1", "--timeout", "1s", "--reason", "integrated", "--json", env=env)
+    after = json_result("--agent-use", "Manager", "agent", "status", "--json", env=env)
+
+    assert assigned["data"]["agent_session"]["status"] == "active"
+    assert status["data"]["mode"] == "manager"
+    assert status["data"]["agent_use"] == "Manager"
+    assert status["data"]["agent_policy"]["source"] == "cli"
+    assert status["data"]["active_subagents"]["count"] == 1
+    assert inspected["data"]["agent_session"]["agent_id"] == "agent-ledger-1"
+    assert closed["data"]["closed_count"] == 1
+    assert closed["data"]["bounded_close"] is True
+    assert closed["data"]["close_timeout_ms"] == 1000
+    assert closed["data"]["closed"][0]["status"] == "closed"
+    assert closed["data"]["closed"][0]["stop_reason"] == "integrated"
+    assert after["data"]["active_subagents"]["count"] == 0
+
+
+def test_qwendex_agent_profiles_and_team_are_visible():
+    profiles = json_result("agent", "profiles", "--json")
+    team = json_result("agent", "team", "--json")
+
+    assert {"explorer", "implementer", "verifier", "docs_researcher", "release_manager", "scribe"} <= set(profiles["data"]["profiles"])
+    assert profiles["data"]["profiles"]["explorer"]["sandbox_mode"] == "read-only"
+    assert profiles["data"]["profiles"]["explorer"]["can_spawn"] is False
+    assert "publish" in profiles["data"]["profiles"]["release_manager"]["tools_deny"]
+    assert team["data"]["team"]["default_mode"] == "Manager"
+    assert "verifier" in team["data"]["team"]["required_lanes_by_task"]["code_edit_complex"]
+
+
+def test_qwendex_agent_plan_routes_direct_team_and_release(tmp_path):
+    env = {"QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite")}
+
+    direct = json_result(
+        "--agent-use",
+        "Lite",
+        "agent",
+        "plan",
+        "--prompt",
+        "What command lists active Qwendex agents?",
+        "--task-id",
+        "task-direct",
+        "--json",
+        env=env,
+    )
+    team = json_result(
+        "--agent-use",
+        "Manager",
+        "agent",
+        "plan",
+        "--prompt",
+        "Team, change manager routing across code and tests.",
+        "--task-id",
+        "task-team",
+        "--json",
+        env=env,
+    )
+    release = json_result(
+        "--agent-use",
+        "Heavy",
+        "agent",
+        "plan",
+        "--prompt",
+        "Prepare release notes and version bump for publish.",
+        "--task-id",
+        "task-release",
+        "--json",
+        env=env,
+    )
+
+    direct_plan = direct["data"]["agent_plan"]
+    team_plan = team["data"]["agent_plan"]
+    release_plan = release["data"]["agent_plan"]
+
+    assert direct_plan["direct_work"] is True
+    assert direct_plan["assignments"] == []
+    assert "trivial" in direct_plan["direct_work_exception"]
+
+    assert team_plan["direct_work"] is False
+    assert {"explorer", "implementer", "verifier", "scribe"} <= set(team_plan["profiles"])
+    assert all("scripts/qwendex manager assign" in item["assign_command"] for item in team_plan["assignments"])
+    assert any("--required" in item["assign_command"] for item in team_plan["assignments"])
+    assert any(item["profile"] == "scribe" and item["required"] is False for item in team_plan["assignments"])
+
+    assert release_plan["profiles"] == ["release_manager", "verifier"]
+    assert release_plan["assignments"][0]["routing"]["selected_reasoning"] in {"high", "xhigh"}
+    assert "task-release" in release_plan["assignments"][0]["assign_command"]
+
+
+def test_qwendex_agent_metrics_track_ledger_and_artifacts(tmp_path):
+    env = {"QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite")}
+
+    empty = json_result("agent", "metrics", "--json", env=env)
+    assert empty["data"]["agent_metrics"]["session_count"] == 0
+    assert empty["data"]["agent_metrics"]["final_contract_compliance"] is None
+
+    json_result(
+        "manager",
+        "assign",
+        "--agent-id",
+        "metrics-agent",
+        "--lane",
+        "verification",
+        "--task-id",
+        "task-metrics",
+        "--required",
+        "--json",
+        env=env,
+    )
+    active = json_result("agent", "metrics", "--json", env=env)
+    assert active["data"]["agent_metrics"]["active_count"] == 1
+    assert active["data"]["agent_metrics"]["required_incomplete_count"] == 1
+
+    json_result(
+        "agent",
+        "hook",
+        "SubagentStop",
+        "--event-json",
+        json.dumps({
+            "agent_id": "metrics-agent",
+            "last_assistant_message": "FINAL_REPORT\nstatus: completed\nsummary: metric proof\nevidence:\n- ok",
+        }),
+        "--json",
+        env=env,
+    )
+    metrics = json_result("agent", "metrics", "--json", env=env)["data"]["agent_metrics"]
+    assert metrics["terminal_count"] == 1
+    assert metrics["required_incomplete_count"] == 0
+    assert metrics["final_contract_compliance"] == 1.0
+    assert metrics["raw_output_artifact_count"] == 1
+    assert metrics["managed_hook_event_count"] >= 5
+
+
+def test_qwendex_agent_hooks_enforce_final_contract_and_manager_stop_gate(tmp_path):
+    env = {"QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite")}
+
+    prompt_hook = json_result(
+        "--agent-use",
+        "Manager",
+        "agent",
+        "hook",
+        "UserPromptSubmit",
+        "--event-json",
+        "{}",
+        "--json",
+        env=env,
+    )
+    assigned = json_result(
+        "manager",
+        "assign",
+        "--agent-id",
+        "agent-hook-verifier",
+        "--lane",
+        "verification",
+        "--task-id",
+        "task-hook",
+        "--required",
+        "--json",
+        env=env,
+    )
+    blocked_stop_result = run_qwendex(
+        "--agent-use",
+        "Manager",
+        "agent",
+        "hook",
+        "Stop",
+        "--event-json",
+        json.dumps({"last_assistant_message": "Done.", "edit_happened": True}),
+        "--json",
+        env=env,
+    )
+    missing_contract_result = run_qwendex(
+        "agent",
+        "hook",
+        "SubagentStop",
+        "--event-json",
+        json.dumps({"agent_id": "agent-hook-verifier", "last_assistant_message": "Ready when you are."}),
+        "--json",
+        env=env,
+    )
+    completed = json_result(
+        "agent",
+        "hook",
+        "SubagentStop",
+        "--event-json",
+        json.dumps({
+            "agent_id": "agent-hook-verifier",
+            "last_assistant_message": "FINAL_REPORT\nstatus: completed\nagent_id: agent-hook-verifier\nevidence:\n- pytest passed",
+        }),
+        "--json",
+        env=env,
+    )
+    missing_summary_result = run_qwendex(
+        "--agent-use",
+        "Manager",
+        "agent",
+        "hook",
+        "Stop",
+        "--event-json",
+        json.dumps({"last_assistant_message": "Done.", "edit_happened": True}),
+        "--json",
+        env=env,
+    )
+    passed_stop = json_result(
+        "--agent-use",
+        "Manager",
+        "agent",
+        "hook",
+        "Stop",
+        "--event-json",
+        json.dumps({"last_assistant_message": "Agent outcomes: verifier passed.\nValidation: pytest.\nRisks: none.", "edit_happened": True}),
+        "--json",
+        env=env,
+    )
+
+    blocked_stop = parse_json_result(blocked_stop_result)
+    missing_contract = parse_json_result(missing_contract_result)
+    missing_summary = parse_json_result(missing_summary_result)
+
+    assert "root orchestrator" in prompt_hook["data"]["hook_result"]["hookSpecificOutput"]["additionalContext"]
+    assert assigned["data"]["agent_session"]["context_packet"]["required"] is True
+    assert blocked_stop_result.returncode != 0
+    assert blocked_stop["data"]["hook_result"]["event"] == "manager.stop_gate_continued"
+    assert "agent-hook-verifier:active" in blocked_stop["data"]["hook_result"]["reason"]
+    assert missing_contract_result.returncode != 0
+    assert missing_contract["data"]["hook_result"]["event"] == "agent.final_contract_missing"
+    assert completed["data"]["hook_result"]["event"] == "agent.completed"
+    assert completed["data"]["agent_session"]["status"] == "completed"
+    assert completed["data"]["agent_session"]["validation_status"] == "pass"
+    artifacts = completed["data"]["agent_session"]["artifacts"]
+    raw_artifact = next(path for path in artifacts if path.endswith("/raw-output.md"))
+    compact_artifact = next(path for path in artifacts if path.endswith("/compact-report.json"))
+    assert "FINAL_REPORT" in (ROOT / raw_artifact).read_text(encoding="utf-8")
+    compact_report = json.loads((ROOT / compact_artifact).read_text(encoding="utf-8"))
+    assert compact_report["agent_id"] == "agent-hook-verifier"
+    assert compact_report["status"] == "completed"
+    logs = json_result("agent", "logs", "agent-hook-verifier", "--json", env=env)
+    assert raw_artifact in logs["data"]["raw_output_artifacts"]
+    assert missing_summary_result.returncode != 0
+    assert missing_summary["data"]["hook_result"]["event"] == "manager.final_contract_missing"
+    assert passed_stop["data"]["hook_result"]["event"] == "manager.finalized"
+
+
+def test_qwendex_agent_hook_config_generation_and_write_gate(tmp_path):
+    target = tmp_path / "hooks.json"
+
+    rendered = json_result("agent", "hook-config", "--qwendex-command", "scripts/qwendex", "--json")
+    hooks = rendered["data"]["hook_config"]["hooks"]
+    assert {"UserPromptSubmit", "SubagentStart", "SubagentStop", "Stop", "PreToolUse"} <= set(hooks)
+    assert hooks["Stop"][0]["hooks"][0]["command"] == "scripts/qwendex agent hook Stop --json"
+    assert hooks["PreToolUse"][0]["hooks"][0]["timeout"] == 5
+
+    blocked_result = run_qwendex("agent", "hook-config", "--write", str(target), "--json")
+    blocked = parse_json_result(blocked_result)
+    assert blocked_result.returncode != 0
+    assert blocked["status"] == "blocked"
+    assert not target.exists()
+
+    written = json_result(
+        "agent",
+        "hook-config",
+        "--qwendex-command",
+        "scripts/qwendex",
+        "--write",
+        str(target),
+        "--approve",
+        "--json",
+    )
+    payload = json.loads(target.read_text(encoding="utf-8"))
+    assert written["artifacts"] == [str(target)]
+    assert payload["hooks"]["SubagentStop"][0]["hooks"][0]["command"] == "scripts/qwendex agent hook SubagentStop --json"
+
+    overwrite_result = run_qwendex("agent", "hook-config", "--write", str(target), "--approve", "--json")
+    overwrite = parse_json_result(overwrite_result)
+    assert overwrite_result.returncode != 0
+    assert overwrite["status"] == "blocked"
+
+
+def test_qwendex_agent_pre_tool_hook_denies_unsafe_actions(tmp_path):
+    env = {"QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite")}
+
+    child_spawn = run_qwendex(
+        "--agent-use",
+        "Manager",
+        "agent",
+        "hook",
+        "PreToolUse",
+        "--event-json",
+        json.dumps({"tool_name": "spawn_agent", "depth": 1}),
+        "--json",
+        env=env,
+    )
+    read_only_write = run_qwendex(
+        "agent",
+        "hook",
+        "PreToolUse",
+        "--event-json",
+        json.dumps({"tool_name": "apply_patch", "profile": "explorer"}),
+        "--json",
+        env=env,
+    )
+    release_publish = run_qwendex(
+        "agent",
+        "hook",
+        "PreToolUse",
+        "--event-json",
+        json.dumps({"tool_name": "exec_command", "command": "git push --tags"}),
+        "--json",
+        env=env,
+    )
+    release_approved = json_result(
+        "agent",
+        "hook",
+        "PreToolUse",
+        "--event-json",
+        json.dumps({"tool_name": "exec_command", "command": "git push --tags", "release_approved": True}),
+        "--json",
+        env=env,
+    )
+
+    child_spawn_data = parse_json_result(child_spawn)
+    read_only_write_data = parse_json_result(read_only_write)
+    release_publish_data = parse_json_result(release_publish)
+
+    assert child_spawn.returncode != 0
+    assert child_spawn_data["data"]["hook_result"]["event"] == "agent.spawn_rejected"
+    assert read_only_write.returncode != 0
+    assert read_only_write_data["data"]["hook_result"]["event"] == "agent.write_rejected"
+    assert release_publish.returncode != 0
+    assert release_publish_data["data"]["hook_result"]["event"] == "agent.release_command_rejected"
+    assert release_approved["data"]["hook_result"] == {}
+
+
+def test_qwendex_agent_file_locks_enforce_single_writer_and_release_on_final_report(tmp_path):
+    env = {"QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite")}
+
+    json_result(
+        "manager",
+        "assign",
+        "--agent-id",
+        "writer-a",
+        "--lane",
+        "implementation",
+        "--write-surface",
+        "scripts/qwendex_cli.py",
+        "--json",
+        env=env,
+    )
+    json_result(
+        "manager",
+        "assign",
+        "--agent-id",
+        "writer-b",
+        "--lane",
+        "implementation",
+        "--write-surface",
+        "tests/smoke/test_qwendex_cli.py",
+        "--json",
+        env=env,
+    )
+    acquired = json_result(
+        "agent",
+        "hook",
+        "PreToolUse",
+        "--event-json",
+        json.dumps({
+            "tool_name": "apply_patch",
+            "agent_id": "writer-a",
+            "profile": "implementer",
+            "path": "scripts/qwendex_cli.py",
+        }),
+        "--json",
+        env=env,
+    )
+    locks = json_result("agent", "locks", "--json", env=env)
+    conflict_result = run_qwendex(
+        "agent",
+        "hook",
+        "PreToolUse",
+        "--event-json",
+        json.dumps({
+            "tool_name": "apply_patch",
+            "agent_id": "writer-b",
+            "profile": "implementer",
+            "path": "tests/smoke/test_qwendex_cli.py",
+        }),
+        "--json",
+        env=env,
+    )
+    completed = json_result(
+        "agent",
+        "hook",
+        "SubagentStop",
+        "--event-json",
+        json.dumps({
+            "agent_id": "writer-a",
+            "last_assistant_message": "FINAL_REPORT\nstatus: completed\nagent_id: writer-a\nevidence:\n- done",
+        }),
+        "--json",
+        env=env,
+    )
+    acquired_after_release = json_result(
+        "agent",
+        "hook",
+        "PreToolUse",
+        "--event-json",
+        json.dumps({
+            "tool_name": "apply_patch",
+            "agent_id": "writer-b",
+            "profile": "implementer",
+            "path": "tests/smoke/test_qwendex_cli.py",
+        }),
+        "--json",
+        env=env,
+    )
+    status = json_result("agent", "status", "--json", env=env)
+    scribe_reject_result = run_qwendex(
+        "agent",
+        "hook",
+        "PreToolUse",
+        "--event-json",
+        json.dumps({
+            "tool_name": "write",
+            "agent_id": "scribe-1",
+            "profile": "scribe",
+            "path": "README.md",
+        }),
+        "--json",
+        env=env,
+    )
+
+    conflict = parse_json_result(conflict_result)
+    scribe_reject = parse_json_result(scribe_reject_result)
+
+    assert acquired["data"]["hook_result"]["event"] == "agent.file_locks_acquired"
+    assert acquired["data"]["hook_result"]["acquired"][0]["path"] == "scripts/qwendex_cli.py"
+    assert locks["data"]["write_safety"]["active_writer_count"] == 1
+    assert conflict_result.returncode != 0
+    assert conflict["data"]["hook_result"]["event"] == "agent.file_lock_conflict"
+    assert conflict["data"]["hook_result"]["conflicts"][0]["agent_id"] == "writer-a"
+    assert completed["data"]["agent_session"]["status"] == "completed"
+    assert acquired_after_release["data"]["hook_result"]["event"] == "agent.file_locks_acquired"
+    assert acquired_after_release["data"]["hook_result"]["acquired"][0]["agent_id"] == "writer-b"
+    assert status["data"]["write_safety"]["active_writer_count"] == 1
+    assert status["data"]["write_safety"]["active_writers"][0]["agent_id"] == "writer-b"
+    assert scribe_reject_result.returncode != 0
+    assert scribe_reject["data"]["hook_result"]["event"] == "agent.write_rejected"
+    assert "Scribe can write only" in scribe_reject["data"]["hook_result"]["reason"]
+
+
 def test_qwendex_manager_assign_generates_context_packet_and_routing(tmp_path):
     env = {"QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite")}
 
@@ -1462,8 +1998,34 @@ def test_qwendex_state_plane_tracks_task_context_handoff_evidence_and_agent_sess
     )
     assert snapshot["data"]["snapshot"]["task_id"] == task_id
 
+    report = json_result(
+        "agent",
+        "hook",
+        "SubagentStop",
+        "--event-json",
+        json.dumps({
+            "agent_id": "agent-1",
+            "last_assistant_message": (
+                "FINAL_REPORT\n"
+                "status: completed\n"
+                "agent_id: agent-1\n"
+                "task_name: review state plane\n"
+                "summary: verified context pack keeps compact agent output\n"
+                "evidence:\n"
+                "- context pack smoke passed"
+            ),
+        }),
+        "--json",
+        env=state_env,
+    )
+    assert report["data"]["agent_session"]["status"] == "completed"
+
     compact = json_result("context", "compact-plan", "--task-id", task_id, "--budget", "12000", "--json", env=state_env)
     assert "summary" in compact["data"]["compact_plan"]
+    outcome = compact["data"]["compact_plan"]["agent_outcomes"][0]
+    assert outcome["agent_id"] == "agent-1"
+    assert outcome["raw_output_artifact"].endswith("/raw-output.md")
+    assert compact["data"]["compact_plan"]["raw_output_policy"].startswith("preserve raw child output")
 
     reminder = json_result(
         "context",
@@ -1484,6 +2046,9 @@ def test_qwendex_state_plane_tracks_task_context_handoff_evidence_and_agent_sess
     handoff_id = handoff["data"]["handoff"]["handoff_id"]
     shown = json_result("handoff", "show", "--handoff-id", handoff_id, "--json", env=state_env)
     assert shown["data"]["handoff"]["task_id"] == task_id
+
+    pack = json_result("context", "pack", "--task-id", task_id, "--json", env=state_env)
+    assert pack["data"]["agent_outcomes"][0]["compact_report_artifact"].endswith("/compact-report.json")
 
     evidence_path = tmp_path / "evidence.txt"
     evidence_path.write_text("evidence", encoding="utf-8")
