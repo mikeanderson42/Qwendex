@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.1.0-rc.5
+
+- Added Codex CLI `0.143.0` to the Qwendex TUI patch manifest.
+- Updated the dev launcher default source ref to `rust-v0.143.0` so
+  `qwendex-dev codex-source sync`, `patch`, and `build` target the new Codex
+  update by default.
+- Verified the dev launcher patch/build workflow against the 0.143.0 runtime.
+
 ## 0.1.0-rc.4
 
 - Added first-class AgentPolicy diagnostics for `--agent-use`,

@@ -22,6 +22,16 @@ installed binary.
 Reason: npm-installed Codex ships a native binary; source patching is auditable,
 repeatable, and can block safely when Codex versions change.
 
+## Codex 0.143.0 Launcher Target
+
+Decision: Qwendex `0.1.0-rc.5` targets Codex CLI `0.143.0` and
+`rust-v0.143.0` as the default patched launcher source while retaining older
+0.142.x patch manifests for compatibility checks.
+
+Reason: the operator runtime moved to Codex 0.143.0, so the default dev
+launcher, manifest preflight, docs, and release validation must agree on the
+same supported Codex source tag.
+
 ## Kaveman Control Boundary
 
 Decision: Qwendex exposes Kaveman as persisted mode state and a terse-output

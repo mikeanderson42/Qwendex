@@ -101,7 +101,7 @@ The tmux session starts a Qwendex console plus `qwendex-local` and
 `qwendex-full` Codex panes. Each Codex pane launches with a visible banner:
 
 ```text
->_ OpenAI Codex (v0.142.4) /w Qwendex
+>_ OpenAI Codex (v0.143.0) /w Qwendex
 ```
 
 `codex-preflight` detects the installed Codex CLI version and checks it against

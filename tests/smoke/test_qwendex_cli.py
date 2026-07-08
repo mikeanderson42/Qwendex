@@ -113,7 +113,7 @@ def test_qwendex_version_matches_public_config_metadata():
     sample_config = json.loads((ROOT / "config" / "qwendex" / "qwendex.sample.json").read_text(encoding="utf-8"))
     version = json_result("version", "--json")
 
-    assert qwendex.VERSION == "0.1.0-rc.4"
+    assert qwendex.VERSION == "0.1.0-rc.5"
     assert version["data"]["version"] == qwendex.VERSION
     assert project_config["version"] == qwendex.VERSION
     assert sample_config["version"] == qwendex.VERSION
@@ -554,7 +554,7 @@ import sys
 from pathlib import Path
 
 if sys.argv[1:] == ["--version"]:
-    print("codex-cli 0.142.4")
+    print("codex-cli 0.143.0")
     raise SystemExit(0)
 
 Path(os.environ["QWENDEX_FAKE_CODEX_ARGS"]).write_text(json.dumps(sys.argv[1:]), encoding="utf-8")
@@ -720,13 +720,13 @@ def test_qwendex_codex_status_reports_unusable_local_state(tmp_path):
 
 def test_qwendex_codex_patch_preflight_version_manifest(tmp_path):
     fake_codex = tmp_path / "codex"
-    fake_codex.write_text("#!/usr/bin/env bash\nprintf 'codex-cli 0.142.4\\n'\n", encoding="utf-8")
+    fake_codex.write_text("#!/usr/bin/env bash\nprintf 'codex-cli 0.143.0\\n'\n", encoding="utf-8")
     fake_codex.chmod(0o755)
 
     data = json_result("codex-patch", "preflight", "--codex-bin", str(fake_codex), "--json")
 
     assert data["status"] == "pass"
-    assert data["data"]["version"]["version"] == "0.142.4"
+    assert data["data"]["version"]["version"] == "0.143.0"
     assert data["data"]["supported"] is True
     assert data["data"]["manifest"]["status_line_item"] == "qwendex-manager"
     assert "qwendex_toggle_manager" in data["data"]["manifest"]["keymap_actions"]
@@ -739,9 +739,9 @@ def test_qwendex_codex_patch_apply_updates_supported_source_checkout(tmp_path):
     source = tmp_path / "codex"
     anchors_by_path = {
         str(spec["path"]): "\n".join(str(anchor) for anchor in spec["anchors"])
-        for spec in qwendex.CODEX_PATCH_MANIFESTS["0.142.4"]["source_anchors"]
+        for spec in qwendex.CODEX_PATCH_MANIFESTS["0.143.0"]["source_anchors"]
     }
-    for spec in qwendex.codex_source_patch_specs("0.142.4"):
+    for spec in qwendex.codex_source_patch_specs("0.143.0"):
         rel = str(spec["path"])
         path = source / rel
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -749,7 +749,7 @@ def test_qwendex_codex_patch_apply_updates_supported_source_checkout(tmp_path):
         path.write_text(f"{anchors_by_path.get(rel, '')}\n{old_fragments}\n", encoding="utf-8")
 
     fake_codex = tmp_path / "codex-bin"
-    fake_codex.write_text("#!/usr/bin/env bash\nprintf 'codex-cli 0.142.4\\n'\n", encoding="utf-8")
+    fake_codex.write_text("#!/usr/bin/env bash\nprintf 'codex-cli 0.143.0\\n'\n", encoding="utf-8")
     fake_codex.chmod(0o755)
 
     applied = json_result("codex-patch", "apply", "--codex-bin", str(fake_codex), "--source", str(source), "--json")

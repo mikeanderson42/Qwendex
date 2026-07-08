@@ -1,3 +1,11 @@
+# v0.1.0-rc.5
+
+Codex 0.143.0 launcher release candidate.
+
+- Updates the default patched Codex source target to `rust-v0.143.0`.
+- Adds Qwendex patch-manifest support for Codex CLI `0.143.0`.
+- Keeps the dev launcher wired to prefer the rebuilt patched Codex binary.
+
 # v0.1.0-rc.4
 
 Agent Management release candidate.

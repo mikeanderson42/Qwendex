@@ -92,7 +92,7 @@ upstream Git package can install it separately from
 
 ## Source Locations
 
-For Codex `0.142.4` (`rust-v0.142.4`), the patch touches these source areas:
+For Codex `0.143.0` (`rust-v0.143.0`), the patch touches these source areas:
 
 - `codex-rs/tui/src/bottom_pane/status_line_setup.rs`
 - `codex-rs/tui/src/chatwidget/status_surfaces.rs`
