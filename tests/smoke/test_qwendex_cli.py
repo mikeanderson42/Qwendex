@@ -1415,10 +1415,16 @@ def test_qwendex_manager_stop_recovers_latest_preflight_without_exported_env(tmp
 
 
 def test_qwendex_manager_stop_uses_generated_runtime_env_when_state_env_is_dropped(tmp_path):
-    work_root = tmp_path / ".qwendex-dev"
+    qwendex = load_qwendex()
+    real_root = tmp_path / "real"
+    link_root = tmp_path / "linked"
+    work_root = real_root / ".qwendex-dev"
     codex_home = work_root / "codex_home"
+    real_root.mkdir()
+    link_root.symlink_to(real_root, target_is_directory=True)
+    linked_codex_home = link_root / ".qwendex-dev" / "codex_home"
     env = {
-        "CODEX_HOME": str(codex_home),
+        "CODEX_HOME": str(linked_codex_home),
         "QWENDEX_AGENT_USE": "Manager",
         "QWENDEX_STATE_DB": "",
         "QWENDEX_LEDGER_DB": "",
@@ -1457,11 +1463,13 @@ def test_qwendex_manager_stop_uses_generated_runtime_env_when_state_env_is_dropp
     assert stop.returncode == 0, stop.stderr or stop.stdout
     assert json.loads(stop.stdout) == {}
     assert preflight["data"]["ledger_id"] == decision["ledger_id"]
+    assert qwendex.path_digest_policy(codex_home) == qwendex.path_digest_policy(linked_codex_home)
+    assert decision["codex_home_digest_or_path_policy"] == qwendex.path_digest_policy(codex_home)
     assert decision["stop_status"] == "STOP_MANAGER_CLOSED"
     assert (work_root / "state" / "qwendex.sqlite").is_file()
     receipt_paths = decision["receipt_paths"]
     assert receipt_paths
-    assert all(str(work_root / "results" / "qwendex") in receipt for receipt in receipt_paths)
+    assert all(".qwendex-dev/results/qwendex" in receipt for receipt in receipt_paths)
 
 
 def test_qwendex_manager_preflight_records_decision_ledger_and_hook_status(tmp_path):

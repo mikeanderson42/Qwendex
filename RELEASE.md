@@ -8,9 +8,10 @@ Manager hook compatibility and rc4 readiness candidate.
 - Makes Manager Stop finalization recover from the latest compatible preflight
   ledger when qdex wrapper exports are unavailable, and keeps repeated Stop
   hooks idempotent after a decision is closed.
-- Generates managed hook commands with embedded Qwendex runtime env so
-  Stop hooks still reach the intended state DB, ledger DB, and receipt root
-  when the host drops exported state variables.
+- Generates managed hook commands with embedded Qwendex runtime env and
+  resolves Codex-home path digests so Stop hooks still reach the intended
+  state DB, ledger DB, and receipt root when the host drops exported state
+  variables or invokes hooks through a symlinked dev path.
 - Tightens PreToolUse write detection so shell comparisons inside quoted
   commands are not mistaken for file redirects, while real redirects still
   require agent/file-lock metadata.

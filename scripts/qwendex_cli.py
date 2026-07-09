@@ -1664,7 +1664,7 @@ def codex_home_from_env(env: Mapping[str, str] | None = None) -> Path:
 
 
 def path_digest_policy(path: Path) -> str:
-    return "sha256:" + sha256_text(str(path.expanduser()))
+    return "sha256:" + sha256_text(str(path.expanduser().resolve(strict=False)))
 
 
 def prompt_digest_and_summary(prompt: str, *, known: bool) -> tuple[str, str]:
