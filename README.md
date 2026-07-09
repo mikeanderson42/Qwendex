@@ -38,7 +38,8 @@ The public contract is intentionally narrow:
   ledger metadata.
 - Manager Mode duty levels: `Off`, `Auto`, `Lite`, `Medium`, `Heavy`, and
   `Manager Mode`.
-- Kaveman terse-output state exposed through Qwendex manager controls.
+- Kaveman terse-output state enforced through AgentPolicy output policy,
+  managed hooks, and manager workflow receipts.
 - Local routing toggle so Qwendex can skip local subagents even when the local
   endpoint is healthy.
 - Codex TUI patch contract for a Qwendex footer item and `Alt+M`, `Alt+K`, and
@@ -166,8 +167,8 @@ primary seat.
 Agent Management defaults to the selected Agent Manager mode from `Alt+M` or
 `scripts/qwendex manager mode ...`. Explicit selectors are also available
 through `--agent-use`, `QWENDEX_AGENT_USE`, and `CODEX_AGENT_USE`. The resolved
-mode computes a session `AgentPolicy`, policy hash, subprocess env exports, and
-root/child management tool-surface metadata. See
+mode computes a session `AgentPolicy`, policy hash, Kaveman output policy,
+subprocess env exports, and root/child management tool-surface metadata. See
 [Agent Management](public/qwendex/agent-management.md) for the public
 `qwendex agent ...` commands.
 
@@ -265,7 +266,7 @@ claims require GPT/Codex review and the appropriate Qwendex verification tier.
 
 ## Current Release / Known Limits
 
-This checkout is seeded as `v0.3.1`. The latest captured max-depth
+This checkout is seeded as `v0.3.2`. The latest captured max-depth
 validation summary in this repository is still
 [`docs/validation/v0.1.0-rc.1-validation_summary.json`](docs/validation/v0.1.0-rc.1-validation_summary.json)
 until a newer release validation run is recorded.

@@ -1,3 +1,17 @@
+# v0.3.2
+
+Kaveman policy enforcement release.
+
+- Promotes Kaveman into the effective AgentPolicy output policy so the policy
+  hash, env exports, manager status, and codex-status payloads change when
+  terse output is enabled.
+- Carries the Kaveman output policy through managed prompt/subagent hooks,
+  agent plans, and manager preflight workflow receipts.
+- Keeps the release metadata aligned at `0.3.2` and documents the connected
+  policy/workflow enforcement path.
+- Adds an optional native `open-webui-local.service` fallback for the local
+  stack Open WebUI launcher when `powershell.exe` is unavailable.
+
 # v0.3.1
 
 Manager orchestration and compatibility hardening release.

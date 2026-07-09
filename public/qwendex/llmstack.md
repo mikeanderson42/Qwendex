@@ -65,6 +65,14 @@ from Windows PowerShell or copy it to a convenient local path such as
 By default it opens the WSL checkout at `$HOME/Qwendex`. Override with
 `-RepoDir` or set `QWENDEX_WSL_REPO` inside WSL.
 
+Open WebUI is an optional personal/external chat interface for inference,
+not a dependency of Qwendex core routing, manager mode, or Codex bridge
+operation. When `powershell.exe` is unavailable,
+`scripts/local_llm_stack.py open-webui` can fall back to the native user service
+`~/.config/systemd/user/open-webui-local.service` if that service file exists.
+The fallback starts it with `systemctl --user`, waits for `/health`, then opens
+Open WebUI with `xdg-open`.
+
 ## Validation
 
 ```bash

@@ -42,6 +42,11 @@ Reason: the harness needs a connected footer/CLI/TUI control with low
 maintenance cost; projects that want the upstream Caveman package can install it
 separately.
 
+Update for `0.3.2`: Kaveman is also part of the resolved `AgentPolicy` as an
+`output_policy`. Enabling it changes the policy hash, hook context, manager
+workflow receipts, and exported launch environment, so terse-output mode is not
+only a visual status flag.
+
 ## Manager Session Reconciliation
 
 Decision: status, doctor, and Codex status refreshes reconcile stale read-only

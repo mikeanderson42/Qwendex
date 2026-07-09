@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.3.1"
+VERSION = "0.3.2"
 CONFIG_DIR = ROOT / "config" / "qwendex"
 DEFAULT_PROJECT_CONFIG = CONFIG_DIR / "qwendex.json"
 DEFAULT_USER_CONFIG = Path.home() / ".config" / "qwendex" / "config.json"
@@ -703,6 +703,64 @@ def normalize_agent_use_mode(value: Any) -> str:
     return AGENT_USE_ALIASES.get(text, text)
 
 
+def kaveman_enabled_for_policy(config: Mapping[str, Any], enabled: bool | None = None) -> bool:
+    if enabled is not None:
+        return bool(enabled)
+    try:
+        with connect_state(config) as conn:
+            return current_kaveman_enabled(config, conn)
+    except (OSError, sqlite3.Error, ValueError):
+        return kaveman_default_enabled(config)
+
+
+def kaveman_output_policy(config: Mapping[str, Any], enabled: bool | None = None) -> dict[str, Any]:
+    active = kaveman_enabled_for_policy(config, enabled)
+    directive = kaveman_directive(config) if active else ""
+    return {
+        "name": "kaveman" if active else "standard",
+        "kaveman_enabled": active,
+        "terse_output": active,
+        "directive": directive,
+        "optional_explanation": "only_when_requested" if active else "allowed",
+        "enforced_by": (
+            ["agent_policy", "managed_hook_context", "manager_workflow_receipts"]
+            if active
+            else []
+        ),
+    }
+
+
+def agent_policy_env(policy: Mapping[str, Any]) -> dict[str, str]:
+    output_policy = policy.get("output_policy", {})
+    directive = str(output_policy.get("directive") or "") if isinstance(output_policy, Mapping) else ""
+    kaveman_enabled = bool(output_policy.get("kaveman_enabled")) if isinstance(output_policy, Mapping) else False
+    return {
+        "QWENDEX_EFFECTIVE_AGENT_USE": str(policy["agent_use"]),
+        "QWENDEX_AGENT_POLICY_HASH": str(policy["policy_hash"]),
+        "QWENDEX_AGENT_POLICY_SOURCE": str(policy["source"]),
+        "QWENDEX_OUTPUT_POLICY": "kaveman" if kaveman_enabled else "standard",
+        "QWENDEX_KAVEMAN_ENABLED": "1" if kaveman_enabled else "0",
+        "QWENDEX_KAVEMAN_DIRECTIVE": directive,
+    }
+
+
+def attach_output_policy(
+    policy: Mapping[str, Any],
+    config: Mapping[str, Any],
+    *,
+    kaveman_enabled: bool | None = None,
+) -> dict[str, Any]:
+    updated = dict(policy)
+    output_policy = kaveman_output_policy(config, kaveman_enabled)
+    updated["output_policy"] = output_policy
+    updated["kaveman_enabled"] = output_policy["kaveman_enabled"]
+    updated["kaveman_directive"] = output_policy["directive"]
+    updated.pop("policy_hash", None)
+    updated["policy_hash"] = agent_policy_hash(updated)
+    updated["env"] = agent_policy_env(updated)
+    return updated
+
+
 def agent_policy_defaults(mode: str) -> dict[str, Any]:
     common = {
         "mode": mode,
@@ -825,7 +883,7 @@ def agent_policy_hash(policy: Mapping[str, Any]) -> str:
     hashed = {
         key: value
         for key, value in policy.items()
-        if key not in {"policy_hash", "source", "selector", "warnings", "errors", "env"}
+        if key not in {"policy_hash", "source", "selector", "warnings", "errors", "env", "tool_surface"}
     }
     return hashlib.sha256(json.dumps(hashed, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
@@ -836,8 +894,8 @@ def resolve_agent_policy(
     cli_agent_use: str = "",
     env: Mapping[str, str] | None = None,
     selected_manager_mode: str = "",
+    kaveman_enabled: bool | None = None,
 ) -> dict[str, Any]:
-    del config
     source_env = env or os.environ
     selector_source = "default"
     selector = "Medium"
@@ -873,12 +931,7 @@ def resolve_agent_policy(
         "warnings": warnings,
         "errors": errors,
     })
-    policy["policy_hash"] = agent_policy_hash(policy)
-    policy["env"] = {
-        "QWENDEX_EFFECTIVE_AGENT_USE": policy["agent_use"],
-        "QWENDEX_AGENT_POLICY_HASH": policy["policy_hash"],
-        "QWENDEX_AGENT_POLICY_SOURCE": selector_source,
-    }
+    policy = attach_output_policy(policy, config, kaveman_enabled=kaveman_enabled)
     policy["tool_surface"] = {
         "root_management_tools": [
             "spawn_agent",
@@ -2712,7 +2765,9 @@ def manager_mode_payload(
     agent_policy: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     profile = manager_mode_profile(config, mode)
-    resolved_agent_policy = dict(agent_policy or resolve_agent_policy(config, selected_manager_mode=profile["mode"]))
+    resolved_agent_policy = dict(agent_policy or resolve_agent_policy(config, selected_manager_mode=profile["mode"], kaveman_enabled=kaveman_enabled))
+    if bool(resolved_agent_policy.get("output_policy", {}).get("kaveman_enabled")) != bool(kaveman_enabled):
+        resolved_agent_policy = attach_output_policy(resolved_agent_policy, config, kaveman_enabled=kaveman_enabled)
     summary = summarize_agent_sessions(sessions or [], stale_after_minutes=stale_after_minutes)
     data = {
         "mode": profile["mode"],
@@ -2722,6 +2777,7 @@ def manager_mode_payload(
         "agent_policy_hash": resolved_agent_policy["policy_hash"],
         "agent_policy_source": resolved_agent_policy["source"],
         "agent_policy_warnings": list(resolved_agent_policy.get("warnings", [])),
+        "output_policy": resolved_agent_policy.get("output_policy", {}),
         "write_safety": file_lock_summary(config),
         "legacy_mode": legacy_mode,
         "ui_indicator": manager_ui_indicator(config, profile["mode"]),
@@ -2858,13 +2914,13 @@ def codex_status_payload(config: Mapping[str, Any], *, write_path: Path | None =
     with connect_state(config) as conn:
         selected_mode = current_manager_mode(config, conn)
         mode = selected_mode
-        agent_policy = resolve_agent_policy(config, selected_manager_mode=selected_mode)
+        kaveman_enabled = current_kaveman_enabled(config, conn)
+        agent_policy = resolve_agent_policy(config, selected_manager_mode=selected_mode, kaveman_enabled=kaveman_enabled)
         if agent_policy["source"] not in {"default", "manager-mode"}:
             mode = str(agent_policy["mode"])
         stale_after = mode_stale_after_minutes(config, mode)
         reconcile_stale_manager_sessions(conn, stale_after_minutes=stale_after, now=utc_now())
         local_enabled = current_local_enabled(config, conn)
-        kaveman_enabled = current_kaveman_enabled(config, conn)
         local_status = local_subagent_status(config, enabled=local_enabled, env=os.environ, probe=True)
     requested_override, requested_override_reason = manager_hook_override(os.environ)
     base_hook_status = hook_status_for_codex_home(
@@ -2891,6 +2947,7 @@ def codex_status_payload(config: Mapping[str, Any], *, write_path: Path | None =
         "agent_use": agent_policy["agent_use"],
         "agent_policy_hash": agent_policy["policy_hash"],
         "agent_policy_source": agent_policy["source"],
+        "output_policy": agent_policy.get("output_policy", {}),
         "kaveman": "Y" if kaveman_enabled else "N",
         "kaveman_enabled": kaveman_enabled,
         "kaveman_directive": kaveman_directive(config) if kaveman_enabled else "",
@@ -4982,6 +5039,17 @@ def kaveman_context(config: Mapping[str, Any]) -> str:
     return f"Kaveman directive: {directive}" if directive else ""
 
 
+def agent_output_policy_context(agent_policy: Mapping[str, Any], config: Mapping[str, Any] | None = None) -> str:
+    output_policy = agent_policy.get("output_policy", {})
+    if isinstance(output_policy, Mapping) and output_policy.get("kaveman_enabled"):
+        directive = str(output_policy.get("directive") or "")
+        return f"Qwendex output policy: Kaveman enabled. Kaveman directive: {directive}" if directive else "Qwendex output policy: Kaveman enabled."
+    if config is not None:
+        if kaveman := kaveman_context(config):
+            return f"Qwendex output policy: Kaveman enabled. {kaveman}"
+    return ""
+
+
 def hook_local_subagent_status(config: Mapping[str, Any]) -> dict[str, Any]:
     try:
         with connect_state(config) as conn:
@@ -5034,8 +5102,8 @@ def agent_mode_context(
             f"default lane {routing_assignment_label(policy['default_lane'])}; "
             f"high-risk/release/security lane {routing_assignment_label(policy['high_risk_lane'])}."
         )
-        if kaveman := kaveman_context(config):
-            parts.append(kaveman)
+        if output_context := agent_output_policy_context(agent_policy, config=config):
+            parts.append(output_context)
     return " ".join(parts)
 
 
@@ -5085,12 +5153,12 @@ def subagent_start_context(
         if routing
         else " Use the model/reasoning assignment supplied by the manager/root context."
     )
-    kaveman = kaveman_context(config)
-    kaveman_sentence = f" {kaveman}" if kaveman else ""
+    output_context = agent_output_policy_context(agent_policy, config=config)
+    output_sentence = f" {output_context}" if output_context else ""
     return (
         f"You are Qwendex subagent {agent_id} of type {agent_type}. "
         f"Parent mode is {agent_policy.get('agent_use')}. Execute {task_name} now. "
-        f"{assignment}{kaveman_sentence} "
+        f"{assignment}{output_sentence} "
         "Do not merely acknowledge or stand by. Do not spawn subagents. "
         "End with FINAL_REPORT, BLOCKED, or FAILED. Required FINAL_REPORT fields: "
         "status, agent_id, task_name, summary, files_inspected, files_changed, "
@@ -6309,6 +6377,7 @@ def build_agent_team_plan(
         "schema_version": "qwendex.agent_plan.v1",
         "mode": mode,
         "agent_use": agent_policy.get("agent_use"),
+        "output_policy": agent_policy.get("output_policy", {}),
         "task_id": effective_task_id,
         "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
         "task_class": estimate.get("task_class"),
@@ -6444,7 +6513,8 @@ def manager_preflight_payload(
     source_env = env or os.environ
     with connect_state(config) as conn:
         mode = current_manager_mode(config, conn, explicit=selected_mode)
-        agent_policy = resolve_agent_policy(config, selected_manager_mode=mode, env=source_env)
+        kaveman_enabled = current_kaveman_enabled(config, conn)
+        agent_policy = resolve_agent_policy(config, selected_manager_mode=mode, env=source_env, kaveman_enabled=kaveman_enabled)
         local_status = local_subagent_status(config, enabled=current_local_enabled(config, conn), env=source_env, probe=True)
     codex_home = codex_home_from_env(source_env)
     requested_override, requested_override_reason = manager_hook_override(source_env)
@@ -6528,6 +6598,7 @@ def manager_preflight_payload(
         "agent_use": str(agent_policy.get("agent_use") or ""),
         "policy_source": str(agent_policy.get("source") or ""),
         "policy_hash": str(agent_policy.get("policy_hash") or ""),
+        "output_policy": agent_policy.get("output_policy", {}),
         "codex_home": str(codex_home),
         "codex_home_digest_or_path_policy": path_digest_policy(codex_home),
         "hook_status": hook_status,
@@ -6577,6 +6648,9 @@ def manager_preflight_payload(
             "QWENDEX_MANAGER_LEDGER_ID": ledger_id,
             "QWENDEX_MANAGER_POLICY_HASH": str(agent_policy.get("policy_hash") or ""),
             "QWENDEX_MANAGER_STOP_STATUS": stop_status,
+            "QWENDEX_OUTPUT_POLICY": str(agent_policy.get("env", {}).get("QWENDEX_OUTPUT_POLICY") or "standard"),
+            "QWENDEX_KAVEMAN_ENABLED": str(agent_policy.get("env", {}).get("QWENDEX_KAVEMAN_ENABLED") or "0"),
+            "QWENDEX_KAVEMAN_DIRECTIVE": str(agent_policy.get("env", {}).get("QWENDEX_KAVEMAN_DIRECTIVE") or ""),
         },
     }
     if not dry_run:
@@ -7195,6 +7269,7 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
             set_manager_setting(conn, "kaveman_enabled", enabled)
             conn.commit()
             kaveman_enabled = enabled
+            agent_policy = resolve_agent_policy(config, cli_agent_use=getattr(args, "agent_use", ""), selected_manager_mode=mode, kaveman_enabled=kaveman_enabled)
             rows = conn.execute("SELECT * FROM qwendex_agent_sessions ORDER BY updated_at DESC LIMIT ?", (args.limit,)).fetchall()
             sessions = [row_to_agent_session(row) for row in rows]
             data = manager_mode_payload(

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.3.2
+
+- Promoted Kaveman into `AgentPolicy.output_policy`, including policy-hash
+  participation and `QWENDEX_OUTPUT_POLICY` / `QWENDEX_KAVEMAN_*` exports.
+- Threaded the same output policy through managed prompt hooks, subagent-start
+  hooks, agent plans, manager preflight receipts, manager status, and
+  `codex-status`.
+- Updated release metadata to `0.3.2`.
+- Added an optional native `open-webui-local.service` fallback for the local
+  stack Open WebUI launcher when `powershell.exe` is unavailable.
+
 ## 0.3.1
 
 - Kept explicit `--mode manager` preflight selection authoritative and exposed

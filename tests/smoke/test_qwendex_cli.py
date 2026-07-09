@@ -118,7 +118,7 @@ def test_qwendex_version_and_config_are_in_sync():
     sample_config = json.loads((ROOT / "config" / "qwendex" / "qwendex.sample.json").read_text(encoding="utf-8"))
     version = json_result("version", "--json")
 
-    assert qwendex.VERSION == "0.3.1"
+    assert qwendex.VERSION == "0.3.2"
     assert version["data"]["version"] == qwendex.VERSION
     assert project_config["version"] == qwendex.VERSION
     assert sample_config["version"] == qwendex.VERSION
@@ -2037,8 +2037,21 @@ def test_qwendex_agent_hooks_enforce_final_contract_and_manager_stop_gate(tmp_pa
         "QWENDEX_MANAGER_ALLOW_UNHOOKED": "1",
     }
 
+    standard_policy = json_result("--agent-use", "Manager", "agent", "policy", "--json", env=env)
     kaveman = json_result("manager", "kaveman", "--set", "on", "--json", env=env)
     directive = kaveman["data"]["kaveman_directive"]
+    terse_policy = json_result("--agent-use", "Manager", "agent", "policy", "--json", env=env)
+    output_policy = terse_policy["data"]["agent_policy"]["output_policy"]
+    agent_plan = json_result("--agent-use", "Manager", "agent", "plan", "--prompt", "Use manager mode with verifier evidence.", "--json", env=env)
+
+    assert standard_policy["data"]["agent_policy"]["output_policy"]["terse_output"] is False
+    assert output_policy["name"] == "kaveman"
+    assert output_policy["terse_output"] is True
+    assert "agent_policy" in output_policy["enforced_by"]
+    assert terse_policy["data"]["agent_policy"]["policy_hash"] != standard_policy["data"]["agent_policy"]["policy_hash"]
+    assert terse_policy["data"]["agent_policy"]["env"]["QWENDEX_OUTPUT_POLICY"] == "kaveman"
+    assert terse_policy["data"]["agent_policy"]["env"]["QWENDEX_KAVEMAN_DIRECTIVE"] == directive
+    assert agent_plan["data"]["agent_plan"]["output_policy"]["terse_output"] is True
 
     prompt_hook = json_result(
         "--agent-use",
@@ -2066,6 +2079,7 @@ def test_qwendex_agent_hooks_enforce_final_contract_and_manager_stop_gate(tmp_pa
     assert raw_prompt_hook.returncode == 0
     assert set(raw_prompt) == {"hookSpecificOutput"}
     assert "root orchestrator" in raw_prompt["hookSpecificOutput"]["additionalContext"]
+    assert "Qwendex output policy: Kaveman enabled" in raw_prompt["hookSpecificOutput"]["additionalContext"]
     assert directive in raw_prompt["hookSpecificOutput"]["additionalContext"]
     assert "status" not in raw_prompt
     assigned = json_result(
@@ -2090,6 +2104,7 @@ def test_qwendex_agent_hooks_enforce_final_contract_and_manager_stop_gate(tmp_pa
         "--json",
         env=env,
     )
+    assert "Qwendex output policy: Kaveman enabled" in subagent_start["data"]["hook_result"]["hookSpecificOutput"]["additionalContext"]
     assert directive in subagent_start["data"]["hook_result"]["hookSpecificOutput"]["additionalContext"]
 
     preflight = json_result(
@@ -2100,6 +2115,10 @@ def test_qwendex_agent_hooks_enforce_final_contract_and_manager_stop_gate(tmp_pa
         "--json",
         env=env,
     )
+    assert preflight["data"]["output_policy"]["terse_output"] is True
+    assert preflight["data"]["exports"]["QWENDEX_OUTPUT_POLICY"] == "kaveman"
+    assert preflight["data"]["exports"]["QWENDEX_KAVEMAN_ENABLED"] == "1"
+    assert preflight["data"]["exports"]["QWENDEX_KAVEMAN_DIRECTIVE"] == directive
     manager_env = {**env, **preflight["data"]["exports"]}
     blocked_stop_result = run_qwendex(
         "--agent-use",
@@ -2161,6 +2180,7 @@ def test_qwendex_agent_hooks_enforce_final_contract_and_manager_stop_gate(tmp_pa
     missing_summary = parse_json_result(missing_summary_result)
 
     assert "root orchestrator" in prompt_hook["data"]["hook_result"]["hookSpecificOutput"]["additionalContext"]
+    assert "Qwendex output policy: Kaveman enabled" in prompt_hook["data"]["hook_result"]["hookSpecificOutput"]["additionalContext"]
     assert directive in prompt_hook["data"]["hook_result"]["hookSpecificOutput"]["additionalContext"]
     assert assigned["data"]["agent_session"]["context_packet"]["required"] is True
     assert blocked_stop_result.returncode != 0

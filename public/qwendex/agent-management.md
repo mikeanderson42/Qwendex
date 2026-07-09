@@ -164,9 +164,9 @@ Supported events are `SessionStart`, `UserPromptSubmit`, `SubagentStart`,
 The gates enforce the current CLI policy boundary:
 
 - prompt hooks inject the active mode contract, Qwendex model/reasoning policy,
-  and the Kaveman directive when enabled
+  and the AgentPolicy Kaveman output policy when enabled
 - subagent-start hooks inject the worker execution and final-report contract,
-  plus the selected model and reasoning from the event or manager ledger
+  plus the selected model, reasoning, and AgentPolicy Kaveman output policy
 - subagent-stop hooks require `FINAL_REPORT`, `BLOCKED`, or `FAILED`
 - Manager stop hooks require a preflight decision ledger, block unresolved
   required agents, missing verifier evidence after edits, missing direct-work
@@ -175,6 +175,13 @@ The gates enforce the current CLI policy boundary:
 - pre-tool hooks deny recursive child `spawn_agent`, writes from read-only
   profiles, conflicting file locks, and release/publish commands without
   explicit release approval
+
+`agent policy --json`, `agent plan --json`, `manager status --json`,
+`codex-status --json`, and `manager preflight --json` all expose the same
+`output_policy` object. When Kaveman is enabled, that policy requires terse
+output, carries the configured directive, changes the policy hash, and exports
+`QWENDEX_OUTPUT_POLICY=kaveman` plus the Kaveman directive for managed workflow
+launches.
 
 Manual `agent hook ... --json` commands return the stable Qwendex diagnostic
 envelope. Managed Codex hook config uses `agent hook ... --codex-hook-output`

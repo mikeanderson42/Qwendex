@@ -1298,6 +1298,32 @@ def provider_sessions_to_dict(cfg: StackConfig) -> list[dict[str, Any]]:
     ]
 
 
+def wait_for_http_ok(url: str, timeout_seconds: float = 30.0) -> tuple[bool, str]:
+    deadline = time.monotonic() + timeout_seconds
+    last_error = ""
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen(url, timeout=3.0) as resp:
+                status = getattr(resp, "status", 0) or 0
+                if 200 <= status < 400:
+                    return True, f"HTTP {status}"
+                last_error = f"HTTP {status}"
+        except Exception as exc:
+            last_error = str(exc)
+        time.sleep(1.0)
+    return False, last_error or f"timed out waiting for {url}"
+
+
+def open_url_detached(url: str) -> str:
+    if run(["bash", "-lc", "command -v xdg-open >/dev/null 2>&1"], capture=True).returncode != 0:
+        return "xdg-open is not available; service is running but browser was not opened"
+    try:
+        subprocess.Popen(["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception as exc:
+        return f"failed to open browser: {exc}"
+    return f"opened browser at {url}"
+
+
 def launch_open_webui(cfg: StackConfig, interface_name: str = "open-webui", *, reload_backend: bool = False) -> ActionResult:
     interface = cfg.chat_interfaces.get(interface_name)
     if interface is None:
@@ -1327,10 +1353,36 @@ def launch_open_webui(cfg: StackConfig, interface_name: str = "open-webui", *, r
                 return ActionResult(False, f"failed to start Open WebUI backend profile {backend_profile}", details)
             cfg = open_webui_cfg
 
+    target = interface.get("backend_url", "http://127.0.0.1:4000/v1")
+    target_url = str(interface.get("url", "http://127.0.0.1:7070")).rstrip("/")
+    health_url = f"{target_url}/health"
+
     script = interface.get("windows_start_script", r"C:\open-webui\start-open-webui.ps1")
     ps_check = run(["bash", "-lc", "command -v powershell.exe >/dev/null 2>&1"], capture=True)
     if ps_check.returncode != 0:
-        return ActionResult(False, "powershell.exe is not available from WSL; run C:\\open-webui\\start-open-webui.ps1 from Windows PowerShell.")
+        service_path = Path.home() / ".config" / "systemd" / "user" / "open-webui-local.service"
+        if not service_path.exists():
+            return ActionResult(
+                False,
+                "powershell.exe is unavailable and native open-webui-local.service is not installed",
+                details,
+            )
+        cp = run(["systemctl", "--user", "start", "open-webui-local.service"], capture=True, timeout=15.0)
+        if cp.returncode != 0:
+            details.extend(item for item in [cp.stderr.strip(), cp.stdout.strip()] if item)
+            return ActionResult(False, "failed to start native Open WebUI service", details)
+        details.append("started native open-webui-local.service")
+        healthy, health_detail = wait_for_http_ok(health_url, timeout_seconds=30.0)
+        details.append(f"{health_url}: {health_detail}")
+        if not healthy:
+            return ActionResult(False, "native Open WebUI service did not become healthy", details)
+        details.append(open_url_detached(target_url))
+        if reload_backend and backend_profile:
+            return ActionResult(True, f"opened {interface_name} at {target_url}; backend target is {target} using profile {backend_profile}", details)
+        if backend_profile and any(detail.startswith("started textgen") or detail.startswith("textgen already") for detail in details):
+            return ActionResult(True, f"opened {interface_name} at {target_url}; backend target is {target} using profile {backend_profile}", details)
+        return ActionResult(True, f"opened {interface_name} at {target_url}; backend target is {target} using current profile {cfg.active_backend_profile}", details)
+
     ps_script_literal = "'" + str(script).replace("'", "''") + "'"
     arg_list = ["'-NoExit'", "'-ExecutionPolicy'", "'Bypass'", "'-File'", "$script"]
     backend_url = str(interface.get("backend_url", "")).strip()
@@ -1355,7 +1407,6 @@ def launch_open_webui(cfg: StackConfig, interface_name: str = "open-webui", *, r
     if cp.returncode != 0:
         details.extend(item for item in [cp.stderr.strip(), cp.stdout.strip()] if item)
         return ActionResult(False, "failed to open Open WebUI PowerShell launcher", details)
-    target = interface.get("backend_url", "http://127.0.0.1:4000/v1")
     if reload_backend and backend_profile:
         return ActionResult(True, f"opened {interface_name}; backend target is {target} using profile {backend_profile}", details)
     if backend_profile and any(detail.startswith("started textgen") or detail.startswith("textgen already") for detail in details):
