@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 0.0.2-rc2
+
+- Added `qdex` as the dev-worktree launch wrapper for selected repositories,
+  including Manager preflight before Codex starts and exported manager ledger
+  IDs only after a ready preflight.
+- Added the Manager decision ledger and receipts for hook posture, prompt
+  digest or interactive-prompt unknown state, routing reason, verifier
+  requirement, validation plan, and STOP status.
+- Hardened Manager launch and finalization gates so missing or partial hooks
+  block by default, selected Manager Mode cannot be bypassed by env agent-use
+  selectors, stale unhooked overrides are ignored when hooks verify, and
+  `Validation: not run` does not close direct edit work.
+- Added managed hook install/verify commands, qdex durability checks, Manager
+  preflight smoke coverage, direct-work validation coverage, and public docs
+  for the supported workflow.
+
 ## 0.0.2-rc1
 
 - Fixed Agent Manager mode consistency so the selected `Alt+M` mode is the

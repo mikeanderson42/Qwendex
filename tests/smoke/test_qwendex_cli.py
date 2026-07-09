@@ -117,7 +117,7 @@ def test_qwendex_version_matches_public_config_metadata():
     sample_config = json.loads((ROOT / "config" / "qwendex" / "qwendex.sample.json").read_text(encoding="utf-8"))
     version = json_result("version", "--json")
 
-    assert qwendex.VERSION == "0.0.2-rc1"
+    assert qwendex.VERSION == "0.0.2-rc2"
     assert version["data"]["version"] == qwendex.VERSION
     assert project_config["version"] == qwendex.VERSION
     assert sample_config["version"] == qwendex.VERSION

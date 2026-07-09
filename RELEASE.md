@@ -1,3 +1,18 @@
+# v0.0.2-rc2
+
+Manager preflight and qdex orchestration release candidate.
+
+- Adds the tracked `scripts/qdex` launch wrapper for selected repositories.
+- Records Manager preflight decisions before Codex launch, including hook
+  posture, routing reason, verifier requirement, validation plan, and STOP
+  status.
+- Blocks Manager launches with missing or partial Qwendex Codex hooks unless an
+  explicit unhooked override is used.
+- Preserves the selected Manager Mode preflight contract even when env
+  agent-use selectors change the effective `AgentPolicy`.
+- Tightens direct-work finalization so `Validation: not run` cannot close an
+  edit path.
+
 # v0.1.0-rc.5
 
 Codex 0.143.0 launcher release candidate.
