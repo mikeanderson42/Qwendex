@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.3.2"
+VERSION = "0.4.0"
 CONFIG_DIR = ROOT / "config" / "qwendex"
 DEFAULT_PROJECT_CONFIG = CONFIG_DIR / "qwendex.json"
 DEFAULT_USER_CONFIG = Path.home() / ".config" / "qwendex" / "config.json"
@@ -395,6 +395,10 @@ CODEX_PATCH_MANIFESTS["0.142.5"] = {
 CODEX_PATCH_MANIFESTS["0.143.0"] = {
     **CODEX_PATCH_MANIFESTS["0.142.5"],
     "codex_tag": "rust-v0.143.0",
+}
+CODEX_PATCH_MANIFESTS["0.144.0"] = {
+    **CODEX_PATCH_MANIFESTS["0.143.0"],
+    "codex_tag": "rust-v0.144.0",
 }
 
 DEFAULT_CONFIG: dict[str, Any] = {

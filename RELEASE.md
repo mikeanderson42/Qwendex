@@ -1,3 +1,14 @@
+# v0.4.0
+
+Codex 0.144.0 patched launcher release.
+
+- Adds Codex CLI `0.144.0` / `rust-v0.144.0` to the supported TUI patch
+  manifest.
+- Updates the Qwendex dev source sync default so patched Codex rebuilds target
+  the installed `0.144.0` CLI.
+- Publishes release metadata as `0.4.0` while retaining older Codex patch
+  manifests for compatibility checks.
+
 # v0.3.2
 
 Kaveman policy enforcement release.

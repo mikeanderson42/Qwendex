@@ -28,7 +28,7 @@ DEV_CODEX_DEFAULT="$WORK_ROOT/codex-build/bin/codex"
 CODEX_SOURCE_DIR="$WORK_ROOT/codex-source/codex"
 QWENDEX_CODEX_YOLO_FLAG="--dangerously-bypass-approvals-and-sandbox"
 QWENDEX_CODEX_SOURCE_REPO="${QWENDEX_CODEX_SOURCE_REPO:-https://github.com/openai/codex.git}"
-QWENDEX_CODEX_SOURCE_REF="${QWENDEX_CODEX_SOURCE_REF:-rust-v0.143.0}"
+QWENDEX_CODEX_SOURCE_REF="${QWENDEX_CODEX_SOURCE_REF:-rust-v0.144.0}"
 MANAGED_RSYNC_EXCLUDES=(
   --exclude '.git'
   --exclude '.git/'

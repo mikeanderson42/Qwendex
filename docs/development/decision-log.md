@@ -32,6 +32,11 @@ Reason: the operator runtime moved to Codex 0.143.0, so the default dev
 launcher, manifest preflight, docs, and release validation must agree on the
 same supported Codex source tag.
 
+Update for `0.4.0`: the default patched launcher source is Codex CLI
+`0.144.0` / `rust-v0.144.0`. Older `0.142.x` and `0.143.0` manifests remain
+available for compatibility checks, but release-facing patched TUI claims now
+target the installed `0.144.0` runtime.
+
 ## Kaveman Control Boundary
 
 Decision: Qwendex exposes Kaveman as persisted mode state and a terse-output

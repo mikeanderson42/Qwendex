@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.4.0
+
+- Added Codex CLI `0.144.0` / `rust-v0.144.0` to the supported TUI patch
+  manifest.
+- Updated the Qwendex dev source sync default so patched Codex rebuilds target
+  the installed `0.144.0` CLI.
+- Published release metadata as `0.4.0`.
+
 ## 0.3.2
 
 - Promoted Kaveman into `AgentPolicy.output_policy`, including policy-hash
