@@ -119,12 +119,16 @@ EOF
 
 [tui]
 status_line = ["model-with-reasoning", "current-dir", "qwendex-manager"]
+EOF
+    if [[ "${QWENDEX_DEV_ENABLE_PATCHED_TUI_CONFIG:-0}" == "1" ]]; then
+      cat >> "$CODEX_HOME_DIR/config.toml" <<'EOF'
 
 [tui.keymap.global]
 qwendex_toggle_manager = "alt-m"
 qwendex_toggle_kaveman = "alt-k"
 qwendex_toggle_local = "alt-l"
 EOF
+    fi
   fi
 
   cat > "$CODEX_HOME_DIR/patched-tui.example.toml" <<'EOF'

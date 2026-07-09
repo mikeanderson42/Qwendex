@@ -112,13 +112,13 @@ def test_qwendex_parser_exposes_public_commands():
     assert parser.parse_args(["version"]).command == "version"
 
 
-def test_qwendex_version_matches_public_config_metadata():
+def test_qwendex_version_and_config_are_in_sync():
     qwendex = load_qwendex()
     project_config = json.loads((ROOT / "config" / "qwendex" / "qwendex.json").read_text(encoding="utf-8"))
     sample_config = json.loads((ROOT / "config" / "qwendex" / "qwendex.sample.json").read_text(encoding="utf-8"))
     version = json_result("version", "--json")
 
-    assert qwendex.VERSION == "0.3.0"
+    assert qwendex.VERSION == "0.3.1"
     assert version["data"]["version"] == qwendex.VERSION
     assert project_config["version"] == qwendex.VERSION
     assert sample_config["version"] == qwendex.VERSION
@@ -449,6 +449,7 @@ def test_qwendex_dev_env_public_surface_is_visible_and_isolated():
     assert "$HOME/.local/bin" in text
     assert "codex-main" in text
     assert "QWENDEX_DEV_CODEX_BIN" in text
+    assert "QWENDEX_DEV_ENABLE_PATCHED_TUI_CONFIG" in text
     assert "senior Qwendex product maintainer" in text
     assert "After context compaction" in text
     assert "resume from the newest user request" in text
@@ -512,6 +513,8 @@ def test_qwendex_dev_env_public_surface_is_visible_and_isolated():
     assert "repair-copy" in doc
     assert "~/qwendex-dev" in doc
     assert "fallback execution plane" in doc
+    assert "QWENDEX_DEV_ENABLE_PATCHED_TUI_CONFIG=1" in doc
+    assert "patched-tui.example.toml" in doc
 
     agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
     assert "Connectedness Rule" in agents
@@ -613,10 +616,29 @@ Path(os.environ["QWENDEX_FAKE_CODEX_CWD"]).write_text(os.getcwd(), encoding="utf
     assert cwd_file.read_text(encoding="utf-8") == str(dev_root)
     assert args[:2] == ["--no-alt-screen", "--dangerously-bypass-approvals-and-sandbox"]
     assert args[args.index("-C") + 1] == str(dev_root)
+    example_config = (dev_root / ".qwendex-dev" / "codex_home" / "patched-tui.example.toml").read_text(encoding="utf-8")
     assert "qwendex-manager" in config
-    assert "qwendex_toggle_manager = \"alt-m\"" in config
-    assert "qwendex_toggle_kaveman = \"alt-k\"" in config
-    assert "qwendex_toggle_local = \"alt-l\"" in config
+    assert 'qwendex_toggle_manager = "alt-m"' not in config
+    assert 'qwendex_toggle_kaveman = "alt-k"' not in config
+    assert 'qwendex_toggle_local = "alt-l"' not in config
+    assert 'qwendex_toggle_manager = "alt-m"' in example_config
+    assert 'qwendex_toggle_kaveman = "alt-k"' in example_config
+    assert 'qwendex_toggle_local = "alt-l"' in example_config
+
+    opt_in_sync = subprocess.run(
+        [str(ROOT / "scripts" / "qwendex_dev_env"), "sync"],
+        cwd=ROOT,
+        env={**env, "QWENDEX_DEV_ENABLE_PATCHED_TUI_CONFIG": "1"},
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=60,
+    )
+    assert opt_in_sync.returncode == 0, opt_in_sync.stderr or opt_in_sync.stdout
+    opt_in_config = (dev_root / ".qwendex-dev" / "codex_home" / "config.toml").read_text(encoding="utf-8")
+    assert 'qwendex_toggle_manager = "alt-m"' in opt_in_config
+    assert 'qwendex_toggle_kaveman = "alt-k"' in opt_in_config
+    assert 'qwendex_toggle_local = "alt-l"' in opt_in_config
     dev_status = json.loads((dev_root / ".qwendex-dev" / "results" / "meta" / "dev_status.json").read_text(encoding="utf-8"))
     assert dev_status["codex"]["hook_source_count"] == 0
     assert dev_status["codex"]["global_hook_source_count"] == 1
@@ -1497,6 +1519,22 @@ def test_qwendex_manager_preflight_records_decision_ledger_and_hook_status(tmp_p
         "QWENDEX_FORCE_LOCAL_QWEN_AVAILABLE": "0",
     }
 
+    cli_mode = json_result(
+        "manager",
+        "preflight",
+        "--mode",
+        "manager",
+        "--interactive-prompt-unknown",
+        "--dry-run",
+        "--json",
+        env={**env, "QWENDEX_MANAGER_ALLOW_UNHOOKED": "1"},
+    )
+    assert cli_mode["data"]["mode"] == "manager"
+    assert cli_mode["data"]["selected_manager_mode"] == "manager"
+    assert cli_mode["data"]["effective_agent_mode"] == "manager"
+    assert cli_mode["data"]["policy_source"] == "manager-mode"
+    assert cli_mode["data"]["manager_required"] is True
+
     json_result("manager", "mode", "--set", "manager", "--json", env=env)
     blocked_result = run_qwendex("manager", "preflight", "--interactive-prompt-unknown", "--dry-run", "--json", env=env)
     blocked = parse_json_result(blocked_result)
@@ -1682,6 +1720,45 @@ def test_qwendex_manager_local_toggle_controls_local_lane_eligibility(tmp_path):
     assert estimate_on["data"]["reasoning_policy"]["default_lane"]["local_qwen_eligible"] is True
 
 
+def test_qwendex_user_prompt_hook_respects_local_toggle_for_token_saver_context(tmp_path):
+    env = {
+        "QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite"),
+        "QWENDEX_FORCE_LOCAL_QWEN_AVAILABLE": "1",
+    }
+
+    json_result("manager", "local", "--set", "off", "--json", env=env)
+    off_hook = json_result(
+        "--agent-use",
+        "Manager",
+        "agent",
+        "hook",
+        "UserPromptSubmit",
+        "--event-json",
+        "{}",
+        "--json",
+        env=env,
+    )
+    off_context = off_hook["data"]["hook_result"]["hookSpecificOutput"]["additionalContext"]
+
+    json_result("manager", "local", "--set", "on", "--json", env=env)
+    on_hook = json_result(
+        "--agent-use",
+        "Manager",
+        "agent",
+        "hook",
+        "UserPromptSubmit",
+        "--event-json",
+        "{}",
+        "--json",
+        env=env,
+    )
+    on_context = on_hook["data"]["hook_result"]["hookSpecificOutput"]["additionalContext"]
+
+    assert "default lane model=qwen-local" not in off_context
+    assert "token_saver=true" not in off_context
+    assert "default lane model=qwen-local, reasoning=low with token_saver=true" in on_context
+
+
 def test_qwendex_manager_estimate_is_bounded_and_reasoning_agnostic():
     simple = json_result("manager", "estimate", "--prompt", "Fix a typo in public docs.", "--json")
     top_level = json_result("estimate", "--prompt", "Fix a typo in public docs.", "--json")
@@ -1826,7 +1903,10 @@ def test_qwendex_agent_profiles_and_team_are_visible():
 
 
 def test_qwendex_agent_plan_routes_direct_team_and_release(tmp_path):
-    env = {"QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite")}
+    env = {
+        "QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite"),
+        "QWENDEX_FORCE_LOCAL_QWEN_AVAILABLE": "1",
+    }
 
     direct = json_result(
         "--agent-use",
@@ -1864,10 +1944,23 @@ def test_qwendex_agent_plan_routes_direct_team_and_release(tmp_path):
         "--json",
         env=env,
     )
+    local = json_result(
+        "--agent-use",
+        "Manager",
+        "agent",
+        "plan",
+        "--prompt",
+        "Team, summarize small artifact receipts.",
+        "--task-id",
+        "task-local",
+        "--json",
+        env=env,
+    )
 
     direct_plan = direct["data"]["agent_plan"]
     team_plan = team["data"]["agent_plan"]
     release_plan = release["data"]["agent_plan"]
+    local_plan = local["data"]["agent_plan"]
 
     assert direct_plan["direct_work"] is True
     assert direct_plan["assignments"] == []
@@ -1880,8 +1973,16 @@ def test_qwendex_agent_plan_routes_direct_team_and_release(tmp_path):
     assert any(item["profile"] == "scribe" and item["required"] is False for item in team_plan["assignments"])
 
     assert release_plan["profiles"] == ["release_manager", "verifier"]
+    assert release_plan["assignments"][0]["routing"]["selected_model"] == "gpt-5.5"
     assert release_plan["assignments"][0]["routing"]["selected_reasoning"] in {"high", "xhigh"}
     assert "task-release" in release_plan["assignments"][0]["assign_command"]
+
+    local_assignment = local_plan["assignments"][0]
+    assert local_assignment["routing"]["selected_model"] == "qwen-local"
+    assert local_assignment["routing"]["selected_reasoning"] == "low"
+    assert local_assignment["routing"]["token_saver_used"] is True
+    assert "qwen-local" in local_assignment["spawn_instruction"]
+    assert "reasoning=low" in local_assignment["spawn_instruction"]
 
 
 def test_qwendex_agent_metrics_track_ledger_and_artifacts(tmp_path):
@@ -1936,6 +2037,9 @@ def test_qwendex_agent_hooks_enforce_final_contract_and_manager_stop_gate(tmp_pa
         "QWENDEX_MANAGER_ALLOW_UNHOOKED": "1",
     }
 
+    kaveman = json_result("manager", "kaveman", "--set", "on", "--json", env=env)
+    directive = kaveman["data"]["kaveman_directive"]
+
     prompt_hook = json_result(
         "--agent-use",
         "Manager",
@@ -1962,6 +2066,7 @@ def test_qwendex_agent_hooks_enforce_final_contract_and_manager_stop_gate(tmp_pa
     assert raw_prompt_hook.returncode == 0
     assert set(raw_prompt) == {"hookSpecificOutput"}
     assert "root orchestrator" in raw_prompt["hookSpecificOutput"]["additionalContext"]
+    assert directive in raw_prompt["hookSpecificOutput"]["additionalContext"]
     assert "status" not in raw_prompt
     assigned = json_result(
         "manager",
@@ -1976,6 +2081,17 @@ def test_qwendex_agent_hooks_enforce_final_contract_and_manager_stop_gate(tmp_pa
         "--json",
         env=env,
     )
+    subagent_start = json_result(
+        "agent",
+        "hook",
+        "SubagentStart",
+        "--event-json",
+        json.dumps({"agent_id": "agent-hook-verifier", "agent_type": "verifier"}),
+        "--json",
+        env=env,
+    )
+    assert directive in subagent_start["data"]["hook_result"]["hookSpecificOutput"]["additionalContext"]
+
     preflight = json_result(
         "manager",
         "preflight",
@@ -2045,6 +2161,7 @@ def test_qwendex_agent_hooks_enforce_final_contract_and_manager_stop_gate(tmp_pa
     missing_summary = parse_json_result(missing_summary_result)
 
     assert "root orchestrator" in prompt_hook["data"]["hook_result"]["hookSpecificOutput"]["additionalContext"]
+    assert directive in prompt_hook["data"]["hook_result"]["hookSpecificOutput"]["additionalContext"]
     assert assigned["data"]["agent_session"]["context_packet"]["required"] is True
     assert blocked_stop_result.returncode != 0
     assert blocked_stop["data"]["hook_result"]["event"] == "manager.stop_gate_continued"
@@ -2329,6 +2446,27 @@ def test_qwendex_agent_pre_tool_hook_denies_unsafe_actions(tmp_path):
         "--json",
         env=env,
     )
+    safe_release_results = [
+        json_result(
+            "agent",
+            "hook",
+            "PreToolUse",
+            "--event-json",
+            json.dumps({"tool_name": "exec_command", "command": command}),
+            "--json",
+            env=env,
+        )
+        for command in (
+            "gh release view v0.3.1",
+            "gh release list",
+            "gh release download v0.3.1",
+            "gh release verify v0.3.1",
+            "gh release verify-asset v0.3.1 dist.tgz",
+            "gh release -R owner/repo view v0.3.1",
+            "gh -R owner/repo release list",
+            "gh release --repo owner/repo download v0.3.1",
+        )
+    ]
     equivalent_release_results = [
         run_qwendex(
             "agent",
@@ -2343,6 +2481,12 @@ def test_qwendex_agent_pre_tool_hook_denies_unsafe_actions(tmp_path):
             "gh release upload v0.3.1 dist.tgz",
             "gh release edit v0.3.1 --draft=false",
             "gh release delete v0.3.1 --yes",
+            "gh release delete-asset v0.3.1 dist.tgz --yes",
+            "gh release new v0.3.1",
+            "gh release -R owner/repo create v0.3.1",
+            "gh -R owner/repo release create v0.3.1",
+            "gh --repo owner/repo release new v0.3.1",
+            "gh release --repo owner/repo create v0.3.1",
             "env -i gh release upload v0.3.1 dist.tgz",
             "env -u HOME gh release upload v0.3.1 dist.tgz",
             "env -S 'gh release upload v0.3.1 dist.tgz'",
@@ -2358,6 +2502,11 @@ def test_qwendex_agent_pre_tool_hook_denies_unsafe_actions(tmp_path):
             "hatch publish",
             "git push origin v0.3.1",
             "git push origin refs/tags/v0.3.1",
+            "git push origin HEAD:main",
+            "git push origin HEAD:refs/heads/main",
+            "git push origin main:main",
+            "git push HEAD:main",
+            "git push main:main",
         )
     ]
     raw_child_spawn = run_qwendex(
@@ -2397,6 +2546,8 @@ def test_qwendex_agent_pre_tool_hook_denies_unsafe_actions(tmp_path):
     assert export_release_approved["data"]["hook_result"] == {}
     assert parent_env_release_approved["data"]["hook_result"] == {}
     assert dev_branch_push["data"]["hook_result"] == {}
+    for result in safe_release_results:
+        assert result["data"]["hook_result"] == {}
     for result in equivalent_release_results:
         result_data = parse_json_result(result)
         assert result.returncode != 0
@@ -2411,6 +2562,23 @@ def test_qwendex_agent_pre_tool_hook_denies_unsafe_actions(tmp_path):
         "--json",
         env=env,
     )
+    read_only_mentions = [
+        json_result(
+            "agent",
+            "hook",
+            "PreToolUse",
+            "--event-json",
+            json.dumps({"tool_name": "exec_command", "command": command}),
+            "--json",
+            env=env,
+        )
+        for command in (
+            'rg -n "apply_patch" scripts/qwendex_cli.py',
+            'grep -R "delete_file" scripts',
+            'python3 -c \'print("apply_patch")\'',
+            'echo apply_patch',
+        )
+    ]
     real_redirect = run_qwendex(
         "agent",
         "hook",
@@ -2429,13 +2597,36 @@ def test_qwendex_agent_pre_tool_hook_denies_unsafe_actions(tmp_path):
         "--json",
         env=env,
     )
+    real_write_commands = [
+        run_qwendex(
+            "agent",
+            "hook",
+            "PreToolUse",
+            "--event-json",
+            json.dumps({"tool_name": "exec_command", "command": command}),
+            "--json",
+            env=env,
+        )
+        for command in (
+            'apply_patch',
+            'printf ok | tee out.txt',
+            "sed -i 's/a/b/' file.txt",
+            'python3 -c \'from pathlib import Path; Path("out.txt").write_text("ok")\'',
+        )
+    ]
     real_redirect_data = parse_json_result(real_redirect)
     fd_redirect_data = parse_json_result(fd_redirect)
+    real_write_data = [parse_json_result(result) for result in real_write_commands]
     assert comparison["data"]["hook_result"] == {}
+    for result in read_only_mentions:
+        assert result["data"]["hook_result"] == {}
     assert real_redirect.returncode != 0
     assert real_redirect_data["data"]["hook_result"]["event"] == "agent.write_lock_rejected"
     assert fd_redirect.returncode != 0
     assert fd_redirect_data["data"]["hook_result"]["event"] == "agent.write_lock_rejected"
+    for result, data in zip(real_write_commands, real_write_data, strict=True):
+        assert result.returncode != 0
+        assert data["data"]["hook_result"]["event"] == "agent.write_lock_rejected"
 
 
 def test_qwendex_agent_file_locks_enforce_single_writer_and_release_on_final_report(tmp_path):
@@ -2604,6 +2795,21 @@ def test_qwendex_manager_assign_generates_context_packet_and_routing(tmp_path):
     assert routing["local_qwen_eligible"] is False
     assert routing["token_saver_used"] is False
     assert routing["escalation_reason"]
+    assert "gpt-5.5" in packet["spawn_instruction"]
+    assert "reasoning=" in packet["spawn_instruction"]
+
+    subagent = json_result(
+        "agent",
+        "hook",
+        "SubagentStart",
+        "--event-json",
+        json.dumps({"agent_id": "agent-sec", "agent_type": "security-review"}),
+        "--json",
+        env=env,
+    )
+    subagent_context = subagent["data"]["hook_result"]["hookSpecificOutput"]["additionalContext"]
+    assert "gpt-5.5" in subagent_context
+    assert "reasoning=high" in subagent_context or "reasoning=xhigh" in subagent_context
 
     status = json_result("manager", "status", "--json", env=env)
     assert status["data"]["active_subagents"]["count"] == 1

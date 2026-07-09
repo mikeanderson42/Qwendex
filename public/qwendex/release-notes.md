@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.3.1
+
+- Kept explicit `--mode manager` preflight selection authoritative and exposed
+  Qwendex model/reasoning assignments in spawn instructions and hook context.
+- Injected model policy plus the Kaveman directive into managed hooks while
+  keeping local token-saver context aligned with Local off/on.
+- Hardened release guards for `gh release` option forms, `delete-asset`, `new`,
+  and protected branch refspecs, while avoiding read-only search false
+  positives in write detection.
+- Kept dev Codex patched keymaps opt-in through
+  `QWENDEX_DEV_ENABLE_PATCHED_TUI_CONFIG=1`.
+
 ## 0.3.0
 
 - Published exact Qwendex release metadata for `0.3.0` and tag `v0.3.0`.

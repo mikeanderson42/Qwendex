@@ -62,11 +62,13 @@ operator-directed.
 ## Manager Preflight
 
 When Agent Manager resolves to Manager Mode, write-capable `qdex` launches run a
-Manager preflight before Codex starts. The preflight writes a
-`manager_decision` ledger record and receipt containing the effective policy
-hash, active `CODEX_HOME`, hook status, local/cloud availability, prompt digest
-or `interactive_prompt_unknown_prelaunch`, selected route, routing reason,
-verifier requirement, validation plan, and STOP status.
+Manager preflight before Codex starts. The preflight honors the effective mode
+selected by command handling, including `scripts/qwendex manager preflight
+--mode manager`, rather than falling back to stored Auto state. The preflight
+writes a `manager_decision` ledger record and receipt containing the effective
+policy hash, active `CODEX_HOME`, hook status, local/cloud availability, prompt
+digest or `interactive_prompt_unknown_prelaunch`, selected route, routing
+reason, verifier requirement, validation plan, and STOP status.
 
 Useful dry-run commands:
 
@@ -170,7 +172,17 @@ Every assigned lane records a context packet:
 - receipt path
 - context budget
 - model/reasoning assignment
+- spawn instruction naming the selected model and reasoning
 - review requirement
+
+Prompt hooks tell the root orchestrator to spawn agents using Qwendex
+model/reasoning assignments. When Kaveman is enabled, `SessionStart` and
+`UserPromptSubmit` additional context also includes the configured Kaveman
+directive. `SubagentStart` additional context includes the selected model and
+reasoning from the hook event or the manager session ledger, so high-risk,
+security, release, and protocol lanes surface `gpt-5.5` with high or xhigh
+reasoning while eligible low-risk token-saver lanes surface `qwen-local` with
+low reasoning.
 
 Subagent output is advisory until reviewed and backed by artifacts or tests.
 When a worker reaches `FINAL_REPORT`, `BLOCKED`, or `FAILED`, the native

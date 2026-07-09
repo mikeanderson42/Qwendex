@@ -76,7 +76,7 @@ def probe_exact_marker(base_url: str) -> ProbeResult:
     payload = {
         "model": "qwen-local",
         "input": [{"role": "user", "content": "Reply exactly QWENDEX_OK."}],
-        "max_output_tokens": 32,
+        "max_output_tokens": 64,
         "temperature": 0,
     }
     try:

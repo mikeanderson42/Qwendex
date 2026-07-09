@@ -79,7 +79,8 @@ The canonical state source is the SQLite DB configured by `state.db` or
 
 Normal `qdex` launches in Manager Mode run `scripts/qwendex manager preflight`
 before Codex starts. The preflight creates a `manager_decision` record separate
-from subagent sessions. It stores the policy hash, hook status, local/cloud
+from subagent sessions and honors the effective mode passed by command handling,
+including `--mode manager`. It stores the policy hash, hook status, local/cloud
 availability, prompt digest or `interactive_prompt_unknown_prelaunch`, selected
 route, routing reason, direct-work exception flag, verifier requirement,
 validation plan, receipt paths, and STOP status.
@@ -96,6 +97,13 @@ scripts/qwendex manager decision --agent-id <ledger-id> --json
 override, verifier expectation, validation evidence, and final closeout are
 recorded. `manager_subagents` still requires bounded lane evidence and parent
 review.
+
+Agent plan assignments expose `spawn_instruction` alongside `assign_command` so
+operators can see the model and reasoning to pass when creating the subagent.
+High-risk security, release, architecture, and protocol lanes surface `gpt-5.5`
+with high or xhigh reasoning. Eligible low-risk bounded artifact-summary lanes
+can surface `qwen-local`, low reasoning, and token-saver routing when local
+Qwen is enabled and usable.
 
 ## Write Safety
 
@@ -155,8 +163,10 @@ Supported events are `SessionStart`, `UserPromptSubmit`, `SubagentStart`,
 
 The gates enforce the current CLI policy boundary:
 
-- prompt hooks inject the active mode contract
-- subagent-start hooks inject the worker execution and final-report contract
+- prompt hooks inject the active mode contract, Qwendex model/reasoning policy,
+  and the Kaveman directive when enabled
+- subagent-start hooks inject the worker execution and final-report contract,
+  plus the selected model and reasoning from the event or manager ledger
 - subagent-stop hooks require `FINAL_REPORT`, `BLOCKED`, or `FAILED`
 - Manager stop hooks require a preflight decision ledger, block unresolved
   required agents, missing verifier evidence after edits, missing direct-work

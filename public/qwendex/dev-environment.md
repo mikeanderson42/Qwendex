@@ -102,6 +102,13 @@ active hook source count for that home and also reports whether global
 none, the dev status JSON includes a warning so hook behavior is not silently
 lost after a TUI refresh.
 
+Active `config.toml` stays stock-Codex compatible by default. Qwendex patched
+TUI keymaps are written to `patched-tui.example.toml` as copy-only reference
+config; they are appended to active config only when launching or syncing with
+`QWENDEX_DEV_ENABLE_PATCHED_TUI_CONFIG=1` after selecting a patched Codex build.
+The stock-compatible `[tui] status_line` entry remains in active config when a
+dev Codex binary path is configured.
+
 ## Developer Lifecycle
 
 Work inside `~/qwendex-dev`, then use the dev commands to move changes through

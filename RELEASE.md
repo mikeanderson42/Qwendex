@@ -1,3 +1,17 @@
+# v0.3.1
+
+Manager orchestration and compatibility hardening release.
+
+- Keeps explicit `--mode manager` preflight selection authoritative and exposes
+  Qwendex model/reasoning assignments in spawn instructions and hook context.
+- Injects model policy plus the Kaveman directive into managed hooks while
+  keeping local token-saver context aligned with Local off/on.
+- Hardens release guards for `gh release` option forms, `delete-asset`, `new`,
+  and protected branch refspecs, while avoiding read-only search false
+  positives in write detection.
+- Keeps dev Codex patched keymaps opt-in through
+  `QWENDEX_DEV_ENABLE_PATCHED_TUI_CONFIG=1`.
+
 # v0.3.0
 
 Manager Mode orchestration verification release.

@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.3.0"
+VERSION = "0.3.1"
 CONFIG_DIR = ROOT / "config" / "qwendex"
 DEFAULT_PROJECT_CONFIG = CONFIG_DIR / "qwendex.json"
 DEFAULT_USER_CONFIG = Path.home() / ".config" / "qwendex" / "config.json"
@@ -196,17 +196,20 @@ MANAGED_HOOK_RUNTIME_ENV_KEYS = (
     "QWENDEX_DEV_ROOT",
     "QWENDEX_ROOT",
 )
-RELEASE_COMMAND_RE = re.compile(
-    r"(^|\s)(npm|pnpm|yarn)\s+.*\bpublish\b|"
-    r"(^|\s)cargo\s+publish\b|"
-    r"(^|\s)gh\s+release\s+create\b|"
-    r"(^|\s)git\s+push\s+(--tags|origin\s+(main|master))\b"
-)
 RELEASE_APPROVAL_ENV = "QWENDEX_RELEASE_APPROVED"
-GH_RELEASE_MUTATIONS = {"create", "upload", "edit", "delete"}
+GH_RELEASE_MUTATIONS = {"create", "new", "upload", "edit", "delete", "delete-asset"}
 GH_API_MUTATION_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 GH_API_BODY_FLAGS = {"-f", "--field", "-F", "--raw-field", "--input"}
+GH_OPTIONS_WITH_VALUE = {"-R", "--repo", "--hostname"}
 PYTHON_RELEASE_COMMANDS = {"poetry", "uv", "hatch"}
+PROTECTED_RELEASE_BRANCHES = {"main", "master"}
+GIT_PUSH_OPTIONS_WITH_VALUE = {
+    "--exec",
+    "--receive-pack",
+    "--repo",
+    "--push-option",
+    "-o",
+}
 ENV_OPTIONS_WITH_VALUE = {"-u", "--unset", "-C", "--chdir", "-a", "--argv0"}
 ENV_LONG_OPTIONS_WITH_VALUE = {"--unset", "--chdir", "--argv0"}
 ENV_SPLIT_STRING_OPTIONS = {"-S", "--split-string"}
@@ -903,6 +906,8 @@ def apply_agent_policy_env(policy: Mapping[str, Any]) -> None:
 
 
 def policy_mode_for_manager(args: argparse.Namespace, config: Mapping[str, Any], fallback_mode: str) -> str:
+    if getattr(args, "mode", ""):
+        return normalize_manager_mode(getattr(args, "mode", "")) or fallback_mode
     policy = resolve_agent_policy(
         config,
         cli_agent_use=getattr(args, "agent_use", ""),
@@ -4955,7 +4960,55 @@ def read_hook_event(args: argparse.Namespace) -> dict[str, Any]:
     return {}
 
 
-def agent_mode_context(agent_policy: Mapping[str, Any]) -> str:
+def routing_assignment_label(routing: Mapping[str, Any]) -> str:
+    model = str(routing.get("selected_model") or "user-selected")
+    reasoning = str(routing.get("selected_reasoning") or "user-selected")
+    token_saver = bool(routing.get("token_saver_used"))
+    suffix = " with token_saver=true" if token_saver else ""
+    return f"model={model}, reasoning={reasoning}{suffix}"
+
+
+def spawn_instruction(agent_id: str, routing: Mapping[str, Any]) -> str:
+    return (
+        f"spawn_agent for {agent_id} using Qwendex assignment "
+        f"{routing_assignment_label(routing)}; include these model/reasoning values in the spawned agent context."
+    )
+
+
+def kaveman_context(config: Mapping[str, Any]) -> str:
+    with connect_state(config) as conn:
+        enabled = current_kaveman_enabled(config, conn)
+    directive = kaveman_directive(config) if enabled else ""
+    return f"Kaveman directive: {directive}" if directive else ""
+
+
+def hook_local_subagent_status(config: Mapping[str, Any]) -> dict[str, Any]:
+    try:
+        with connect_state(config) as conn:
+            enabled = current_local_enabled(config, conn)
+        return local_subagent_status(config, enabled=enabled, env=os.environ, probe=True)
+    except Exception as exc:
+        policy = routing_policy(config)
+        return {
+            "enabled": False,
+            "available": False,
+            "usable": False,
+            "local_enabled": False,
+            "local_available": False,
+            "local_usable": False,
+            "local_state": "unavailable",
+            "indicator": local_indicator(config, False, "off"),
+            "source": "fallback",
+            "reason": redact_text(str(exc) or exc.__class__.__name__),
+            "model": policy["local_model"],
+        }
+
+
+def agent_mode_context(
+    agent_policy: Mapping[str, Any],
+    *,
+    config: Mapping[str, Any] | None = None,
+) -> str:
     mode = str(agent_policy.get("mode") or "medium")
     contracts = {
         "off": "Off mode: do not spawn subagents unless explicitly requested; keep work in the main session.",
@@ -4966,20 +5019,78 @@ def agent_mode_context(agent_policy: Mapping[str, Any]) -> str:
         "manager": (
             "Manager Mode: you are the root orchestrator and context curator. "
             "For non-trivial repo work, maintain an agent ledger and use scoped specialists. "
+            "Spawn agents with the Qwendex-assigned model and reasoning from the manager plan or ledger. "
             "Do not finalize until required agents have FINAL_REPORT, BLOCKED, FAILED, or TOMBSTONED status with evidence. "
             "Small trivial tasks may be handled directly with a recorded direct-work exception."
         ),
     }
-    return f"Active Qwendex agent mode: {agent_policy.get('agent_use')}. {contracts.get(mode, contracts['medium'])}"
+    parts = [
+        f"Active Qwendex agent mode: {agent_policy.get('agent_use')}. {contracts.get(mode, contracts['medium'])}",
+    ]
+    if config is not None:
+        policy = reasoning_policy(config, hook_local_subagent_status(config))
+        parts.append(
+            "Qwendex model/reasoning policy: "
+            f"default lane {routing_assignment_label(policy['default_lane'])}; "
+            f"high-risk/release/security lane {routing_assignment_label(policy['high_risk_lane'])}."
+        )
+        if kaveman := kaveman_context(config):
+            parts.append(kaveman)
+    return " ".join(parts)
 
 
-def subagent_start_context(event: Mapping[str, Any], agent_policy: Mapping[str, Any]) -> str:
+def event_model_reasoning(event: Mapping[str, Any]) -> dict[str, Any]:
+    for key in ("model_reasoning_assignment", "routing"):
+        value = event.get(key)
+        if isinstance(value, Mapping):
+            return dict(value)
+    model = str(event.get("selected_model") or event.get("model") or "")
+    reasoning = str(event.get("selected_reasoning") or event.get("reasoning") or "")
+    if model or reasoning:
+        return {
+            "selected_model": model or "user-selected",
+            "selected_reasoning": reasoning or "user-selected",
+            "token_saver_used": bool(event.get("token_saver_used")),
+            "reasoning_source": str(event.get("reasoning_source") or "event"),
+        }
+    return {}
+
+
+def session_model_reasoning(config: Mapping[str, Any], agent_id: str) -> dict[str, Any]:
+    if not agent_id:
+        return {}
+    with connect_state(config) as conn:
+        row = conn.execute("SELECT * FROM qwendex_agent_sessions WHERE agent_id = ?", (agent_id,)).fetchone()
+    session = row_to_agent_session(row) or {}
+    routing = session.get("routing")
+    if isinstance(routing, Mapping) and routing:
+        return dict(routing)
+    packet = session.get("context_packet")
+    if isinstance(packet, Mapping) and isinstance(packet.get("model_reasoning_assignment"), Mapping):
+        return dict(packet["model_reasoning_assignment"])
+    return {}
+
+
+def subagent_start_context(
+    config: Mapping[str, Any],
+    event: Mapping[str, Any],
+    agent_policy: Mapping[str, Any],
+) -> str:
     agent_id = str(event.get("agent_id") or "unknown")
     agent_type = str(event.get("agent_type") or event.get("profile") or "unknown")
     task_name = str(event.get("task_name") or event.get("task") or "assigned task")
+    routing = event_model_reasoning(event) or session_model_reasoning(config, agent_id)
+    assignment = (
+        f" Use Qwendex assignment {routing_assignment_label(routing)}."
+        if routing
+        else " Use the model/reasoning assignment supplied by the manager/root context."
+    )
+    kaveman = kaveman_context(config)
+    kaveman_sentence = f" {kaveman}" if kaveman else ""
     return (
         f"You are Qwendex subagent {agent_id} of type {agent_type}. "
         f"Parent mode is {agent_policy.get('agent_use')}. Execute {task_name} now. "
+        f"{assignment}{kaveman_sentence} "
         "Do not merely acknowledge or stand by. Do not spawn subagents. "
         "End with FINAL_REPORT, BLOCKED, or FAILED. Required FINAL_REPORT fields: "
         "status, agent_id, task_name, summary, files_inspected, files_changed, "
@@ -5119,15 +5230,49 @@ def command_has_shell_redirection(command: str) -> bool:
     return False
 
 
+def command_name(token: str) -> str:
+    return Path(token).name
+
+
+def command_token_at(tokens: list[str], index: int) -> str:
+    return command_name(tokens[index]) if 0 <= index < len(tokens) else ""
+
+
+def token_is_python_command(token: str) -> bool:
+    name = command_name(token)
+    return name == "python" or name == "python3" or bool(re.match(r"^python3?\.\d+$", name))
+
+
+def token_is_sed_in_place_option(token: str) -> bool:
+    return token == "--in-place" or token.startswith("--in-place=") or (token.startswith("-i") and token != "-")
+
+
+def segment_has_write_command(tokens: list[str]) -> bool:
+    if not tokens:
+        return False
+    command_indexes = [0] + [index + 1 for index, token in enumerate(tokens[:-1]) if token == "|"]
+    for index in command_indexes:
+        command = command_token_at(tokens, index)
+        args = tokens[index + 1:]
+        if command == "apply_patch":
+            return True
+        if command == "tee":
+            return True
+        if command == "sed" and any(token_is_sed_in_place_option(token) for token in args):
+            return True
+        if token_is_python_command(command) and any(".write_text" in token or "write_text(" in token for token in args):
+            return True
+    return False
+
+
 def event_is_write_attempt(tool_lower: str, command: str) -> bool:
     if tool_lower in WRITE_TOOL_NAMES:
         return True
+    tokens = command_tokens(command)
     return bool(
         command_has_shell_redirection(command)
-        or re.search(r"\btee\s+", command)
-        or re.search(r"\bapply_patch\b", command)
-        or re.search(r"\bsed\s+-i\b", command)
-        or re.search(r"\bpython3?\s+.*\bwrite_text\b", command)
+        or segment_has_write_command(tokens)
+        or any(segment_has_write_command(segment) for segment in command_segments(command))
     )
 
 
@@ -5265,23 +5410,123 @@ def command_raw_segments(command: str) -> list[list[str]]:
     return [tokens for raw_segment in re.split(r"\s*(?:;|&&|\|\|)\s*", command) if (tokens := command_tokens(raw_segment))]
 
 
+def gh_option_consumes_next(token: str) -> bool:
+    return token in GH_OPTIONS_WITH_VALUE
+
+
+def gh_option_has_inline_value(token: str) -> bool:
+    if token.startswith("-R") and token != "-R":
+        return True
+    return any(token.startswith(f"{option}=") for option in GH_OPTIONS_WITH_VALUE if option.startswith("--"))
+
+
+def skip_gh_options(tokens: list[str], index: int) -> int:
+    while index < len(tokens):
+        token = tokens[index]
+        if token == "--":
+            return index + 1
+        if gh_option_consumes_next(token):
+            index += 2
+            continue
+        if gh_option_has_inline_value(token) or token.startswith("-"):
+            index += 1
+            continue
+        return index
+    return index
+
+
+def gh_tokens_after_global_options(tokens: list[str]) -> list[str]:
+    if not tokens or tokens[0] != "gh":
+        return []
+    return tokens[skip_gh_options(tokens, 1):]
+
+
+def gh_release_subcommand(tokens: list[str]) -> str:
+    gh_tokens = gh_tokens_after_global_options(tokens)
+    if not gh_tokens or gh_tokens[0] != "release":
+        return ""
+    index = skip_gh_options(gh_tokens, 1)
+    return gh_tokens[index] if index < len(gh_tokens) else ""
+
+
 def gh_api_release_mutation(tokens: list[str]) -> bool:
-    if len(tokens) < 3 or tokens[0] != "gh" or tokens[1] != "api":
+    gh_tokens = gh_tokens_after_global_options(tokens)
+    if len(gh_tokens) < 2 or gh_tokens[0] != "api":
         return False
-    has_release_endpoint = any("/releases" in token or token == "releases" for token in tokens[2:] if not token.startswith("-"))
+    api_args = gh_tokens[1:]
+    has_release_endpoint = any("/releases" in token or token == "releases" for token in api_args if not token.startswith("-"))
     if not has_release_endpoint:
         return False
     method = ""
-    for index, token in enumerate(tokens[2:], start=2):
-        if token in {"-X", "--method"} and index + 1 < len(tokens):
-            method = tokens[index + 1].upper()
+    for index, token in enumerate(api_args):
+        if token in {"-X", "--method"} and index + 1 < len(api_args):
+            method = api_args[index + 1].upper()
         elif token.startswith("--method="):
             method = token.split("=", 1)[1].upper()
     if method in GH_API_MUTATION_METHODS:
         return True
     if method == "GET":
         return False
-    return any(token in GH_API_BODY_FLAGS or token.startswith(("-f=", "--field=", "-F=", "--raw-field=", "--input=")) for token in tokens[2:])
+    return any(token in GH_API_BODY_FLAGS or token.startswith(("-f=", "--field=", "-F=", "--raw-field=", "--input=")) for token in api_args)
+
+
+def git_push_option_has_inline_value(token: str) -> bool:
+    if token.startswith("-o") and token != "-o":
+        return True
+    return any(token.startswith(f"{option}=") for option in GIT_PUSH_OPTIONS_WITH_VALUE if option.startswith("--"))
+
+
+def git_push_non_option_args(args: list[str]) -> list[str]:
+    result: list[str] = []
+    index = 0
+    while index < len(args):
+        token = args[index]
+        if token == "--":
+            result.extend(args[index + 1:])
+            break
+        if token in GIT_PUSH_OPTIONS_WITH_VALUE:
+            index += 2
+            continue
+        if git_push_option_has_inline_value(token) or token.startswith("-"):
+            index += 1
+            continue
+        result.append(token)
+        index += 1
+    return result
+
+
+def normalized_git_ref_name(ref: str) -> str:
+    normalized = ref.lstrip("+")
+    if normalized.startswith("refs/heads/"):
+        return normalized.removeprefix("refs/heads/")
+    return normalized
+
+
+def protected_git_branch_ref(ref: str) -> bool:
+    return normalized_git_ref_name(ref) in PROTECTED_RELEASE_BRANCHES
+
+
+def git_ref_is_release_tag(ref: str) -> bool:
+    normalized = ref.lstrip("+")
+    return bool(
+        normalized.startswith("refs/tags/")
+        or re.match(r"^v\d+\.\d+\.\d+(?:[-+][A-Za-z0-9._-]+)?$", normalized)
+    )
+
+
+def git_refspec_is_release_target(refspec: str) -> bool:
+    normalized = refspec.lstrip("+")
+    source, separator, destination = normalized.partition(":")
+    refs = [source]
+    if separator:
+        refs.append(destination)
+    target = destination if separator else source
+    return protected_git_branch_ref(target) or any(git_ref_is_release_tag(ref) for ref in refs if ref)
+
+
+def git_push_arg_looks_like_refspec(arg: str) -> bool:
+    normalized = arg.lstrip("+")
+    return bool(":" in normalized or normalized.startswith("refs/") or git_ref_is_release_tag(normalized))
 
 
 def git_push_release_mutation(tokens: list[str]) -> bool:
@@ -5290,15 +5535,11 @@ def git_push_release_mutation(tokens: list[str]) -> bool:
     args = tokens[2:]
     if "--tags" in args or "--follow-tags" in args:
         return True
-    refs = [arg for arg in args if not arg.startswith("-")]
-    if len(refs) >= 2 and refs[0] == "origin" and refs[1] in {"main", "master"}:
-        return True
-    return any(
-        ref.startswith("refs/tags/")
-        or ":refs/tags/" in ref
-        or re.match(r"^v\d+\.\d+\.\d+(?:[-+][A-Za-z0-9._-]+)?$", ref)
-        for ref in refs[1:]
-    )
+    positional = git_push_non_option_args(args)
+    if not positional:
+        return False
+    refspecs = positional if git_push_arg_looks_like_refspec(positional[0]) else positional[1:]
+    return any(git_refspec_is_release_target(refspec) for refspec in refspecs)
 
 
 def segment_is_release_mutation(tokens: list[str]) -> bool:
@@ -5314,18 +5555,17 @@ def segment_is_release_mutation(tokens: list[str]) -> bool:
         return True
     if len(tokens) >= 4 and tokens[0] == "python3" and tokens[1:4] == ["-m", "twine", "upload"]:
         return True
-    if len(tokens) >= 3 and tokens[0] == "gh" and tokens[1] == "release" and tokens[2] in GH_RELEASE_MUTATIONS:
+    if gh_release_subcommand(tokens) in GH_RELEASE_MUTATIONS:
         return True
     return bool(gh_api_release_mutation(tokens) or git_push_release_mutation(tokens))
 
 
 def command_is_release_mutation(command: str) -> bool:
-    return any(segment_is_release_mutation(tokens) for tokens in command_segments(command)) or bool(RELEASE_COMMAND_RE.search(command))
+    return any(segment_is_release_mutation(tokens) for tokens in command_segments(command))
 
 
 def command_has_unapproved_release_mutation(command: str) -> bool:
     exported_approval = False
-    saw_release = False
     for raw_tokens in command_raw_segments(command):
         if segment_exports_release_approval(raw_tokens):
             exported_approval = True
@@ -5334,10 +5574,9 @@ def command_has_unapproved_release_mutation(command: str) -> bool:
         if not tokens or tokens[0] == "export":
             continue
         if segment_is_release_mutation(tokens):
-            saw_release = True
             if not (exported_approval or segment_prefix_has_release_approval(raw_tokens)):
                 return True
-    return not saw_release and bool(RELEASE_COMMAND_RE.search(command))
+    return False
 
 
 def release_command_approved(event: Mapping[str, Any], command: str) -> bool:
@@ -5442,14 +5681,14 @@ def evaluate_agent_hook(
         return "pass", {
             "hookSpecificOutput": {
                 "hookEventName": canonical,
-                "additionalContext": agent_mode_context(agent_policy),
+                "additionalContext": agent_mode_context(agent_policy, config=config),
             }
         }, {}
     if canonical == "SubagentStart":
         return "pass", {
             "hookSpecificOutput": {
                 "hookEventName": "SubagentStart",
-                "additionalContext": subagent_start_context(event, agent_policy),
+                "additionalContext": subagent_start_context(config, event, agent_policy),
             }
         }, {}
     if canonical == "SubagentStop":
@@ -6047,6 +6286,13 @@ def build_agent_team_plan(
         ]
         command.append("--required" if required else "--optional")
         command.append("--json")
+        routing = lane_model_reasoning(
+            config,
+            task_class=str(estimate.get("task_class") or "bounded patch"),
+            lane=lane,
+            risk=str(estimate.get("risk") or "medium"),
+            local_status=local_status,
+        )
         assignments.append({
             "agent_id": agent_id,
             "profile": profile,
@@ -6055,13 +6301,8 @@ def build_agent_team_plan(
             "write_surface": agent_profile_write_surface(profile),
             "stop_condition": stop_condition,
             "assign_command": " ".join(shlex.quote(part) for part in command),
-            "routing": lane_model_reasoning(
-                config,
-                task_class=str(estimate.get("task_class") or "bounded patch"),
-                lane=lane,
-                risk=str(estimate.get("risk") or "medium"),
-                local_status=local_status,
-            ),
+            "spawn_instruction": spawn_instruction(agent_id, routing),
+            "routing": routing,
         })
     direct_work = not assignments
     return {
@@ -6198,10 +6439,11 @@ def manager_preflight_payload(
     dry_run: bool = False,
     repo: Path | None = None,
     env: Mapping[str, str] | None = None,
+    selected_mode: str = "",
 ) -> dict[str, Any]:
     source_env = env or os.environ
     with connect_state(config) as conn:
-        mode = current_manager_mode(config, conn)
+        mode = current_manager_mode(config, conn, explicit=selected_mode)
         agent_policy = resolve_agent_policy(config, selected_manager_mode=mode, env=source_env)
         local_status = local_subagent_status(config, enabled=current_local_enabled(config, conn), env=source_env, probe=True)
     codex_home = codex_home_from_env(source_env)
@@ -6872,6 +7114,7 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
     now = utc_now()
     with connect_state(config) as conn:
         mode = current_manager_mode(config, conn)
+        selected_manager_mode = mode
         agent_policy = resolve_agent_policy(config, cli_agent_use=getattr(args, "agent_use", ""), selected_manager_mode=mode)
         if agent_policy["errors"]:
             return stable_envelope(command="manager", status="blocked", summary="Invalid Qwendex agent policy.", errors=list(agent_policy["errors"]), data={"agent_policy": agent_policy})
@@ -7036,6 +7279,7 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
                 dry_run=bool(args.dry_run),
                 repo=Path(os.environ.get("QWENDEX_MANAGER_TARGET_REPO") or os.getcwd()),
                 env=os.environ,
+                selected_mode=normalize_manager_mode(getattr(args, "mode", "")) or selected_manager_mode,
             )
             hook_status = payload["hook_status"]
             next_actions = (
@@ -7141,6 +7385,7 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
                 "receipt_path": args.receipt_path,
                 "context_budget": args.context_budget or config["context"]["compact_limit"],
                 "model_reasoning_assignment": routing,
+                "spawn_instruction": spawn_instruction(args.agent_id, routing),
                 "review_requirement": args.review_requirement,
                 "risk": risk,
             }
