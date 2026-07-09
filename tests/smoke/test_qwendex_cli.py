@@ -118,7 +118,7 @@ def test_qwendex_version_matches_public_config_metadata():
     sample_config = json.loads((ROOT / "config" / "qwendex" / "qwendex.sample.json").read_text(encoding="utf-8"))
     version = json_result("version", "--json")
 
-    assert qwendex.VERSION == "0.0.2-rc4"
+    assert qwendex.VERSION == "0.3.0"
     assert version["data"]["version"] == qwendex.VERSION
     assert project_config["version"] == qwendex.VERSION
     assert sample_config["version"] == qwendex.VERSION
@@ -321,7 +321,11 @@ def test_qwendex_config_blocks_unknown_keys_and_secret_values(tmp_path):
 
 
 def test_qwendex_exact_exec_and_qwen_seat_write_reviewable_receipts(tmp_path):
-    env = {"QWENDEX_RESULTS_ROOT": str(tmp_path), "QWENDEX_FORCE_LOCAL_QWEN_AVAILABLE": "1"}
+    env = {
+        "QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite"),
+        "QWENDEX_RESULTS_ROOT": str(tmp_path),
+        "QWENDEX_FORCE_LOCAL_QWEN_AVAILABLE": "1",
+    }
 
     exec_data = json_result("exec", "Reply exactly QWENDEX_OK", "--json", env=env)
     primary_data = json_result("exec", "Reply exactly QWENDEX_OK", "--seat", "primary", "--json", env=env)
@@ -928,7 +932,11 @@ def test_qwendex_codex_patch_apply_updates_supported_source_checkout(tmp_path):
 
 
 def test_qwendex_route_command_and_auto_exec_prefer_local_qwen_when_available(tmp_path):
-    env = {"QWENDEX_RESULTS_ROOT": str(tmp_path), "QWENDEX_FORCE_LOCAL_QWEN_AVAILABLE": "1"}
+    env = {
+        "QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite"),
+        "QWENDEX_RESULTS_ROOT": str(tmp_path),
+        "QWENDEX_FORCE_LOCAL_QWEN_AVAILABLE": "1",
+    }
 
     route = json_result("route", "--task-class", "exec", "--json", env=env)
     exec_data = json_result("exec", "Reply exactly QWENDEX_OK", "--seat", "auto", "--json", env=env)
@@ -950,7 +958,11 @@ def test_qwendex_route_command_and_auto_exec_prefer_local_qwen_when_available(tm
 
 
 def test_qwendex_auto_route_falls_back_to_primary_when_local_qwen_is_unavailable(tmp_path):
-    env = {"QWENDEX_RESULTS_ROOT": str(tmp_path), "QWENDEX_FORCE_LOCAL_QWEN_UNAVAILABLE": "1"}
+    env = {
+        "QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite"),
+        "QWENDEX_RESULTS_ROOT": str(tmp_path),
+        "QWENDEX_FORCE_LOCAL_QWEN_UNAVAILABLE": "1",
+    }
 
     route = json_result("route", "--task-class", "exec", "--json", env=env)
     exec_data = json_result("exec", "Reply exactly QWENDEX_OK", "--seat", "auto", "--json", env=env)
@@ -1070,7 +1082,11 @@ def test_qwendex_receipt_blocks_outside_json_reads(tmp_path):
 
 
 def test_qwendex_receipt_verifies_schema_and_digest(tmp_path):
-    env = {"QWENDEX_RESULTS_ROOT": str(tmp_path), "QWENDEX_FORCE_LOCAL_QWEN_AVAILABLE": "1"}
+    env = {
+        "QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite"),
+        "QWENDEX_RESULTS_ROOT": str(tmp_path),
+        "QWENDEX_FORCE_LOCAL_QWEN_AVAILABLE": "1",
+    }
     exec_data = json_result("exec", "Reply exactly QWENDEX_OK", "--json", env=env)
     receipt_path = Path(exec_data["artifacts"][0])
 

@@ -515,6 +515,7 @@ counts = Counter()
 contract_counts = Counter()
 expected_counts = Counter()
 unexpected_counts = Counter()
+marker_regex = re.compile("|".join(re.escape(marker) for marker in markers))
 expected_marker_cases = {
     "failed_validator_recovery",
     "malformed_tool_envelope_suppression",
@@ -525,6 +526,57 @@ expected_marker_cases = {
 contract_marker_files = {
     "llmstack_check.json",
 }
+
+
+def marker_hits(text):
+    return Counter(marker_regex.findall(text))
+
+
+def is_marker_name_metadata_path(path):
+    parts = tuple(str(part) for part in path)
+    return parts[-3:] == ("effective_policy", "guard", "markers")
+
+
+def json_marker_hits(value, path=(), *, skip_marker_name_metadata=True):
+    hits = Counter()
+    if skip_marker_name_metadata and is_marker_name_metadata_path(path):
+        return hits
+    if isinstance(value, dict):
+        for key, child in value.items():
+            hits.update(marker_hits(str(key)))
+            hits.update(
+                json_marker_hits(
+                    child,
+                    (*path, str(key)),
+                    skip_marker_name_metadata=skip_marker_name_metadata,
+                )
+            )
+    elif isinstance(value, list):
+        for child in value:
+            hits.update(
+                json_marker_hits(
+                    child,
+                    path,
+                    skip_marker_name_metadata=skip_marker_name_metadata,
+                )
+            )
+    elif isinstance(value, str):
+        hits.update(marker_hits(value))
+    return hits
+
+
+def path_marker_hits(path, text, *, contract):
+    if path.suffix == ".json":
+        try:
+            return json_marker_hits(
+                json.loads(text),
+                skip_marker_name_metadata=not contract,
+            )
+        except json.JSONDecodeError:
+            pass
+    return marker_hits(text)
+
+
 for root in (meta_root, results_root):
     if root.exists():
         for path in root.rglob("*"):
@@ -534,8 +586,8 @@ for root in (meta_root, results_root):
                 text = path.read_text(encoding="utf-8", errors="replace")
                 expected = any(case in path.name or case in str(path.parent) for case in expected_marker_cases)
                 contract = path.name in contract_marker_files
-                for marker in markers:
-                    hits = len(re.findall(re.escape(marker), text))
+                path_hits = path_marker_hits(path, text, contract=contract)
+                for marker, hits in path_hits.items():
                     counts[marker] += hits
                     if hits and contract:
                         contract_counts[marker] += hits

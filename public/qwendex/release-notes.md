@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.3.0
+
+- Published exact Qwendex release metadata for `0.3.0` and tag `v0.3.0`.
+- Captured Manager Mode and agent orchestration verification as release-facing
+  state, including manager status, active agent ledger posture, and final-report
+  gating for the release lane.
+- Preserved forced-local smoke test isolation by keeping local-Qwen availability
+  tests on per-test `QWENDEX_STATE_DB` and `QWENDEX_RESULTS_ROOT` paths.
+
 ## 0.0.2-rc4
 
 - Made Manager Stop hooks tolerant of qdex export loss by attaching to the

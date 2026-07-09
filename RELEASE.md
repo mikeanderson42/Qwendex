@@ -1,3 +1,14 @@
+# v0.3.0
+
+Manager Mode orchestration verification release.
+
+- Publishes exact Qwendex release metadata for `0.3.0` and tag `v0.3.0`.
+- Carries forward Manager Mode and agent orchestration verification, including
+  manager status, active agent ledger state, and release-lane final-report
+  gating.
+- Preserves forced-local smoke test isolation by keeping local-Qwen availability
+  tests on per-test `QWENDEX_STATE_DB` and `QWENDEX_RESULTS_ROOT` paths.
+
 # v0.0.2-rc4
 
 Manager hook compatibility and rc4 readiness candidate.

@@ -263,9 +263,9 @@ claims require GPT/Codex review and the appropriate Qwendex verification tier.
 - [Troubleshooting](public/qwendex/troubleshooting.md)
 - [Release Notes](public/qwendex/release-notes.md)
 
-## Current Release Candidate / Known Limits
+## Current Release / Known Limits
 
-This checkout is seeded as `v0.0.2-rc4`. The latest captured max-depth
+This checkout is seeded as `v0.3.0`. The latest captured max-depth
 validation summary in this repository is still
 [`docs/validation/v0.1.0-rc.1-validation_summary.json`](docs/validation/v0.1.0-rc.1-validation_summary.json)
 until a newer release validation run is recorded.
