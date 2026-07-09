@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+## 0.0.2-rc4
+
+- Made Manager Stop hooks tolerant of qdex export loss by attaching to the
+  latest compatible preflight ledger and treating repeated Stop hooks as
+  idempotent after finalization.
+- Kept installed Codex hook output on the raw hook schema while preserving the
+  diagnostic JSON envelope for manual Qwendex CLI inspection.
+- Reworked PreToolUse write detection to distinguish shell comparisons from
+  real redirects, keeping file-lock enforcement for actual writes.
+- Updated the release metadata to `0.0.2-rc4`.
+
+## 0.0.2-rc3
+
+- Fixed managed Codex hook stdout for `UserPromptSubmit` and related lifecycle
+  hooks. Installed hook commands now use `--codex-hook-output` so Codex sees the
+  raw event schema, while manual `agent hook ... --json` keeps the diagnostic
+  Qwendex envelope.
+- Tightened hook verification so stale full `--json` hook configs are not
+  accepted as Manager-ready.
+- Updated the release metadata to `0.0.2-rc3`.
+
 ## 0.0.2-rc2
 
 - Added `qdex` as the dev-worktree launch wrapper for selected repositories,

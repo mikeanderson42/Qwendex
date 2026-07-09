@@ -15,6 +15,21 @@ available, and testbench/GitHub helpers where the platform package manager can
 provide them. `qwendex-dev bootstrap` records the result in
 `.qwendex-dev/results/meta/install_deps.json`.
 
+For manual operator navigation, `fd` + `fzf` can be configured in the user's
+interactive shell:
+
+```bash
+if command -v fd >/dev/null 2>&1 && command -v fzf >/dev/null 2>&1; then
+  export FZF_DEFAULT_COMMAND='fd --type f --strip-cwd-prefix --hidden --follow --exclude .git'
+  export FZF_CTRL_T_COMMAND="$FZF_DEFAULT_COMMAND"
+fi
+```
+
+Use that for ad hoc path picking only. Qwendex health, bootstrap, staging, and
+release checks must keep using explicit commands and repo-owned manifests.
+`plocate "filename"` is a useful optional indexed lookup when the host provides
+and updates a plocate database; Qwendex does not require or manage that timer.
+
 ## Daily Checks
 
 ```bash

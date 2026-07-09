@@ -1,7 +1,25 @@
-# v0.0.2-rc2
+# v0.0.2-rc4
+
+Manager hook compatibility and rc4 readiness candidate.
+
+- Keeps managed Codex hooks on raw `--codex-hook-output` responses so Stop,
+  PreToolUse, UserPromptSubmit, and subagent lifecycle hooks do not leak the
+  Qwendex diagnostic envelope to Codex.
+- Makes Manager Stop finalization recover from the latest compatible preflight
+  ledger when qdex wrapper exports are unavailable, and keeps repeated Stop
+  hooks idempotent after a decision is closed.
+- Tightens PreToolUse write detection so shell comparisons inside quoted
+  commands are not mistaken for file redirects, while real redirects still
+  require agent/file-lock metadata.
+- Refreshes release metadata to `0.0.2-rc4` and preserves the rc3 qdex
+  preflight orchestration hardening.
+
+# v0.0.2-rc3
 
 Manager preflight and qdex orchestration release candidate.
 
+- Fixes managed Codex hook stdout so installed Qwendex hooks emit the raw
+  Codex event schema instead of the diagnostic Qwendex CLI envelope.
 - Adds the tracked `scripts/qdex` launch wrapper for selected repositories.
 - Records Manager preflight decisions before Codex launch, including hook
   posture, routing reason, verifier requirement, validation plan, and STOP

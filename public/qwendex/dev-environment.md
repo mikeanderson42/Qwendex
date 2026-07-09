@@ -20,6 +20,23 @@ installs for required host tools such as `git`, `rsync`, `curl`, `python3`, and
 `tmux` when a supported package manager and non-interactive sudo/root access are
 available. Remaining blockers are reported in JSON instead of being hidden.
 
+Optional interactive discovery tools are useful in a developer shell but are not
+part of the Qwendex runtime contract. If `fd` and `fzf` are available, a local
+operator can make fzf path picking use fd:
+
+```bash
+if command -v fd >/dev/null 2>&1 && command -v fzf >/dev/null 2>&1; then
+  export FZF_DEFAULT_COMMAND='fd --type f --strip-cwd-prefix --hidden --follow --exclude .git'
+  export FZF_CTRL_T_COMMAND="$FZF_DEFAULT_COMMAND"
+fi
+```
+
+This enables `fzf` and, when shell key bindings are loaded, `Ctrl+T` path
+insertion inside an unfinished command. Keep Qwendex scripts and validation
+gates on explicit paths, `ripgrep`, and repo-owned checks. Use `plocate` only
+as an optional indexed filename lookup tool; its database depends on the host's
+updatedb timer or an intentional `updatedb` run.
+
 ```bash
 scripts/qwendex_dev_env sync
 ```

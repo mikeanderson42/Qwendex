@@ -121,6 +121,13 @@ disabled or scoped to a different Codex home. Missing hooks in Manager Mode are
 now a launch-time block unless the operator sets an explicit unhooked override,
 which is recorded in the manager decision ledger.
 
+Update: managed hook commands use `agent hook ... --codex-hook-output` for
+Codex lifecycle execution. Manual `agent hook ... --json` remains the stable
+Qwendex diagnostic envelope, while `--codex-hook-output` emits only fields
+accepted by Codex's per-event hook stdout schemas. Hook verification treats
+stale Qwendex lifecycle commands without `--codex-hook-output` as incompatible,
+even if every managed event is present.
+
 ## Manager Preflight Session Contract
 
 Decision: normal `qdex` launches in Manager Mode must run

@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.0.2-rc2"
+VERSION = "0.0.2-rc4"
 CONFIG_DIR = ROOT / "config" / "qwendex"
 DEFAULT_PROJECT_CONFIG = CONFIG_DIR / "qwendex.json"
 DEFAULT_USER_CONFIG = Path.home() / ".config" / "qwendex" / "config.json"
@@ -186,6 +186,7 @@ MANAGED_AGENT_HOOKS = {
 READ_ONLY_AGENT_PROFILES = {"explorer", "verifier", "docs_researcher", "audit", "review"}
 ROOT_ONLY_AGENT_TOOLS = {"spawn_agent", "close_agent", "wait_agent", "resume_agent", "agent_ledger_update_status"}
 WRITE_TOOL_NAMES = {"write", "edit", "apply_patch", "create_file", "delete_file", "move_file"}
+MANAGER_DECISION_ATTACH_WINDOW_MINUTES = 24 * 60
 RELEASE_COMMAND_RE = re.compile(
     r"(^|\s)(npm|pnpm|yarn)\s+.*\bpublish\b|"
     r"(^|\s)cargo\s+publish\b|"
@@ -5067,8 +5068,29 @@ def event_agent_id(event: Mapping[str, Any]) -> str:
     return ""
 
 
+def command_has_shell_redirection(command: str) -> bool:
+    try:
+        tokens = shlex.split(command, posix=True)
+    except ValueError:
+        return bool(re.search(r"(^|[\s;&|])(?:\d?>{1,2}|&>)\s*\S", command))
+    for token in tokens:
+        if token in {">", ">>", "&>", "&>>"}:
+            return True
+        if re.match(r"^(?:\d?>{1,2}|&>{1,2})(?:$|\S)", token):
+            return True
+    return False
+
+
 def event_is_write_attempt(tool_lower: str, command: str) -> bool:
-    return tool_lower in WRITE_TOOL_NAMES or bool(re.search(r">\s*[^&]|tee\s+|apply_patch|sed\s+-i|python3?\s+.*\bwrite_text\b", command))
+    if tool_lower in WRITE_TOOL_NAMES:
+        return True
+    return bool(
+        command_has_shell_redirection(command)
+        or re.search(r"\btee\s+", command)
+        or re.search(r"\bapply_patch\b", command)
+        or re.search(r"\bsed\s+-i\b", command)
+        or re.search(r"\bpython3?\s+.*\bwrite_text\b", command)
+    )
 
 
 def pre_tool_gate(config: Mapping[str, Any], event: Mapping[str, Any], agent_policy: Mapping[str, Any]) -> dict[str, Any]:
@@ -5239,7 +5261,9 @@ def evaluate_agent_hook(
         if str(agent_policy.get("mode")) != "manager":
             agent_policy = resolve_agent_policy(config, env={}, selected_manager_mode="manager")
         with connect_state(config) as conn:
-            decision = latest_manager_decision(conn, ledger_id=ledger_id, session_id=session_id) if (ledger_id or session_id) else None
+            decision = latest_manager_decision(conn, ledger_id=ledger_id, session_id=session_id) if (ledger_id or session_id) else latest_manager_decision(conn)
+            if not (ledger_id or session_id) and not manager_decision_attachable(decision, agent_policy, env=os.environ):
+                decision = None
             rows = conn.execute("SELECT * FROM qwendex_agent_sessions ORDER BY updated_at DESC").fetchall()
         sessions = [session for row in rows if (session := row_to_agent_session(row))]
         if decision is None:
@@ -5393,6 +5417,48 @@ def evaluate_agent_hook(
     return "pass", {}, {}
 
 
+def codex_hook_output(event_name: str, hook_result: Mapping[str, Any]) -> dict[str, Any]:
+    """Return only fields accepted by Codex's hook stdout schema."""
+    event = event_name or str(hook_result.get("hookEventName") or "")
+    output: dict[str, Any] = {}
+    for key in ("continue", "stopReason", "suppressOutput", "systemMessage"):
+        if key in hook_result:
+            output[key] = hook_result[key]
+
+    hook_specific = hook_result.get("hookSpecificOutput")
+    hook_specific_allowed = {
+        "SessionStart": {"hookEventName", "additionalContext"},
+        "SubagentStart": {"hookEventName", "additionalContext"},
+        "UserPromptSubmit": {"hookEventName", "additionalContext"},
+        "PreToolUse": {
+            "hookEventName",
+            "permissionDecision",
+            "permissionDecisionReason",
+            "updatedInput",
+            "additionalContext",
+        },
+        "PostToolUse": {"hookEventName", "additionalContext", "updatedMCPToolOutput"},
+    }
+    if isinstance(hook_specific, Mapping) and event in hook_specific_allowed:
+        filtered = {
+            key: hook_specific[key]
+            for key in hook_specific_allowed[event]
+            if key in hook_specific
+        }
+        if filtered:
+            output["hookSpecificOutput"] = filtered
+
+    if hook_result.get("decision") == "block":
+        reason = str(hook_result.get("reason") or "Qwendex hook blocked this action.").strip()
+        if event in {"PreToolUse", "PostToolUse", "UserPromptSubmit", "Stop", "SubagentStop"}:
+            output["decision"] = "block"
+            output["reason"] = reason
+        else:
+            output["continue"] = False
+            output["stopReason"] = reason
+    return output
+
+
 def managed_agent_hook_config(command_base: str = "") -> dict[str, Any]:
     base = str(command_base or ROOT / "scripts" / "qwendex").strip()
     hooks: dict[str, list[dict[str, Any]]] = {}
@@ -5401,7 +5467,7 @@ def managed_agent_hook_config(command_base: str = "") -> dict[str, Any]:
             "matcher": spec["matcher"],
             "hooks": [{
                 "type": "command",
-                "command": f"{base} agent hook {event_name} --json",
+                "command": f"{base} agent hook {event_name} --codex-hook-output",
                 "timeout": spec["timeout"],
             }],
         }]
@@ -5444,6 +5510,14 @@ def managed_hook_commands(payload: Mapping[str, Any]) -> dict[str, list[str]]:
     return commands
 
 
+def is_qwendex_agent_hook_command(command: str) -> bool:
+    return "qwendex" in command and "agent hook" in command
+
+
+def is_codex_compatible_agent_hook_command(command: str) -> bool:
+    return is_qwendex_agent_hook_command(command) and "--codex-hook-output" in command
+
+
 def hook_status_for_codex_home(
     codex_home: Path,
     *,
@@ -5464,28 +5538,51 @@ def hook_status_for_codex_home(
     managed_events = {
         event
         for event, event_commands in commands.items()
-        if any("qwendex" in command and "agent hook" in command for command in event_commands)
+        if any(is_codex_compatible_agent_hook_command(command) for command in event_commands)
     }
     required_events = set(MANAGED_AGENT_HOOKS)
     missing_events = sorted(required_events - managed_events)
+    incompatible_events = sorted({
+        event
+        for event, event_commands in commands.items()
+        if any(
+            is_qwendex_agent_hook_command(command)
+            and not is_codex_compatible_agent_hook_command(command)
+            for command in event_commands
+        )
+    })
     hook_source_count = sum(
         1
         for event_commands in commands.values()
         for command in event_commands
-        if "qwendex" in command and "agent hook" in command
+        if is_qwendex_agent_hook_command(command)
+    )
+    compatible_hook_source_count = sum(
+        1
+        for event_commands in commands.values()
+        for command in event_commands
+        if is_codex_compatible_agent_hook_command(command)
     )
     configured = target.is_file() and hook_source_count > 0
-    verified = configured and not missing_events and not parse_error
+    verified = (
+        configured
+        and compatible_hook_source_count > 0
+        and not missing_events
+        and not incompatible_events
+        and not parse_error
+    )
     return {
         "codex_home": str(codex_home.expanduser()),
         "hooks_path": str(target),
         "hooks_json_exists": target.is_file(),
         "hook_source_count": hook_source_count,
+        "compatible_hook_source_count": compatible_hook_source_count,
         "configured": configured,
         "verified": verified,
         "source_paths": [str(target)] if target.is_file() else [],
         "managed_events": sorted(managed_events),
         "missing_events": missing_events,
+        "incompatible_events": incompatible_events,
         "required_for_write": required_for_write,
         "override": override,
         "override_reason": override_reason or None,
@@ -5913,6 +6010,30 @@ def manager_preflight_payload(
     return payload
 
 
+def manager_decision_attachable(
+    decision: Mapping[str, Any] | None,
+    agent_policy: Mapping[str, Any],
+    *,
+    env: Mapping[str, str] | None = None,
+) -> bool:
+    if not decision or str(decision.get("final_status") or "") not in {"preflight_ready", "closed"}:
+        return False
+    expected_home = path_digest_policy(codex_home_from_env(env))
+    actual_home = str(decision.get("codex_home_digest_or_path_policy") or "")
+    if actual_home and actual_home != expected_home:
+        return False
+    expected_policy = str(agent_policy.get("policy_hash") or "")
+    actual_policy = str(decision.get("policy_hash") or "")
+    if expected_policy and actual_policy and expected_policy != actual_policy:
+        return False
+    timestamp = str(decision.get("timestamp_updated") or decision.get("timestamp_created") or "")
+    try:
+        age_seconds = (datetime.now(UTC) - parse_utc(timestamp)).total_seconds()
+    except (TypeError, ValueError):
+        return False
+    return age_seconds <= MANAGER_DECISION_ATTACH_WINDOW_MINUTES * 60
+
+
 def manager_decision_identity(event: Mapping[str, Any]) -> tuple[str, str]:
     ledger_id = str(
         event.get("manager_ledger_id")
@@ -6115,12 +6236,18 @@ def command_agent(args: argparse.Namespace, config: dict[str, Any]) -> dict[str,
             event=event,
             agent_policy=agent_policy,
         )
+        data = {"hook_result": hook_result, "event": event, "agent_policy": agent_policy, **extra}
+        if getattr(args, "codex_hook_output", False):
+            data["codex_hook_output"] = codex_hook_output(
+                args.target or str(event.get("hookEventName") or event.get("event") or ""),
+                hook_result,
+            )
         return stable_envelope(
             command="agent",
             status=status,
             summary=f"Qwendex agent hook {args.target or event.get('event', '')} returned {status}.",
             errors=[hook_result.get("reason", "")] if status == "blocked" and hook_result.get("reason") else [],
-            data={"hook_result": hook_result, "event": event, "agent_policy": agent_policy, **extra},
+            data=data,
         )
     if action == "policy":
         return stable_envelope(
@@ -7242,6 +7369,7 @@ def command_line() -> argparse.ArgumentParser:
     agent.add_argument("--task-id", default="")
     agent.add_argument("--limit", type=int, default=20)
     agent.add_argument("--stale-after-minutes", type=int, default=0)
+    agent.add_argument("--codex-hook-output", action="store_true")
     agent.add_argument("--json", action="store_true")
 
     eval_parser = sub.add_parser("eval")
@@ -7472,6 +7600,13 @@ def main(argv: list[str] | None = None) -> int:
         data = run(args)
     except Exception as exc:  # pragma: no cover - defensive CLI boundary
         data = stable_envelope(command=getattr(args, "command", "unknown"), status="fail", summary=str(exc), errors=[str(exc)])
+    if (
+        args.command == "agent"
+        and getattr(args, "action", "") == "hook"
+        and getattr(args, "codex_hook_output", False)
+    ):
+        print(json.dumps(data.get("data", {}).get("codex_hook_output", {}), sort_keys=True))
+        return 0 if data.get("status") in {"pass", "blocked"} else exit_code(data)
     if args.command == "codex-status" and not getattr(args, "json", False):
         print(data.get("data", {}).get("text", data["summary"]))
     elif getattr(args, "json", False):

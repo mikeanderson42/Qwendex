@@ -247,9 +247,11 @@ scripts/qwendex agent hook-config --install --codex-home "$CODEX_HOME" --json
 scripts/qwendex agent hook-config --verify --codex-home "$CODEX_HOME" --json
 ```
 
-Writing hook config is explicit and overwrite-protected. The native ledger and
-gate evaluator remain the source of truth, and Manager preflight names missing
-hooks or explicit unhooked overrides in the decision receipt.
+Writing hook config is explicit and overwrite-protected. Generated hook commands
+use `agent hook ... --codex-hook-output`, which strips the diagnostic Qwendex
+envelope and emits only Codex-compatible hook stdout. The native ledger and gate
+evaluator remain the source of truth, and Manager preflight names missing hooks
+or explicit unhooked overrides in the decision receipt.
 
 The CLI records `agent_id`, lane, task, owner, write surface, stop condition,
 artifacts, context packet, heartbeat time, validation status, stop reason, and

@@ -92,6 +92,7 @@ def test_qwendex_parser_exposes_public_commands():
     assert parser.parse_args(["agent", "team"]).action == "team"
     assert parser.parse_args(["agent", "plan", "--prompt", "Ship it"]).action == "plan"
     assert parser.parse_args(["agent", "hook", "Stop", "--event-json", "{}"]).action == "hook"
+    assert parser.parse_args(["agent", "hook", "Stop", "--codex-hook-output"]).codex_hook_output is True
     assert parser.parse_args(["agent", "hook-config"]).action == "hook-config"
     assert parser.parse_args(["agent", "hook-config", "--install", "--codex-home", "/tmp/codex"]).install is True
     assert parser.parse_args(["agent", "hook-config", "--verify", "--codex-home", "/tmp/codex"]).verify is True
@@ -117,7 +118,7 @@ def test_qwendex_version_matches_public_config_metadata():
     sample_config = json.loads((ROOT / "config" / "qwendex" / "qwendex.sample.json").read_text(encoding="utf-8"))
     version = json_result("version", "--json")
 
-    assert qwendex.VERSION == "0.0.2-rc2"
+    assert qwendex.VERSION == "0.0.2-rc4"
     assert version["data"]["version"] == qwendex.VERSION
     assert project_config["version"] == qwendex.VERSION
     assert sample_config["version"] == qwendex.VERSION
@@ -1374,7 +1375,46 @@ def test_qwendex_manager_stop_requires_preflight_ledger(tmp_path):
     assert stop["data"]["hook_result"]["stop_status"] == "STOP_MANAGER_UNATTACHED"
 
 
+
+
+def test_qwendex_manager_stop_recovers_latest_preflight_without_exported_env(tmp_path):
+    env = {
+        "QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite"),
+        "QWENDEX_RESULTS_ROOT": str(tmp_path / "results"),
+        "CODEX_HOME": str(tmp_path / "codex_home"),
+    }
+
+    json_result("agent", "hook-config", "--install", "--codex-home", env["CODEX_HOME"], "--json", env=env)
+    json_result("manager", "mode", "--set", "manager", "--json", env=env)
+    preflight = json_result("manager", "preflight", "--interactive-prompt-unknown", "--json", env=env)
+    stop = json_result(
+        "agent",
+        "hook",
+        "Stop",
+        "--event-json",
+        json.dumps({"last_assistant_message": "No edits. Validation: not required. Risks: none."}),
+        "--json",
+        env=env,
+    )
+
+    repeated_stop = run_qwendex(
+        "agent",
+        "hook",
+        "Stop",
+        "--event-json",
+        json.dumps({"last_assistant_message": "No edits. Validation: already closed. Risks: none."}),
+        "--codex-hook-output",
+        env=env,
+    )
+
+    assert preflight["data"]["routing_decision"]["direct_work_exception"] is True
+    assert stop["data"]["hook_result"]["event"] == "manager.finalized"
+    assert stop["data"]["manager_decision"]["ledger_id"] == preflight["data"]["ledger_id"]
+    assert repeated_stop.returncode == 0
+    assert json.loads(repeated_stop.stdout) == {}
+
 def test_qwendex_manager_preflight_records_decision_ledger_and_hook_status(tmp_path):
+    qwendex = load_qwendex()
     env = {
         "QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite"),
         "QWENDEX_RESULTS_ROOT": str(tmp_path / "results"),
@@ -1423,13 +1463,51 @@ def test_qwendex_manager_preflight_records_decision_ledger_and_hook_status(tmp_p
     partial = parse_json_result(partial_result)
     assert partial_result.returncode != 0
     assert partial["data"]["hook_status"]["hook_source_count"] == 1
+    assert partial["data"]["hook_status"]["compatible_hook_source_count"] == 0
     assert partial["data"]["hook_status"]["verified"] is False
+    assert partial["data"]["hook_status"]["incompatible_events"] == ["Stop"]
     assert "UserPromptSubmit" in partial["data"]["hook_status"]["missing_events"]
     assert partial["data"]["routing_decision"]["selected_route"] == "blocked"
     assert partial["data"]["stop_status"] == "STOP_MANAGER_BLOCKED_UNHOOKED"
 
+    stale_codex_home = tmp_path / "stale_codex_home"
+    stale_codex_home.mkdir()
+    stale_hooks = {
+        "hooks": {
+            event_name: [
+                {
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": f"scripts/qwendex agent hook {event_name} --json",
+                        }
+                    ]
+                }
+            ]
+            for event_name in qwendex.MANAGED_AGENT_HOOKS
+        }
+    }
+    (stale_codex_home / "hooks.json").write_text(json.dumps(stale_hooks), encoding="utf-8")
+    stale_result = run_qwendex(
+        "manager",
+        "preflight",
+        "--interactive-prompt-unknown",
+        "--dry-run",
+        "--json",
+        env={**env, "CODEX_HOME": str(stale_codex_home)},
+    )
+    stale = parse_json_result(stale_result)
+    assert stale_result.returncode != 0
+    assert stale["data"]["hook_status"]["hook_source_count"] == len(qwendex.MANAGED_AGENT_HOOKS)
+    assert stale["data"]["hook_status"]["compatible_hook_source_count"] == 0
+    assert stale["data"]["hook_status"]["verified"] is False
+    assert set(stale["data"]["hook_status"]["incompatible_events"]) == set(qwendex.MANAGED_AGENT_HOOKS)
+    assert stale["data"]["routing_decision"]["selected_route"] == "blocked"
+    assert stale["data"]["stop_status"] == "STOP_MANAGER_BLOCKED_UNHOOKED"
+
     installed = json_result("agent", "hook-config", "--install", "--codex-home", env["CODEX_HOME"], "--json", env=env)
     assert installed["data"]["hook_status"]["verified"] is True
+    assert installed["data"]["hook_status"]["compatible_hook_source_count"] == len(qwendex.MANAGED_AGENT_HOOKS)
 
     ready = json_result(
         "manager",
@@ -1759,6 +1837,22 @@ def test_qwendex_agent_hooks_enforce_final_contract_and_manager_stop_gate(tmp_pa
         "--json",
         env=env,
     )
+    raw_prompt_hook = run_qwendex(
+        "--agent-use",
+        "Manager",
+        "agent",
+        "hook",
+        "UserPromptSubmit",
+        "--event-json",
+        "{}",
+        "--codex-hook-output",
+        env=env,
+    )
+    raw_prompt = json.loads(raw_prompt_hook.stdout)
+    assert raw_prompt_hook.returncode == 0
+    assert set(raw_prompt) == {"hookSpecificOutput"}
+    assert "root orchestrator" in raw_prompt["hookSpecificOutput"]["additionalContext"]
+    assert "status" not in raw_prompt
     assigned = json_result(
         "manager",
         "assign",
@@ -1945,7 +2039,7 @@ def test_qwendex_agent_hook_config_generation_and_write_gate(tmp_path):
     rendered = json_result("agent", "hook-config", "--qwendex-command", "scripts/qwendex", "--json")
     hooks = rendered["data"]["hook_config"]["hooks"]
     assert {"UserPromptSubmit", "SubagentStart", "SubagentStop", "Stop", "PreToolUse"} <= set(hooks)
-    assert hooks["Stop"][0]["hooks"][0]["command"] == "scripts/qwendex agent hook Stop --json"
+    assert hooks["Stop"][0]["hooks"][0]["command"] == "scripts/qwendex agent hook Stop --codex-hook-output"
     assert hooks["PreToolUse"][0]["hooks"][0]["timeout"] == 5
 
     blocked_result = run_qwendex("agent", "hook-config", "--write", str(target), "--json")
@@ -1966,7 +2060,7 @@ def test_qwendex_agent_hook_config_generation_and_write_gate(tmp_path):
     )
     payload = json.loads(target.read_text(encoding="utf-8"))
     assert written["artifacts"] == [str(target)]
-    assert payload["hooks"]["SubagentStop"][0]["hooks"][0]["command"] == "scripts/qwendex agent hook SubagentStop --json"
+    assert payload["hooks"]["SubagentStop"][0]["hooks"][0]["command"] == "scripts/qwendex agent hook SubagentStop --codex-hook-output"
 
     overwrite_result = run_qwendex("agent", "hook-config", "--write", str(target), "--approve", "--json")
     overwrite = parse_json_result(overwrite_result)
@@ -1977,12 +2071,15 @@ def test_qwendex_agent_hook_config_generation_and_write_gate(tmp_path):
     verify_missing = parse_json_result(verify_missing_result)
     assert verify_missing_result.returncode != 0
     assert verify_missing["data"]["hook_status"]["hook_source_count"] == 0
+    assert verify_missing["data"]["hook_status"]["compatible_hook_source_count"] == 0
 
     installed = json_result("agent", "hook-config", "--install", "--codex-home", str(codex_home), "--json")
     assert installed["data"]["operator_action"] == "install"
     assert installed["data"]["hook_status"]["verified"] is True
+    assert installed["data"]["hook_status"]["compatible_hook_source_count"] >= 7
     verified = json_result("agent", "hook-config", "--verify", "--codex-home", str(codex_home), "--json")
     assert verified["data"]["hook_status"]["hook_source_count"] >= 7
+    assert verified["data"]["hook_status"]["compatible_hook_source_count"] >= 7
     assert verified["data"]["hook_status"]["verified"] is True
 
 
@@ -2027,18 +2124,69 @@ def test_qwendex_agent_pre_tool_hook_denies_unsafe_actions(tmp_path):
         "--json",
         env=env,
     )
+    raw_child_spawn = run_qwendex(
+        "--agent-use",
+        "Manager",
+        "agent",
+        "hook",
+        "PreToolUse",
+        "--event-json",
+        json.dumps({"tool_name": "spawn_agent", "depth": 1}),
+        "--codex-hook-output",
+        env=env,
+    )
+    raw_child_spawn_data = json.loads(raw_child_spawn.stdout)
 
     child_spawn_data = parse_json_result(child_spawn)
     read_only_write_data = parse_json_result(read_only_write)
     release_publish_data = parse_json_result(release_publish)
 
     assert child_spawn.returncode != 0
+    assert raw_child_spawn.returncode == 0
+    assert raw_child_spawn_data["decision"] == "block"
+    assert "Child agents cannot use" in raw_child_spawn_data["reason"]
+    assert "status" not in raw_child_spawn_data
     assert child_spawn_data["data"]["hook_result"]["event"] == "agent.spawn_rejected"
     assert read_only_write.returncode != 0
     assert read_only_write_data["data"]["hook_result"]["event"] == "agent.write_rejected"
     assert release_publish.returncode != 0
     assert release_publish_data["data"]["hook_result"]["event"] == "agent.release_command_rejected"
     assert release_approved["data"]["hook_result"] == {}
+    comparison_command = "python3 -c \"print(1 >= 0); print(2 > 1)\""
+    comparison = json_result(
+        "agent",
+        "hook",
+        "PreToolUse",
+        "--event-json",
+        json.dumps({"tool_name": "exec_command", "command": comparison_command}),
+        "--json",
+        env=env,
+    )
+    real_redirect = run_qwendex(
+        "agent",
+        "hook",
+        "PreToolUse",
+        "--event-json",
+        json.dumps({"tool_name": "exec_command", "command": "echo ok > out.txt"}),
+        "--json",
+        env=env,
+    )
+    fd_redirect = run_qwendex(
+        "agent",
+        "hook",
+        "PreToolUse",
+        "--event-json",
+        json.dumps({"tool_name": "exec_command", "command": "echo err 2> err.log"}),
+        "--json",
+        env=env,
+    )
+    real_redirect_data = parse_json_result(real_redirect)
+    fd_redirect_data = parse_json_result(fd_redirect)
+    assert comparison["data"]["hook_result"] == {}
+    assert real_redirect.returncode != 0
+    assert real_redirect_data["data"]["hook_result"]["event"] == "agent.write_lock_rejected"
+    assert fd_redirect.returncode != 0
+    assert fd_redirect_data["data"]["hook_result"]["event"] == "agent.write_lock_rejected"
 
 
 def test_qwendex_agent_file_locks_enforce_single_writer_and_release_on_final_report(tmp_path):

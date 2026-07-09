@@ -166,6 +166,11 @@ The gates enforce the current CLI policy boundary:
   profiles, conflicting file locks, and release/publish commands without
   explicit release approval
 
+Manual `agent hook ... --json` commands return the stable Qwendex diagnostic
+envelope. Managed Codex hook config uses `agent hook ... --codex-hook-output`
+so hook stdout contains only the raw Codex event schema accepted by the Codex
+hook parser.
+
 Generate Codex-compatible managed hook wiring with:
 
 ```bash
@@ -177,11 +182,14 @@ scripts/qwendex agent hook-config --verify --codex-home "$CODEX_HOME" --json
 
 Writes are approval-gated and refuse to overwrite an existing file unless
 `--force` is supplied. The generated commands invoke the same native gate
-evaluator; hook files reinforce the runtime policy but are not the only
-enforcement path. Manager Mode launches block when no verified managed hook
-config is detected. Missing or partial hook configs are treated as incomplete
-unless `QWENDEX_MANAGER_ALLOW_UNHOOKED=1` is set; that override is recorded in
-the manager decision ledger only when verified hooks are not already present.
+evaluator through raw Codex-compatible stdout; hook files reinforce the runtime
+policy but are not the only enforcement path. Manager Mode launches block when
+no verified managed hook config is detected. Missing or partial hook configs
+are treated as incomplete unless `QWENDEX_MANAGER_ALLOW_UNHOOKED=1` is set;
+that override is recorded in the manager decision ledger only when verified
+hooks are not already present. Verification also rejects stale Qwendex hook
+commands that still use the diagnostic `--json` envelope because Codex merges
+all configured hook commands and would execute the incompatible entry.
 
 ## Profiles And Team
 
