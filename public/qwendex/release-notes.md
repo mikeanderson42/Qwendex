@@ -7,6 +7,9 @@
 - Made Manager Stop hooks tolerant of qdex export loss by attaching to the
   latest compatible preflight ledger and treating repeated Stop hooks as
   idempotent after finalization.
+- Added embedded runtime env to managed hook commands so Stop hooks still
+  reach the intended Qwendex manager ledger when Codex drops
+  `QWENDEX_STATE_DB`, `QWENDEX_LEDGER_DB`, or `QWENDEX_RESULTS_ROOT`.
 - Kept installed Codex hook output on the raw hook schema while preserving the
   diagnostic JSON envelope for manual Qwendex CLI inspection.
 - Reworked PreToolUse write detection to distinguish shell comparisons from

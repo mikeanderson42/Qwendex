@@ -1413,6 +1413,57 @@ def test_qwendex_manager_stop_recovers_latest_preflight_without_exported_env(tmp
     assert repeated_stop.returncode == 0
     assert json.loads(repeated_stop.stdout) == {}
 
+
+def test_qwendex_manager_stop_uses_generated_runtime_env_when_state_env_is_dropped(tmp_path):
+    work_root = tmp_path / ".qwendex-dev"
+    codex_home = work_root / "codex_home"
+    env = {
+        "CODEX_HOME": str(codex_home),
+        "QWENDEX_AGENT_USE": "Manager",
+        "QWENDEX_STATE_DB": "",
+        "QWENDEX_LEDGER_DB": "",
+        "QWENDEX_RESULTS_ROOT": "",
+    }
+
+    installed = json_result("agent", "hook-config", "--install", "--codex-home", str(codex_home), "--json", env=env)
+    json_result("manager", "mode", "--set", "manager", "--json", env=env)
+    preflight = json_result("manager", "preflight", "--interactive-prompt-unknown", "--json", env=env)
+    payload = json.loads((codex_home / "hooks.json").read_text(encoding="utf-8"))
+    stop_command = payload["hooks"]["Stop"][0]["hooks"][0]["command"]
+    hook_env = {
+        "HOME": os.environ.get("HOME", ""),
+        "PATH": os.environ.get("PATH", ""),
+        "CODEX_HOME": str(codex_home),
+        "QWENDEX_AGENT_USE": "Manager",
+        "QWENDEX_STATE_DB": "",
+        "QWENDEX_LEDGER_DB": "",
+        "QWENDEX_RESULTS_ROOT": "",
+    }
+    stop = subprocess.run(
+        stop_command,
+        cwd=ROOT,
+        env=hook_env,
+        input=json.dumps({"last_assistant_message": "No edits. Validation: not required. Risks: none."}),
+        text=True,
+        shell=True,
+        capture_output=True,
+        check=False,
+        timeout=60,
+    )
+    decision = json_result("manager", "decision", "--json", env=env)["data"]["manager_decision"]
+
+    assert installed["data"]["hook_status"]["missing_runtime_env_events"] == []
+    assert "QWENDEX_STATE_DB=" in stop_command
+    assert stop.returncode == 0, stop.stderr or stop.stdout
+    assert json.loads(stop.stdout) == {}
+    assert preflight["data"]["ledger_id"] == decision["ledger_id"]
+    assert decision["stop_status"] == "STOP_MANAGER_CLOSED"
+    assert (work_root / "state" / "qwendex.sqlite").is_file()
+    receipt_paths = decision["receipt_paths"]
+    assert receipt_paths
+    assert all(str(work_root / "results" / "qwendex") in receipt for receipt in receipt_paths)
+
+
 def test_qwendex_manager_preflight_records_decision_ledger_and_hook_status(tmp_path):
     qwendex = load_qwendex()
     env = {
@@ -1504,6 +1555,41 @@ def test_qwendex_manager_preflight_records_decision_ledger_and_hook_status(tmp_p
     assert set(stale["data"]["hook_status"]["incompatible_events"]) == set(qwendex.MANAGED_AGENT_HOOKS)
     assert stale["data"]["routing_decision"]["selected_route"] == "blocked"
     assert stale["data"]["stop_status"] == "STOP_MANAGER_BLOCKED_UNHOOKED"
+
+    plain_codex_home = tmp_path / "plain_codex_home"
+    plain_codex_home.mkdir()
+    plain_hooks = {
+        "hooks": {
+            event_name: [
+                {
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": f"scripts/qwendex agent hook {event_name} --codex-hook-output",
+                        }
+                    ]
+                }
+            ]
+            for event_name in qwendex.MANAGED_AGENT_HOOKS
+        }
+    }
+    (plain_codex_home / "hooks.json").write_text(json.dumps(plain_hooks), encoding="utf-8")
+    plain_result = run_qwendex(
+        "manager",
+        "preflight",
+        "--interactive-prompt-unknown",
+        "--dry-run",
+        "--json",
+        env={**env, "CODEX_HOME": str(plain_codex_home)},
+    )
+    plain = parse_json_result(plain_result)
+    assert plain_result.returncode != 0
+    assert plain["data"]["hook_status"]["hook_source_count"] == len(qwendex.MANAGED_AGENT_HOOKS)
+    assert plain["data"]["hook_status"]["compatible_hook_source_count"] == len(qwendex.MANAGED_AGENT_HOOKS)
+    assert plain["data"]["hook_status"]["verified"] is False
+    assert set(plain["data"]["hook_status"]["missing_runtime_env_events"]) == set(qwendex.MANAGED_AGENT_HOOKS)
+    assert plain["data"]["routing_decision"]["selected_route"] == "blocked"
+    assert plain["data"]["stop_status"] == "STOP_MANAGER_BLOCKED_UNHOOKED"
 
     installed = json_result("agent", "hook-config", "--install", "--codex-home", env["CODEX_HOME"], "--json", env=env)
     assert installed["data"]["hook_status"]["verified"] is True
@@ -2036,13 +2122,24 @@ def test_qwendex_agent_hook_config_generation_and_write_gate(tmp_path):
     target = tmp_path / "hooks.json"
     codex_home = tmp_path / "codex_home"
 
-    rendered = json_result("agent", "hook-config", "--qwendex-command", "scripts/qwendex", "--json")
+    env = {
+        "CODEX_HOME": str(codex_home),
+        "QWENDEX_STATE_DB": str(tmp_path / "state" / "qwendex.sqlite"),
+        "QWENDEX_LEDGER_DB": str(tmp_path / "state" / "qwendex_ledger.sqlite"),
+        "QWENDEX_RESULTS_ROOT": str(tmp_path / "results" / "qwendex"),
+        "QWENDEX_CODEX_STATUS_FILE": str(tmp_path / "codex_status.json"),
+    }
+
+    rendered = json_result("agent", "hook-config", "--qwendex-command", "scripts/qwendex", "--json", env=env)
     hooks = rendered["data"]["hook_config"]["hooks"]
+    stop_command = hooks["Stop"][0]["hooks"][0]["command"]
     assert {"UserPromptSubmit", "SubagentStart", "SubagentStop", "Stop", "PreToolUse"} <= set(hooks)
-    assert hooks["Stop"][0]["hooks"][0]["command"] == "scripts/qwendex agent hook Stop --codex-hook-output"
+    assert stop_command.startswith("env ")
+    assert "QWENDEX_STATE_DB=" in stop_command
+    assert stop_command.endswith("scripts/qwendex agent hook Stop --codex-hook-output")
     assert hooks["PreToolUse"][0]["hooks"][0]["timeout"] == 5
 
-    blocked_result = run_qwendex("agent", "hook-config", "--write", str(target), "--json")
+    blocked_result = run_qwendex("agent", "hook-config", "--write", str(target), "--json", env=env)
     blocked = parse_json_result(blocked_result)
     assert blocked_result.returncode != 0
     assert blocked["status"] == "blocked"
@@ -2057,29 +2154,32 @@ def test_qwendex_agent_hook_config_generation_and_write_gate(tmp_path):
         str(target),
         "--approve",
         "--json",
+        env=env,
     )
     payload = json.loads(target.read_text(encoding="utf-8"))
     assert written["artifacts"] == [str(target)]
-    assert payload["hooks"]["SubagentStop"][0]["hooks"][0]["command"] == "scripts/qwendex agent hook SubagentStop --codex-hook-output"
+    assert "QWENDEX_STATE_DB=" in payload["hooks"]["SubagentStop"][0]["hooks"][0]["command"]
+    assert payload["hooks"]["SubagentStop"][0]["hooks"][0]["command"].endswith("scripts/qwendex agent hook SubagentStop --codex-hook-output")
 
-    overwrite_result = run_qwendex("agent", "hook-config", "--write", str(target), "--approve", "--json")
+    overwrite_result = run_qwendex("agent", "hook-config", "--write", str(target), "--approve", "--json", env=env)
     overwrite = parse_json_result(overwrite_result)
     assert overwrite_result.returncode != 0
     assert overwrite["status"] == "blocked"
 
-    verify_missing_result = run_qwendex("agent", "hook-config", "--verify", "--codex-home", str(codex_home), "--json")
+    verify_missing_result = run_qwendex("agent", "hook-config", "--verify", "--codex-home", str(codex_home), "--json", env=env)
     verify_missing = parse_json_result(verify_missing_result)
     assert verify_missing_result.returncode != 0
     assert verify_missing["data"]["hook_status"]["hook_source_count"] == 0
     assert verify_missing["data"]["hook_status"]["compatible_hook_source_count"] == 0
 
-    installed = json_result("agent", "hook-config", "--install", "--codex-home", str(codex_home), "--json")
+    installed = json_result("agent", "hook-config", "--install", "--codex-home", str(codex_home), "--json", env=env)
     assert installed["data"]["operator_action"] == "install"
     assert installed["data"]["hook_status"]["verified"] is True
     assert installed["data"]["hook_status"]["compatible_hook_source_count"] >= 7
-    verified = json_result("agent", "hook-config", "--verify", "--codex-home", str(codex_home), "--json")
+    verified = json_result("agent", "hook-config", "--verify", "--codex-home", str(codex_home), "--json", env=env)
     assert verified["data"]["hook_status"]["hook_source_count"] >= 7
     assert verified["data"]["hook_status"]["compatible_hook_source_count"] >= 7
+    assert verified["data"]["hook_status"]["missing_runtime_env_events"] == []
     assert verified["data"]["hook_status"]["verified"] is True
 
 

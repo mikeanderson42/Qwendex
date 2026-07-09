@@ -169,7 +169,10 @@ The gates enforce the current CLI policy boundary:
 Manual `agent hook ... --json` commands return the stable Qwendex diagnostic
 envelope. Managed Codex hook config uses `agent hook ... --codex-hook-output`
 so hook stdout contains only the raw Codex event schema accepted by the Codex
-hook parser.
+hook parser. Generated hook commands also carry the active Qwendex state DB,
+ledger DB, receipt root, status file, and root hints so hook subprocesses stay
+attached to the intended manager ledger even if the host drops exported
+`QWENDEX_*` state variables.
 
 Generate Codex-compatible managed hook wiring with:
 

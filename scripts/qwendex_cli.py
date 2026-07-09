@@ -187,6 +187,15 @@ READ_ONLY_AGENT_PROFILES = {"explorer", "verifier", "docs_researcher", "audit", 
 ROOT_ONLY_AGENT_TOOLS = {"spawn_agent", "close_agent", "wait_agent", "resume_agent", "agent_ledger_update_status"}
 WRITE_TOOL_NAMES = {"write", "edit", "apply_patch", "create_file", "delete_file", "move_file"}
 MANAGER_DECISION_ATTACH_WINDOW_MINUTES = 24 * 60
+MANAGED_HOOK_RUNTIME_ENV_KEYS = (
+    "CODEX_HOME",
+    "QWENDEX_STATE_DB",
+    "QWENDEX_RESULTS_ROOT",
+    "QWENDEX_LEDGER_DB",
+    "QWENDEX_CODEX_STATUS_FILE",
+    "QWENDEX_DEV_ROOT",
+    "QWENDEX_ROOT",
+)
 RELEASE_COMMAND_RE = re.compile(
     r"(^|\s)(npm|pnpm|yarn)\s+.*\bpublish\b|"
     r"(^|\s)cargo\s+publish\b|"
@@ -975,17 +984,38 @@ def estimator_config(config: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def qwendex_dev_paths_from_codex_home(env: Mapping[str, str] | None = None) -> dict[str, str]:
+    source = env or os.environ
+    raw_codex_home = str(source.get("CODEX_HOME") or "").strip()
+    if not raw_codex_home:
+        return {}
+    codex_home = Path(raw_codex_home).expanduser()
+    work_root = codex_home.parent
+    if codex_home.name != "codex_home" or work_root.name != ".qwendex-dev":
+        return {}
+    state_root = work_root / "state"
+    return {
+        "results_root": str(work_root / "results" / "qwendex"),
+        "ledger_db": str(state_root / "qwendex_ledger.sqlite"),
+        "state_db": str(state_root / "qwendex.sqlite"),
+    }
+
+
 def env_config(env: Mapping[str, str] | None = None) -> dict[str, Any]:
     source = env or os.environ
+    dev_paths = qwendex_dev_paths_from_codex_home(source)
     data: dict[str, Any] = {}
     if source.get("QWENDEX_DEFAULT_SEAT"):
         data["default_seat"] = source["QWENDEX_DEFAULT_SEAT"]
-    if source.get("QWENDEX_RESULTS_ROOT"):
-        data["receipts"] = {"dir": source["QWENDEX_RESULTS_ROOT"]}
-    if source.get("QWENDEX_LEDGER_DB"):
-        data.setdefault("receipts", {})["ledger"] = source["QWENDEX_LEDGER_DB"]
-    if source.get("QWENDEX_STATE_DB"):
-        data["state"] = {"db": source["QWENDEX_STATE_DB"]}
+    results_root = source.get("QWENDEX_RESULTS_ROOT") or dev_paths.get("results_root")
+    if results_root:
+        data["receipts"] = {"dir": results_root}
+    ledger_db = source.get("QWENDEX_LEDGER_DB") or dev_paths.get("ledger_db")
+    if ledger_db:
+        data.setdefault("receipts", {})["ledger"] = ledger_db
+    state_db = source.get("QWENDEX_STATE_DB") or dev_paths.get("state_db")
+    if state_db:
+        data["state"] = {"db": state_db}
     if source.get("QWENDEX_GUARD_PROFILE"):
         data["guard"] = {"profile": source["QWENDEX_GUARD_PROFILE"]}
     if source.get("QWENDEX_LEARNING_MODE"):
@@ -5459,15 +5489,58 @@ def codex_hook_output(event_name: str, hook_result: Mapping[str, Any]) -> dict[s
     return output
 
 
-def managed_agent_hook_config(command_base: str = "") -> dict[str, Any]:
+def managed_hook_runtime_env(
+    env: Mapping[str, str] | None = None,
+    *,
+    codex_home: Path | None = None,
+) -> dict[str, str]:
+    source = env or os.environ
+    codex_home_text = str(codex_home.expanduser()) if codex_home is not None else str(source.get("CODEX_HOME") or "")
+    dev_paths = qwendex_dev_paths_from_codex_home({**dict(source), "CODEX_HOME": codex_home_text})
+    work_root = Path(codex_home_text).expanduser().parent if codex_home_text else None
+    values: dict[str, str] = {}
+    if codex_home_text:
+        values["CODEX_HOME"] = codex_home_text
+    state_db = str(source.get("QWENDEX_STATE_DB") or dev_paths.get("state_db") or "").strip()
+    if state_db:
+        values["QWENDEX_STATE_DB"] = state_db
+    results_root = str(source.get("QWENDEX_RESULTS_ROOT") or dev_paths.get("results_root") or "").strip()
+    if results_root:
+        values["QWENDEX_RESULTS_ROOT"] = results_root
+    ledger_db = str(source.get("QWENDEX_LEDGER_DB") or dev_paths.get("ledger_db") or "").strip()
+    if ledger_db:
+        values["QWENDEX_LEDGER_DB"] = ledger_db
+    status_file = str(source.get("QWENDEX_CODEX_STATUS_FILE") or "").strip()
+    if not status_file and work_root is not None and work_root.name == ".qwendex-dev":
+        status_file = str(work_root / "codex_status.json")
+    if status_file:
+        values["QWENDEX_CODEX_STATUS_FILE"] = status_file
+    dev_root = str(source.get("QWENDEX_DEV_ROOT") or "").strip()
+    if not dev_root and work_root is not None and work_root.name == ".qwendex-dev":
+        dev_root = str(work_root.parent)
+    if dev_root:
+        values["QWENDEX_DEV_ROOT"] = dev_root
+    values["QWENDEX_ROOT"] = str(source.get("QWENDEX_ROOT") or ROOT)
+    return {key: values[key] for key in MANAGED_HOOK_RUNTIME_ENV_KEYS if values.get(key)}
+
+
+def shell_env_prefix(runtime_env: Mapping[str, str]) -> str:
+    if not runtime_env:
+        return ""
+    return "env " + " ".join(f"{key}={shlex.quote(str(value))}" for key, value in runtime_env.items())
+
+
+def managed_agent_hook_config(command_base: str = "", runtime_env: Mapping[str, str] | None = None) -> dict[str, Any]:
     base = str(command_base or ROOT / "scripts" / "qwendex").strip()
+    prefix = shell_env_prefix(runtime_env or {})
+    command_base_text = f"{prefix} {shlex.quote(base)}" if prefix else shlex.quote(base)
     hooks: dict[str, list[dict[str, Any]]] = {}
     for event_name, spec in MANAGED_AGENT_HOOKS.items():
         hooks[event_name] = [{
             "matcher": spec["matcher"],
             "hooks": [{
                 "type": "command",
-                "command": f"{base} agent hook {event_name} --codex-hook-output",
+                "command": f"{command_base_text} agent hook {event_name} --codex-hook-output",
                 "timeout": spec["timeout"],
             }],
         }]
@@ -5518,6 +5591,24 @@ def is_codex_compatible_agent_hook_command(command: str) -> bool:
     return is_qwendex_agent_hook_command(command) and "--codex-hook-output" in command
 
 
+def managed_hook_command_env(command: str) -> dict[str, str]:
+    try:
+        tokens = shlex.split(command, posix=True)
+    except ValueError:
+        return {}
+    if not tokens or tokens[0] != "env":
+        return {}
+    runtime_env: dict[str, str] = {}
+    for token in tokens[1:]:
+        if "=" not in token or token.startswith("-"):
+            break
+        key, value = token.split("=", 1)
+        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key):
+            break
+        runtime_env[key] = value
+    return runtime_env
+
+
 def hook_status_for_codex_home(
     codex_home: Path,
     *,
@@ -5563,12 +5654,32 @@ def hook_status_for_codex_home(
         for command in event_commands
         if is_codex_compatible_agent_hook_command(command)
     )
+    runtime_env_by_event = {
+        event: [managed_hook_command_env(command) for command in event_commands if is_codex_compatible_agent_hook_command(command)]
+        for event, event_commands in commands.items()
+    }
+    runtime_env_keys_by_event = {
+        event: sorted({key for runtime_env in envs for key in runtime_env})
+        for event, envs in runtime_env_by_event.items()
+        if envs
+    }
+    runtime_env_state_db_by_event = {
+        event: sorted({runtime_env["QWENDEX_STATE_DB"] for runtime_env in envs if runtime_env.get("QWENDEX_STATE_DB")})
+        for event, envs in runtime_env_by_event.items()
+        if envs
+    }
+    missing_runtime_env_events = sorted(
+        event
+        for event in managed_events
+        if not any(runtime_env.get("QWENDEX_STATE_DB") for runtime_env in runtime_env_by_event.get(event, []))
+    )
     configured = target.is_file() and hook_source_count > 0
     verified = (
         configured
         and compatible_hook_source_count > 0
         and not missing_events
         and not incompatible_events
+        and not missing_runtime_env_events
         and not parse_error
     )
     return {
@@ -5583,6 +5694,9 @@ def hook_status_for_codex_home(
         "managed_events": sorted(managed_events),
         "missing_events": missing_events,
         "incompatible_events": incompatible_events,
+        "missing_runtime_env_events": missing_runtime_env_events,
+        "runtime_env_keys_by_event": runtime_env_keys_by_event,
+        "runtime_env_state_db_by_event": runtime_env_state_db_by_event,
         "required_for_write": required_for_write,
         "override": override,
         "override_reason": override_reason or None,
@@ -6257,11 +6371,12 @@ def command_agent(args: argparse.Namespace, config: dict[str, Any]) -> dict[str,
             data={"agent_policy": agent_policy},
         )
     if action == "hook-config":
-        hook_payload = managed_agent_hook_config(command_base=getattr(args, "qwendex_command", ""))
         artifacts: list[str] = []
         codex_home = codex_home_from_env(os.environ)
         if getattr(args, "codex_home", ""):
             codex_home = Path(args.codex_home).expanduser()
+        runtime_env = managed_hook_runtime_env(codex_home=codex_home)
+        hook_payload = managed_agent_hook_config(command_base=getattr(args, "qwendex_command", ""), runtime_env=runtime_env)
         if getattr(args, "verify", False):
             status = hook_status_for_codex_home(codex_home)
             command_status = "pass" if status["verified"] else "blocked"
@@ -6273,7 +6388,10 @@ def command_agent(args: argparse.Namespace, config: dict[str, Any]) -> dict[str,
                     if status["verified"]
                     else "Qwendex managed agent hooks are missing or incomplete."
                 ),
-                errors=[] if status["verified"] else [f"missing managed hook events: {', '.join(status['missing_events']) or 'none detected'}"],
+                errors=[] if status["verified"] else [
+                    f"missing managed hook events: {', '.join(status['missing_events']) or 'none detected'}",
+                    f"missing runtime env events: {', '.join(status.get('missing_runtime_env_events', [])) or 'none detected'}",
+                ],
                 data={
                     "hook_status": status,
                     "hook_config": hook_payload,
