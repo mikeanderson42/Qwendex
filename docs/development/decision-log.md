@@ -109,13 +109,36 @@ artifact boundary.
 ## Managed Agent Hook Config
 
 Decision: Qwendex generates managed hook wiring through
-`scripts/qwendex agent hook-config` and writes it only to an explicit path with
-`--approve`. Existing files require `--force`. The hook commands call the same
-native `agent hook` evaluator used by tests and CLI smoke flows.
+`scripts/qwendex agent hook-config` and writes it only through an explicit
+operator action: either `--write ... --approve` for an arbitrary path or
+`--install --codex-home ...` for a Codex home. Existing files require `--force`.
+The hook commands call the same native `agent hook` evaluator used by tests and
+CLI smoke flows.
 
 Reason: hook files should be easy to install for hardened local setups, but
-runtime policy must remain authoritative and testable even if hooks are absent,
-disabled, or scoped to a different Codex home.
+runtime policy must remain authoritative and testable even if hooks are
+disabled or scoped to a different Codex home. Missing hooks in Manager Mode are
+now a launch-time block unless the operator sets an explicit unhooked override,
+which is recorded in the manager decision ledger.
+
+## Manager Preflight Session Contract
+
+Decision: normal `qdex` launches in Manager Mode must run
+`scripts/qwendex manager preflight` before launching Codex. Preflight writes a
+`manager_decision` ledger record and receipt with policy hash, hook status,
+local/cloud availability, prompt digest or interactive-unknown marker, selected
+route, routing reason, verifier requirement, validation plan, and STOP status.
+The `qdex` wrapper exports the manager session id, ledger id, and policy hash
+to Codex only after the preflight record exists. Manager Stop gates require that
+ledger and close either a managed-lane completion or a direct-work exception
+with validation evidence.
+
+Reason: Manager Mode is an execution contract, not only a selected label. The
+operator should not be able to start write-capable direct Codex work in Manager
+Mode without a recorded route decision, hook posture, verifier expectation, and
+finalization path. Interactive prompts can still start before the task text is
+known, but that path is explicitly recorded as
+`interactive_prompt_unknown_prelaunch`.
 
 ## Agent Team Planning
 

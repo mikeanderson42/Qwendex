@@ -80,6 +80,8 @@ def test_qwendex_parser_exposes_public_commands():
     assert parser.parse_args(["manager", "kaveman", "--toggle"]).action == "kaveman"
     assert parser.parse_args(["manager", "local", "--set", "off"]).action == "local"
     assert parser.parse_args(["manager", "estimate", "--prompt", "Fix a typo"]).action == "estimate"
+    assert parser.parse_args(["manager", "preflight", "--interactive-prompt-unknown", "--dry-run"]).action == "preflight"
+    assert parser.parse_args(["manager", "reconcile", "--pending-validation", "--dry-run"]).action == "reconcile"
     assert parser.parse_args(["manager", "repair", "--safe"]).action == "repair"
     assert parser.parse_args(["manager", "repair", "--safe"]).safe is True
     assert parser.parse_args(["--agent-use", "Manager", "agent", "policy"]).agent_use == "Manager"
@@ -91,6 +93,8 @@ def test_qwendex_parser_exposes_public_commands():
     assert parser.parse_args(["agent", "plan", "--prompt", "Ship it"]).action == "plan"
     assert parser.parse_args(["agent", "hook", "Stop", "--event-json", "{}"]).action == "hook"
     assert parser.parse_args(["agent", "hook-config"]).action == "hook-config"
+    assert parser.parse_args(["agent", "hook-config", "--install", "--codex-home", "/tmp/codex"]).install is True
+    assert parser.parse_args(["agent", "hook-config", "--verify", "--codex-home", "/tmp/codex"]).verify is True
     assert parser.parse_args(["agent", "locks"]).action == "locks"
     assert parser.parse_args(["codex-status", "--write", "/tmp/qwendex-status.json"]).command == "codex-status"
     assert parser.parse_args(["codex-patch", "preflight", "--codex-bin", "codex"]).command == "codex-patch"
@@ -446,9 +450,10 @@ def test_qwendex_dev_env_public_surface_is_visible_and_isolated():
     assert "qwendex-dev snapshot" in text
     assert "context snapshot/reminder/compact-plan" in text
     assert "At the start of substantial tasks" in text
-    assert "spawn bounded subagents early" in text
-    assert "disjoint write scopes" in text
+    assert "use manager planning/preflight first" in text
+    assert "write-surface separation" in text
     assert "treat subagent output as advisory" in text
+    assert "direct-work reason and validation path" in text
     assert "close spawned agents and matching Qwendex manager sessions" in text
     assert "cmd_verify" in text
     assert "cmd_bootstrap" in text
@@ -611,6 +616,129 @@ Path(os.environ["QWENDEX_FAKE_CODEX_CWD"]).write_text(os.getcwd(), encoding="utf
     assert dev_status["codex"]["hook_source_count"] == 0
     assert dev_status["codex"]["global_hook_source_count"] == 1
     assert "active dev CODEX_HOME has no hooks" in " ".join(dev_status["warnings"])
+
+
+def test_qdex_manager_preflight_blocks_and_exports_env_before_launch(tmp_path):
+    fake_home = tmp_path / "home"
+    dev_root = tmp_path / "qwendex-dev"
+    fake_bin = tmp_path / "bin"
+    fake_codex = fake_bin / "codex"
+    args_file = tmp_path / "qdex-codex-call.json"
+
+    fake_bin.mkdir()
+    fake_home.mkdir()
+    fake_codex.write_text(
+        """#!/usr/bin/env python3
+import json
+import os
+import sys
+from pathlib import Path
+
+if sys.argv[1:] == ["--version"]:
+    print("codex-cli 0.143.0")
+    raise SystemExit(0)
+
+Path(os.environ["QWENDEX_FAKE_CODEX_ARGS"]).write_text(json.dumps({
+    "args": sys.argv[1:],
+    "manager_session_id": os.environ.get("QWENDEX_MANAGER_SESSION_ID", ""),
+    "manager_ledger_id": os.environ.get("QWENDEX_MANAGER_LEDGER_ID", ""),
+    "manager_policy_hash": os.environ.get("QWENDEX_MANAGER_POLICY_HASH", ""),
+}), encoding="utf-8")
+""",
+        encoding="utf-8",
+    )
+    fake_codex.chmod(0o755)
+
+    env = {
+        **os.environ,
+        "HOME": str(fake_home),
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "QWENDEX_DEV_ROOT": str(dev_root),
+        "QWENDEX_DEV_SOURCE_ROOT": str(ROOT),
+        "QWENDEX_MAIN_CODEX_BIN": str(fake_codex),
+        "QWENDEX_DEV_CODEX_BIN": str(fake_codex),
+        "QWENDEX_FAKE_CODEX_ARGS": str(args_file),
+    }
+    for key in (
+        "CODEX_HOME",
+        "QWENDEX_AGENT_USE",
+        "CODEX_AGENT_USE",
+        "QWENDEX_MANAGER_ALLOW_UNHOOKED",
+        "QWENDEX_MANAGER_UNHOOKED_REASON",
+    ):
+        env.pop(key, None)
+    sync = subprocess.run(
+        [str(ROOT / "scripts" / "qwendex_dev_env"), "sync"],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=60,
+    )
+    assert sync.returncode == 0, sync.stderr or sync.stdout
+    qdex = fake_home / ".local" / "bin" / "qdex"
+    assert qdex.exists()
+
+    set_mode = subprocess.run(
+        [
+            "bash",
+            "-lc",
+            'source "$QWENDEX_DEV_ROOT/.qwendex-dev/env.sh"; "$QWENDEX_DEV_ROOT/scripts/qwendex" manager mode --set manager --json',
+        ],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=60,
+    )
+    assert set_mode.returncode == 0, set_mode.stderr or set_mode.stdout
+
+    blocked = subprocess.run(
+        [str(qdex), "--repo", str(ROOT)],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=60,
+    )
+    assert blocked.returncode != 0
+    assert "Qwendex Manager preflight: blocked" in blocked.stderr
+    assert "STOP_MANAGER_BLOCKED_UNHOOKED" in blocked.stderr
+    assert not args_file.exists()
+
+    env_override_blocked = subprocess.run(
+        [str(qdex), "--repo", str(ROOT)],
+        cwd=ROOT,
+        env={**env, "QWENDEX_AGENT_USE": "Heavy"},
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=60,
+    )
+    assert env_override_blocked.returncode != 0
+    assert "Qwendex Manager preflight: blocked" in env_override_blocked.stderr
+    assert "STOP_MANAGER_BLOCKED_UNHOOKED" in env_override_blocked.stderr
+    assert not args_file.exists()
+
+    launched = subprocess.run(
+        [str(qdex), "--repo", str(ROOT)],
+        cwd=ROOT,
+        env={**env, "QWENDEX_MANAGER_ALLOW_UNHOOKED": "1"},
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=60,
+    )
+    assert launched.returncode == 0, launched.stderr or launched.stdout
+    call = json.loads(args_file.read_text(encoding="utf-8"))
+    assert call["args"][:2] == ["--no-alt-screen", "--dangerously-bypass-approvals-and-sandbox"]
+    assert call["args"][call["args"].index("-C") + 1] == str(ROOT)
+    assert call["manager_session_id"].startswith("mgrsess_")
+    assert call["manager_ledger_id"].startswith("mgrldg_")
+    assert call["manager_policy_hash"]
 
 
 def test_qwendex_codex_status_tracks_manager_state_and_writes_surface_file(tmp_path):
@@ -1144,7 +1272,12 @@ def test_qwendex_manager_mode_toggle_cycles_full_duty_order(tmp_path):
 
 
 def test_qwendex_selected_manager_mode_drives_agent_policy_and_hooks(tmp_path):
-    env = {"QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite")}
+    env = {
+        "QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite"),
+        "QWENDEX_RESULTS_ROOT": str(tmp_path / "results"),
+        "CODEX_HOME": str(tmp_path / "codex_home"),
+        "QWENDEX_MANAGER_ALLOW_UNHOOKED": "1",
+    }
 
     selected = json_result("manager", "mode", "--set", "manager", "--json", env=env)
     policy = json_result("agent", "policy", "--json", env=env)
@@ -1173,6 +1306,15 @@ def test_qwendex_selected_manager_mode_drives_agent_policy_and_hooks(tmp_path):
         "--json",
         env=env,
     )
+    preflight = json_result(
+        "manager",
+        "preflight",
+        "--prompt",
+        "Use manager mode with subagents to prove selected manager mode gates finalization",
+        "--json",
+        env=env,
+    )
+    manager_env = {**env, **preflight["data"]["exports"]}
     blocked_stop_result = run_qwendex(
         "agent",
         "hook",
@@ -1180,7 +1322,7 @@ def test_qwendex_selected_manager_mode_drives_agent_policy_and_hooks(tmp_path):
         "--event-json",
         json.dumps({"last_assistant_message": "Done."}),
         "--json",
-        env=env,
+        env=manager_env,
     )
     blocked_stop = parse_json_result(blocked_stop_result)
 
@@ -1188,6 +1330,7 @@ def test_qwendex_selected_manager_mode_drives_agent_policy_and_hooks(tmp_path):
     assert blocked_stop["data"]["agent_policy"]["mode"] == "manager"
     assert blocked_stop["data"]["agent_policy"]["source"] == "manager-mode"
     assert blocked_stop["data"]["hook_result"]["event"] == "manager.stop_gate_continued"
+    assert blocked_stop["data"]["manager_decision"]["ledger_id"] == preflight["data"]["ledger_id"]
 
     off = json_result("manager", "mode", "--set", "off", "--json", env=env)
     spawn_result = run_qwendex(
@@ -1209,6 +1352,123 @@ def test_qwendex_selected_manager_mode_drives_agent_policy_and_hooks(tmp_path):
     override = json_result("agent", "policy", "--json", env={**env, "QWENDEX_AGENT_USE": "Heavy"})
     assert override["data"]["agent_policy"]["mode"] == "heavy"
     assert override["data"]["agent_policy"]["source"] == "qwendex-env"
+
+
+def test_qwendex_manager_stop_requires_preflight_ledger(tmp_path):
+    env = {"QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite")}
+
+    json_result("manager", "mode", "--set", "manager", "--json", env=env)
+    stop_result = run_qwendex(
+        "agent",
+        "hook",
+        "Stop",
+        "--event-json",
+        json.dumps({"last_assistant_message": "Done."}),
+        "--json",
+        env=env,
+    )
+    stop = parse_json_result(stop_result)
+
+    assert stop_result.returncode != 0
+    assert stop["data"]["hook_result"]["event"] == "manager.unattached"
+    assert stop["data"]["hook_result"]["stop_status"] == "STOP_MANAGER_UNATTACHED"
+
+
+def test_qwendex_manager_preflight_records_decision_ledger_and_hook_status(tmp_path):
+    env = {
+        "QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite"),
+        "QWENDEX_RESULTS_ROOT": str(tmp_path / "results"),
+        "CODEX_HOME": str(tmp_path / "codex_home"),
+        "QWENDEX_FORCE_LOCAL_QWEN_AVAILABLE": "0",
+    }
+
+    json_result("manager", "mode", "--set", "manager", "--json", env=env)
+    blocked_result = run_qwendex("manager", "preflight", "--interactive-prompt-unknown", "--dry-run", "--json", env=env)
+    blocked = parse_json_result(blocked_result)
+    assert blocked_result.returncode != 0
+    assert blocked["data"]["mode"] == "manager"
+    assert blocked["data"]["agent_use"] == "Manager"
+    assert blocked["data"]["policy_source"] == "manager-mode"
+    assert blocked["data"]["hook_status"]["hook_source_count"] == 0
+    assert blocked["data"]["routing_decision"]["selected_route"] == "blocked"
+    assert blocked["data"]["stop_status"] == "STOP_MANAGER_BLOCKED_UNHOOKED"
+
+    partial_codex_home = tmp_path / "partial_codex_home"
+    partial_codex_home.mkdir()
+    (partial_codex_home / "hooks.json").write_text(
+        json.dumps({
+            "hooks": {
+                "Stop": [
+                    {
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": "scripts/qwendex agent hook Stop --json",
+                            }
+                        ]
+                    }
+                ]
+            }
+        }),
+        encoding="utf-8",
+    )
+    partial_result = run_qwendex(
+        "manager",
+        "preflight",
+        "--interactive-prompt-unknown",
+        "--dry-run",
+        "--json",
+        env={**env, "CODEX_HOME": str(partial_codex_home)},
+    )
+    partial = parse_json_result(partial_result)
+    assert partial_result.returncode != 0
+    assert partial["data"]["hook_status"]["hook_source_count"] == 1
+    assert partial["data"]["hook_status"]["verified"] is False
+    assert "UserPromptSubmit" in partial["data"]["hook_status"]["missing_events"]
+    assert partial["data"]["routing_decision"]["selected_route"] == "blocked"
+    assert partial["data"]["stop_status"] == "STOP_MANAGER_BLOCKED_UNHOOKED"
+
+    installed = json_result("agent", "hook-config", "--install", "--codex-home", env["CODEX_HOME"], "--json", env=env)
+    assert installed["data"]["hook_status"]["verified"] is True
+
+    ready = json_result(
+        "manager",
+        "preflight",
+        "--prompt",
+        "Small edit with validation evidence",
+        "--json",
+        env={**env, "QWENDEX_MANAGER_ALLOW_UNHOOKED": "1"},
+    )
+    assert ready["data"]["ok"] is True
+    assert ready["data"]["hook_status"]["verified"] is True
+    assert ready["data"]["hook_status"]["override"] is False
+    assert ready["data"]["ledger_id"].startswith("mgrldg_")
+    assert ready["data"]["prompt"]["known"] is True
+    assert ready["data"]["prompt"]["prompt_digest"]
+    assert ready["data"]["prompt"]["prompt_summary"] == "Small edit with validation evidence"
+    assert ready["data"]["manager_estimate"]["created"] is True
+    assert ready["data"]["routing_decision"]["selected_route"] in {"direct_single_writer", "manager_subagents"}
+    assert ready["data"]["routing_decision"]["verifier_required"] is True
+    assert ready["data"]["routing_decision"]["validation_plan"]
+    receipt = Path(ready["data"]["receipt_paths"][0])
+    assert receipt.exists()
+
+    decision = json_result("manager", "decision", "--agent-id", ready["data"]["ledger_id"], "--json", env=env)
+    assert decision["data"]["manager_decision"]["record_type"] == "manager_decision"
+    assert decision["data"]["manager_decision"]["ledger_id"] == ready["data"]["ledger_id"]
+
+    env_override = json_result(
+        "manager",
+        "preflight",
+        "--interactive-prompt-unknown",
+        "--dry-run",
+        "--json",
+        env={**env, "QWENDEX_AGENT_USE": "Heavy"},
+    )
+    assert env_override["data"]["manager_required"] is True
+    assert env_override["data"]["selected_manager_mode"] == "manager"
+    assert env_override["data"]["effective_agent_mode"] == "heavy"
+    assert env_override["data"]["policy_source"] == "qwendex-env"
 
 
 def test_qwendex_manager_local_toggle_controls_local_lane_eligibility(tmp_path):
@@ -1481,7 +1741,12 @@ def test_qwendex_agent_metrics_track_ledger_and_artifacts(tmp_path):
 
 
 def test_qwendex_agent_hooks_enforce_final_contract_and_manager_stop_gate(tmp_path):
-    env = {"QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite")}
+    env = {
+        "QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite"),
+        "QWENDEX_RESULTS_ROOT": str(tmp_path / "results"),
+        "CODEX_HOME": str(tmp_path / "codex_home"),
+        "QWENDEX_MANAGER_ALLOW_UNHOOKED": "1",
+    }
 
     prompt_hook = json_result(
         "--agent-use",
@@ -1507,6 +1772,15 @@ def test_qwendex_agent_hooks_enforce_final_contract_and_manager_stop_gate(tmp_pa
         "--json",
         env=env,
     )
+    preflight = json_result(
+        "manager",
+        "preflight",
+        "--prompt",
+        "Use manager mode with subagents and verifier evidence for this edit",
+        "--json",
+        env=env,
+    )
+    manager_env = {**env, **preflight["data"]["exports"]}
     blocked_stop_result = run_qwendex(
         "--agent-use",
         "Manager",
@@ -1516,7 +1790,7 @@ def test_qwendex_agent_hooks_enforce_final_contract_and_manager_stop_gate(tmp_pa
         "--event-json",
         json.dumps({"last_assistant_message": "Done.", "edit_happened": True}),
         "--json",
-        env=env,
+        env=manager_env,
     )
     missing_contract_result = run_qwendex(
         "agent",
@@ -1548,7 +1822,7 @@ def test_qwendex_agent_hooks_enforce_final_contract_and_manager_stop_gate(tmp_pa
         "--event-json",
         json.dumps({"last_assistant_message": "Done.", "edit_happened": True}),
         "--json",
-        env=env,
+        env=manager_env,
     )
     passed_stop = json_result(
         "--agent-use",
@@ -1559,7 +1833,7 @@ def test_qwendex_agent_hooks_enforce_final_contract_and_manager_stop_gate(tmp_pa
         "--event-json",
         json.dumps({"last_assistant_message": "Agent outcomes: verifier passed.\nValidation: pytest.\nRisks: none.", "edit_happened": True}),
         "--json",
-        env=env,
+        env=manager_env,
     )
 
     blocked_stop = parse_json_result(blocked_stop_result)
@@ -1571,6 +1845,7 @@ def test_qwendex_agent_hooks_enforce_final_contract_and_manager_stop_gate(tmp_pa
     assert blocked_stop_result.returncode != 0
     assert blocked_stop["data"]["hook_result"]["event"] == "manager.stop_gate_continued"
     assert "agent-hook-verifier:active" in blocked_stop["data"]["hook_result"]["reason"]
+    assert blocked_stop["data"]["manager_decision"]["ledger_id"] == preflight["data"]["ledger_id"]
     assert missing_contract_result.returncode != 0
     assert missing_contract["data"]["hook_result"]["event"] == "agent.final_contract_missing"
     assert completed["data"]["hook_result"]["event"] == "agent.completed"
@@ -1588,10 +1863,84 @@ def test_qwendex_agent_hooks_enforce_final_contract_and_manager_stop_gate(tmp_pa
     assert missing_summary_result.returncode != 0
     assert missing_summary["data"]["hook_result"]["event"] == "manager.final_contract_missing"
     assert passed_stop["data"]["hook_result"]["event"] == "manager.finalized"
+    assert passed_stop["data"]["manager_decision"]["stop_status"] == "STOP_MANAGER_CLOSED"
+
+
+def test_qwendex_manager_direct_work_exception_requires_validation_evidence(tmp_path):
+    env = {
+        "QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite"),
+        "QWENDEX_RESULTS_ROOT": str(tmp_path / "results"),
+        "CODEX_HOME": str(tmp_path / "codex_home"),
+        "QWENDEX_MANAGER_ALLOW_UNHOOKED": "1",
+    }
+
+    json_result("manager", "mode", "--set", "manager", "--json", env=env)
+    preflight = json_result("manager", "preflight", "--interactive-prompt-unknown", "--json", env=env)
+    manager_env = {**env, **preflight["data"]["exports"]}
+    assert preflight["data"]["routing_decision"]["selected_route"] == "direct_single_writer"
+    assert preflight["data"]["routing_decision"]["direct_work_exception"] is True
+
+    missing_validation_result = run_qwendex(
+        "agent",
+        "hook",
+        "Stop",
+        "--event-json",
+        json.dumps({
+            "last_assistant_message": "Agent outcomes: direct writer.\nRisks: none.",
+            "edit_happened": True,
+            "dirty_worktree_classification": "in-scope",
+        }),
+        "--json",
+        env=manager_env,
+    )
+    missing_validation = parse_json_result(missing_validation_result)
+    assert missing_validation_result.returncode != 0
+    assert missing_validation["data"]["hook_result"]["event"] == "manager.validation_pending"
+    assert missing_validation["data"]["hook_result"]["stop_status"] == "STOP_MANAGER_VALIDATION_PENDING"
+
+    negative_validation_result = run_qwendex(
+        "agent",
+        "hook",
+        "Stop",
+        "--event-json",
+        json.dumps({
+            "last_assistant_message": "Agent outcomes: direct writer.\nValidation: not run.\nDirty: in-scope docs only.\nRisks: none.",
+            "edit_happened": True,
+            "dirty_worktree_classification": "in-scope",
+        }),
+        "--json",
+        env=manager_env,
+    )
+    negative_validation = parse_json_result(negative_validation_result)
+    assert negative_validation_result.returncode != 0
+    assert negative_validation["data"]["hook_result"]["event"] == "manager.validation_pending"
+    assert negative_validation["data"]["hook_result"]["stop_status"] == "STOP_MANAGER_VALIDATION_PENDING"
+
+    closed = json_result(
+        "agent",
+        "hook",
+        "Stop",
+        "--event-json",
+        json.dumps({
+            "last_assistant_message": "Agent outcomes: direct writer.\nValidation: pytest.\nDirty: in-scope docs only.\nRisks: none.",
+            "edit_happened": True,
+            "dirty_worktree_classification": "in-scope",
+            "validation_evidence": ["pytest"],
+        }),
+        "--json",
+        env=manager_env,
+    )
+    assert closed["data"]["hook_result"]["event"] == "manager.finalized"
+    assert closed["data"]["manager_decision"]["final_status"] == "closed"
+    assert closed["data"]["manager_decision"]["stop_status"] == "STOP_MANAGER_CLOSED"
+    receipt_payload = json.loads(Path(closed["data"]["manager_decision"]["receipt_paths"][0]).read_text(encoding="utf-8"))
+    assert receipt_payload["stop_status"] == "STOP_MANAGER_CLOSED"
+    assert receipt_payload["routing_decision"]["direct_work_exception"] is True
 
 
 def test_qwendex_agent_hook_config_generation_and_write_gate(tmp_path):
     target = tmp_path / "hooks.json"
+    codex_home = tmp_path / "codex_home"
 
     rendered = json_result("agent", "hook-config", "--qwendex-command", "scripts/qwendex", "--json")
     hooks = rendered["data"]["hook_config"]["hooks"]
@@ -1623,6 +1972,18 @@ def test_qwendex_agent_hook_config_generation_and_write_gate(tmp_path):
     overwrite = parse_json_result(overwrite_result)
     assert overwrite_result.returncode != 0
     assert overwrite["status"] == "blocked"
+
+    verify_missing_result = run_qwendex("agent", "hook-config", "--verify", "--codex-home", str(codex_home), "--json")
+    verify_missing = parse_json_result(verify_missing_result)
+    assert verify_missing_result.returncode != 0
+    assert verify_missing["data"]["hook_status"]["hook_source_count"] == 0
+
+    installed = json_result("agent", "hook-config", "--install", "--codex-home", str(codex_home), "--json")
+    assert installed["data"]["operator_action"] == "install"
+    assert installed["data"]["hook_status"]["verified"] is True
+    verified = json_result("agent", "hook-config", "--verify", "--codex-home", str(codex_home), "--json")
+    assert verified["data"]["hook_status"]["hook_source_count"] >= 7
+    assert verified["data"]["hook_status"]["verified"] is True
 
 
 def test_qwendex_agent_pre_tool_hook_denies_unsafe_actions(tmp_path):

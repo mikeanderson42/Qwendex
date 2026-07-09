@@ -57,12 +57,13 @@ request, re-run Qwendex posture checks, inspect existing diffs/state before
 editing, and use `qwendex-dev snapshot` plus `scripts/qwendex context
 snapshot|reminder|compact-plan` at phase boundaries or before manual
 compaction. Manager Mode sessions must check Agent Manager/Kaveman/Local state
-at the start of substantial tasks, spawn bounded subagents early for
-independent non-blocking read, review, docs, or verification lanes, keep
-critical-path implementation local, use disjoint write scopes and explicit stop
-conditions, treat subagent output as advisory until integrated and verified,
-and close both spawned agents and matching Qwendex manager sessions after
-integration.
+at the start of substantial tasks and use manager planning/preflight first.
+Spawn bounded subagents only when current tool policy, task shape, and
+write-surface separation make delegation safe. Keep critical-path
+implementation local, avoid duplicate/conflicting writes, treat subagent output
+as advisory until integrated and verified, record or state the direct-work
+reason and validation path when subagents are not used, and close both spawned
+agents and matching Qwendex manager sessions after integration.
 
 The dev environment exposes these wrappers in `~/qwendex-dev/bin`:
 

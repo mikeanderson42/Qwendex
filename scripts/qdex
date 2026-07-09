@@ -1,0 +1,230 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+QWENDEX_DEV_ROOT="${QWENDEX_DEV_ROOT:-$HOME/qwendex-dev}"
+QWENDEX_ENV="$QWENDEX_DEV_ROOT/.qwendex-dev/env.sh"
+QWENDEX_YOLO_FLAG="${QWENDEX_YOLO_FLAG:---dangerously-bypass-approvals-and-sandbox}"
+caller_codex_home="${CODEX_HOME:-}"
+
+if [[ ! -f "$QWENDEX_ENV" ]]; then
+  printf 'qdex: missing Qwendex env: %s\n' "$QWENDEX_ENV" >&2
+  printf 'qdex: run %s/scripts/qwendex_dev_env sync first.\n' "$QWENDEX_DEV_ROOT" >&2
+  exit 127
+fi
+
+# shellcheck disable=SC1090
+source "$QWENDEX_ENV"
+if [[ -n "$caller_codex_home" ]]; then
+  export CODEX_HOME="$caller_codex_home"
+fi
+
+manager_preflight_dry_run=0
+json_output=0
+target_repo=""
+codex_args=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --manager-preflight-dry-run)
+      manager_preflight_dry_run=1
+      shift
+      ;;
+    --json)
+      json_output=1
+      shift
+      ;;
+    --repo)
+      shift
+      if [[ $# -eq 0 ]]; then
+        printf 'qdex: --repo requires a path\n' >&2
+        exit 2
+      fi
+      target_repo="$1"
+      shift
+      ;;
+    *)
+      if [[ -z "$target_repo" && "${1:0:1}" != "-" && -d "$1" ]]; then
+        target_repo="$1"
+        shift
+      else
+        codex_args+=("$1")
+        shift
+      fi
+      ;;
+  esac
+done
+
+if [[ -z "$target_repo" ]]; then
+  if git -C "$PWD" rev-parse --show-toplevel >/dev/null 2>&1; then
+    target_repo="$(git -C "$PWD" rev-parse --show-toplevel)"
+  else
+    target_repo="$QWENDEX_DEV_ROOT"
+  fi
+fi
+
+target_repo="$(cd "$target_repo" && pwd)"
+
+if [[ ! -x "$QWENDEX_DEV_ROOT/bin/codex" ]]; then
+  printf 'qdex: missing Qwendex Codex wrapper: %s/bin/codex\n' "$QWENDEX_DEV_ROOT" >&2
+  printf 'qdex: run qwendex-dev doctor from a shell that has sourced %s.\n' "$QWENDEX_ENV" >&2
+  exit 127
+fi
+
+"$QWENDEX_DEV_ROOT/scripts/qwendex" codex-status \
+  --write "$QWENDEX_CODEX_STATUS_FILE" \
+  --json > "$QWENDEX_META_ROOT/codex_status_write.json"
+
+mapfile -t qwendex_status_fields < <(python3 - "$QWENDEX_META_ROOT/codex_status_write.json" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    payload = json.load(handle)
+data = payload.get("data", {})
+print(data.get("agent_use", ""))
+print("1" if data.get("manager_preflight_required") else "0")
+PY
+)
+agent_use="${qwendex_status_fields[0]:-}"
+manager_preflight_required="${qwendex_status_fields[1]:-0}"
+
+cmd=(
+  "$QWENDEX_DEV_ROOT/bin/codex"
+  --no-alt-screen
+  "$QWENDEX_YOLO_FLAG"
+  -C "$target_repo"
+)
+
+preflight_file="$QWENDEX_META_ROOT/manager_preflight.json"
+
+if [[ "${QWENDEX_QDEX_DRY_RUN:-0}" == "1" ]]; then
+  manager_preflight_dry_run=1
+fi
+
+if [[ "$manager_preflight_required" == "1" ]]; then
+  preflight_rc=0
+  preflight_args=(manager preflight --interactive-prompt-unknown --json)
+  if [[ "$manager_preflight_dry_run" == "1" ]]; then
+    preflight_args+=(--dry-run)
+  fi
+  QWENDEX_MANAGER_TARGET_REPO="$target_repo" \
+    "$QWENDEX_DEV_ROOT/scripts/qwendex" "${preflight_args[@]}" > "$preflight_file" || preflight_rc=$?
+
+  if [[ "$manager_preflight_dry_run" == "1" || "${QWENDEX_QDEX_DRY_RUN:-0}" == "1" ]]; then
+    if [[ "$json_output" == "1" ]]; then
+      python3 - "$preflight_file" "$target_repo" "${cmd[@]}" "${codex_args[@]}" <<'PY'
+import json
+import sys
+preflight_path = sys.argv[1]
+target_repo = sys.argv[2]
+command = sys.argv[3:]
+with open(preflight_path, encoding="utf-8") as handle:
+    preflight = json.load(handle)
+print(json.dumps({
+    "schema_version": "qwendex.qdex.dry_run.v1",
+    "target_repo": target_repo,
+    "command": command,
+    "manager_preflight": preflight,
+}, indent=2, sort_keys=True))
+PY
+    else
+      python3 - "$preflight_file" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    payload = json.load(handle)
+data = payload.get("data", {})
+route = data.get("routing_decision", {})
+hook = data.get("hook_status", {})
+print(f"Qwendex Manager preflight: {'ready' if data.get('ok') else 'blocked'}")
+print(f"ledger: {data.get('ledger_id', '')}")
+print(f"route: {route.get('selected_route', '')}")
+print(f"hooks: {'override' if hook.get('override') else 'verified' if hook.get('verified') else 'missing'}")
+print(f"verifier: {'required' if route.get('verifier_required') else 'not_required'}")
+print(f"stop: {data.get('stop_status', '')}")
+PY
+    fi
+    exit 0
+  fi
+
+  if ! python3 - "$preflight_file" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    payload = json.load(handle)
+sys.exit(0 if payload.get("data", {}).get("ok") else 1)
+PY
+  then
+    python3 - "$preflight_file" >&2 <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    payload = json.load(handle)
+data = payload.get("data", {})
+hook = data.get("hook_status", {})
+print("Qwendex Manager preflight: blocked")
+print(f"reason: {data.get('routing_decision', {}).get('routing_reason', '')}")
+print(f"install: {hook.get('install_command', '')}")
+print(f"verify: {hook.get('verify_command', '')}")
+print(f"stop: {data.get('stop_status', '')}")
+PY
+    exit "${preflight_rc:-1}"
+  fi
+
+  eval "$(python3 - "$preflight_file" <<'PY'
+import json
+import shlex
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    payload = json.load(handle)
+exports = payload.get("data", {}).get("exports", {})
+for key, value in exports.items():
+    print(f"export {key}={shlex.quote(str(value))}")
+PY
+)"
+
+  python3 - "$preflight_file" >&2 <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    payload = json.load(handle)
+data = payload.get("data", {})
+route = data.get("routing_decision", {})
+hook = data.get("hook_status", {})
+print("Qwendex Manager preflight: ready")
+print(f"ledger: {data.get('ledger_id', '')}")
+print(f"route: {route.get('selected_route', '')}")
+print(f"hooks: {'override' if hook.get('override') else 'verified' if hook.get('verified') else 'missing'}")
+print(f"verifier: {'required' if route.get('verifier_required') else 'not_required'}")
+PY
+elif [[ "$manager_preflight_dry_run" == "1" || "${QWENDEX_QDEX_DRY_RUN:-0}" == "1" ]]; then
+  if [[ "$json_output" == "1" ]]; then
+    python3 - "$QWENDEX_META_ROOT/codex_status_write.json" "$target_repo" "${cmd[@]}" "${codex_args[@]}" <<'PY'
+import json
+import sys
+status_path = sys.argv[1]
+target_repo = sys.argv[2]
+command = sys.argv[3:]
+with open(status_path, encoding="utf-8") as handle:
+    codex_status = json.load(handle)
+print(json.dumps({
+    "schema_version": "qwendex.qdex.dry_run.v1",
+    "target_repo": target_repo,
+    "command": command,
+    "manager_preflight": {"skipped": True, "reason": "manager preflight is not required by selected or effective mode"},
+    "codex_status": codex_status,
+}, indent=2, sort_keys=True))
+PY
+  else
+    printf 'QWENDEX_DEV_ROOT=%s\n' "$QWENDEX_DEV_ROOT"
+    printf 'CODEX_HOME=%s\n' "$CODEX_HOME"
+    printf 'QWENDEX_CODEX_STATUS_FILE=%s\n' "$QWENDEX_CODEX_STATUS_FILE"
+    printf 'target_repo=%s\n' "$target_repo"
+    printf 'command:'
+    printf ' %q' "${cmd[@]}" "${codex_args[@]}"
+    printf '\n'
+  fi
+  exit 0
+fi
+
+cd "$target_repo"
+exec "${cmd[@]}" "${codex_args[@]}"

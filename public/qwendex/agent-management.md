@@ -75,6 +75,28 @@ The canonical state source is the SQLite DB configured by `state.db` or
 `scripts/qwendex manager assign`, `heartbeat`, `close`, `close-stale`, and
 `repair --safe`; `agent` commands read or update the same rows.
 
+## Manager Decision Ledger
+
+Normal `qdex` launches in Manager Mode run `scripts/qwendex manager preflight`
+before Codex starts. The preflight creates a `manager_decision` record separate
+from subagent sessions. It stores the policy hash, hook status, local/cloud
+availability, prompt digest or `interactive_prompt_unknown_prelaunch`, selected
+route, routing reason, direct-work exception flag, verifier requirement,
+validation plan, receipt paths, and STOP status.
+
+Inspect the latest decision or a specific ledger:
+
+```bash
+scripts/qwendex manager preflight --interactive-prompt-unknown --dry-run --json
+scripts/qwendex manager decision --json
+scripts/qwendex manager decision --agent-id <ledger-id> --json
+```
+
+`direct_single_writer` is valid only when a reason, hook status or explicit
+override, verifier expectation, validation evidence, and final closeout are
+recorded. `manager_subagents` still requires bounded lane evidence and parent
+review.
+
 ## Write Safety
 
 The first release uses a conservative single-writer strategy for the base
@@ -136,9 +158,10 @@ The gates enforce the current CLI policy boundary:
 - prompt hooks inject the active mode contract
 - subagent-start hooks inject the worker execution and final-report contract
 - subagent-stop hooks require `FINAL_REPORT`, `BLOCKED`, or `FAILED`
-- Manager stop hooks block unresolved required agents, missing verifier
-  evidence after edits, or final messages that omit agent outcomes,
-  validation, and risks
+- Manager stop hooks require a preflight decision ledger, block unresolved
+  required agents, missing verifier evidence after edits, missing direct-work
+  validation evidence, or final messages that omit agent outcomes, validation,
+  and risks
 - pre-tool hooks deny recursive child `spawn_agent`, writes from read-only
   profiles, conflicting file locks, and release/publish commands without
   explicit release approval
@@ -148,12 +171,17 @@ Generate Codex-compatible managed hook wiring with:
 ```bash
 scripts/qwendex agent hook-config --json
 scripts/qwendex agent hook-config --write .codex/hooks.json --approve --json
+scripts/qwendex agent hook-config --install --codex-home "$CODEX_HOME" --json
+scripts/qwendex agent hook-config --verify --codex-home "$CODEX_HOME" --json
 ```
 
 Writes are approval-gated and refuse to overwrite an existing file unless
 `--force` is supplied. The generated commands invoke the same native gate
 evaluator; hook files reinforce the runtime policy but are not the only
-enforcement path.
+enforcement path. Manager Mode launches block when no verified managed hook
+config is detected. Missing or partial hook configs are treated as incomplete
+unless `QWENDEX_MANAGER_ALLOW_UNHOOKED=1` is set; that override is recorded in
+the manager decision ledger only when verified hooks are not already present.
 
 ## Profiles And Team
 
