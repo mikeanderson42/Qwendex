@@ -202,6 +202,14 @@ RELEASE_COMMAND_RE = re.compile(
     r"(^|\s)gh\s+release\s+create\b|"
     r"(^|\s)git\s+push\s+(--tags|origin\s+(main|master))\b"
 )
+RELEASE_APPROVAL_ENV = "QWENDEX_RELEASE_APPROVED"
+GH_RELEASE_MUTATIONS = {"create", "upload", "edit", "delete"}
+GH_API_MUTATION_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+GH_API_BODY_FLAGS = {"-f", "--field", "-F", "--raw-field", "--input"}
+PYTHON_RELEASE_COMMANDS = {"poetry", "uv", "hatch"}
+ENV_OPTIONS_WITH_VALUE = {"-u", "--unset", "-C", "--chdir", "-a", "--argv0"}
+ENV_LONG_OPTIONS_WITH_VALUE = {"--unset", "--chdir", "--argv0"}
+ENV_SPLIT_STRING_OPTIONS = {"-S", "--split-string"}
 DEFAULT_AGENT_PROFILES: dict[str, dict[str, Any]] = {
     "explorer": {
         "name": "explorer",
@@ -5123,6 +5131,221 @@ def event_is_write_attempt(tool_lower: str, command: str) -> bool:
     )
 
 
+def command_tokens(command: str) -> list[str]:
+    try:
+        return shlex.split(command, posix=True)
+    except ValueError:
+        return []
+
+
+def token_is_env_assignment(token: str, name: str = RELEASE_APPROVAL_ENV) -> bool:
+    if not token.startswith(f"{name}="):
+        return False
+    return env_flag(token.split("=", 1)[1].rstrip(";")) is True
+
+
+def shell_assignment_name(token: str) -> str:
+    match = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)=", token)
+    return match.group(1) if match else ""
+
+
+def env_option_consumes_next(token: str) -> bool:
+    return token in ENV_OPTIONS_WITH_VALUE
+
+
+def env_option_has_inline_value(token: str) -> bool:
+    if any(token.startswith(f"{option}=") for option in ENV_LONG_OPTIONS_WITH_VALUE):
+        return True
+    return any(token.startswith(option) and token != option for option in {"-u", "-C", "-a"})
+
+
+def env_split_string_value(tokens: list[str]) -> str:
+    index = 1
+    while index < len(tokens):
+        token = tokens[index]
+        if token == "--":
+            return ""
+        if token in ENV_SPLIT_STRING_OPTIONS:
+            return tokens[index + 1] if index + 1 < len(tokens) else ""
+        if token.startswith("--split-string="):
+            return token.split("=", 1)[1]
+        if token.startswith("-S") and token != "-S":
+            return token[2:].lstrip("=")
+        if env_option_consumes_next(token):
+            index += 2
+            continue
+        if env_option_has_inline_value(token) or token.startswith("-") or shell_assignment_name(token):
+            index += 1
+            continue
+        return ""
+    return ""
+
+
+def env_split_string_tokens(tokens: list[str]) -> list[str]:
+    value = env_split_string_value(tokens)
+    return command_tokens(value) if value else []
+
+
+def env_prefix_end(tokens: list[str]) -> int:
+    index = 1
+    while index < len(tokens):
+        token = tokens[index]
+        if token == "--":
+            return index + 1
+        if token in ENV_SPLIT_STRING_OPTIONS:
+            return len(tokens)
+        if token.startswith("--split-string=") or (token.startswith("-S") and token != "-S"):
+            return index + 1
+        if env_option_consumes_next(token):
+            index += 2
+            continue
+        if env_option_has_inline_value(token):
+            index += 1
+            continue
+        if token.startswith("-"):
+            index += 1
+            continue
+        if shell_assignment_name(token):
+            index += 1
+            continue
+        return index
+    return index
+
+
+def segment_prefix_has_release_approval(tokens: list[str]) -> bool:
+    if not tokens:
+        return False
+    if tokens[0] == "env":
+        split_tokens = env_split_string_tokens(tokens)
+        if split_tokens and segment_prefix_has_release_approval(split_tokens):
+            return True
+        for token in tokens[1:env_prefix_end(tokens)]:
+            if token_is_env_assignment(token):
+                return True
+        return False
+    for token in tokens:
+        if not shell_assignment_name(token):
+            return False
+        if token_is_env_assignment(token):
+            return True
+    return False
+
+
+def segment_exports_release_approval(tokens: list[str]) -> bool:
+    return bool(tokens and tokens[0] == "export" and any(token_is_env_assignment(token) for token in tokens[1:]))
+
+
+def strip_command_prefixes(tokens: list[str]) -> list[str]:
+    remaining = list(tokens)
+    while remaining:
+        token = remaining[0]
+        if token == "env":
+            split_tokens = env_split_string_tokens(remaining)
+            remaining = split_tokens if split_tokens else remaining[env_prefix_end(remaining):]
+            continue
+        if shell_assignment_name(token) and not token.startswith("-"):
+            remaining = remaining[1:]
+            continue
+        break
+    return remaining
+
+
+def command_segments(command: str) -> list[list[str]]:
+    segments: list[list[str]] = []
+    for raw_segment in re.split(r"\s*(?:;|&&|\|\|)\s*", command):
+        tokens = strip_command_prefixes(command_tokens(raw_segment))
+        if tokens and tokens[0] == "export":
+            continue
+        if tokens:
+            segments.append(tokens)
+    return segments
+
+
+def command_raw_segments(command: str) -> list[list[str]]:
+    return [tokens for raw_segment in re.split(r"\s*(?:;|&&|\|\|)\s*", command) if (tokens := command_tokens(raw_segment))]
+
+
+def gh_api_release_mutation(tokens: list[str]) -> bool:
+    if len(tokens) < 3 or tokens[0] != "gh" or tokens[1] != "api":
+        return False
+    has_release_endpoint = any("/releases" in token or token == "releases" for token in tokens[2:] if not token.startswith("-"))
+    if not has_release_endpoint:
+        return False
+    method = ""
+    for index, token in enumerate(tokens[2:], start=2):
+        if token in {"-X", "--method"} and index + 1 < len(tokens):
+            method = tokens[index + 1].upper()
+        elif token.startswith("--method="):
+            method = token.split("=", 1)[1].upper()
+    if method in GH_API_MUTATION_METHODS:
+        return True
+    if method == "GET":
+        return False
+    return any(token in GH_API_BODY_FLAGS or token.startswith(("-f=", "--field=", "-F=", "--raw-field=", "--input=")) for token in tokens[2:])
+
+
+def git_push_release_mutation(tokens: list[str]) -> bool:
+    if len(tokens) < 3 or tokens[0] != "git" or tokens[1] != "push":
+        return False
+    args = tokens[2:]
+    if "--tags" in args or "--follow-tags" in args:
+        return True
+    refs = [arg for arg in args if not arg.startswith("-")]
+    if len(refs) >= 2 and refs[0] == "origin" and refs[1] in {"main", "master"}:
+        return True
+    return any(
+        ref.startswith("refs/tags/")
+        or ":refs/tags/" in ref
+        or re.match(r"^v\d+\.\d+\.\d+(?:[-+][A-Za-z0-9._-]+)?$", ref)
+        for ref in refs[1:]
+    )
+
+
+def segment_is_release_mutation(tokens: list[str]) -> bool:
+    if len(tokens) >= 2 and tokens[0] in {"npm", "pnpm", "yarn"} and "publish" in tokens[1:]:
+        return True
+    if len(tokens) >= 2 and tokens[0] == "cargo" and tokens[1] == "publish":
+        return True
+    if len(tokens) >= 2 and tokens[0] in PYTHON_RELEASE_COMMANDS and tokens[1] == "publish":
+        return True
+    if len(tokens) >= 2 and tokens[0] == "twine" and tokens[1] == "upload":
+        return True
+    if len(tokens) >= 4 and tokens[0] == "python" and tokens[1:4] == ["-m", "twine", "upload"]:
+        return True
+    if len(tokens) >= 4 and tokens[0] == "python3" and tokens[1:4] == ["-m", "twine", "upload"]:
+        return True
+    if len(tokens) >= 3 and tokens[0] == "gh" and tokens[1] == "release" and tokens[2] in GH_RELEASE_MUTATIONS:
+        return True
+    return bool(gh_api_release_mutation(tokens) or git_push_release_mutation(tokens))
+
+
+def command_is_release_mutation(command: str) -> bool:
+    return any(segment_is_release_mutation(tokens) for tokens in command_segments(command)) or bool(RELEASE_COMMAND_RE.search(command))
+
+
+def command_has_unapproved_release_mutation(command: str) -> bool:
+    exported_approval = False
+    saw_release = False
+    for raw_tokens in command_raw_segments(command):
+        if segment_exports_release_approval(raw_tokens):
+            exported_approval = True
+            continue
+        tokens = strip_command_prefixes(raw_tokens)
+        if not tokens or tokens[0] == "export":
+            continue
+        if segment_is_release_mutation(tokens):
+            saw_release = True
+            if not (exported_approval or segment_prefix_has_release_approval(raw_tokens)):
+                return True
+    return not saw_release and bool(RELEASE_COMMAND_RE.search(command))
+
+
+def release_command_approved(event: Mapping[str, Any], command: str) -> bool:
+    if bool(event.get("release_approved")) or env_flag(os.environ.get(RELEASE_APPROVAL_ENV)) is True:
+        return True
+    return command_is_release_mutation(command) and not command_has_unapproved_release_mutation(command)
+
+
 def pre_tool_gate(config: Mapping[str, Any], event: Mapping[str, Any], agent_policy: Mapping[str, Any]) -> dict[str, Any]:
     tool = event_tool_name(event)
     tool_lower = tool.lower()
@@ -5143,14 +5366,12 @@ def pre_tool_gate(config: Mapping[str, Any], event: Mapping[str, Any], agent_pol
             "event": "agent.write_rejected",
             "reason": f"Read-only profile {profile} cannot write files.",
         }
-    if RELEASE_COMMAND_RE.search(command):
-        approved = bool(event.get("release_approved")) or env_flag(os.environ.get("QWENDEX_RELEASE_APPROVED")) is True
-        if not approved:
-            return {
-                "decision": "block",
-                "event": "agent.release_command_rejected",
-                "reason": "Release/publish commands require an explicit release gate approval.",
-            }
+    if command_is_release_mutation(command) and not release_command_approved(event, command):
+        return {
+            "decision": "block",
+            "event": "agent.release_command_rejected",
+            "reason": "Release/publish commands require an explicit release gate approval.",
+        }
     if tool_lower == "spawn_agent" and agent_policy.get("mode") in {"off", "lite"} and not event.get("explicit_user_request"):
         return {
             "decision": "block",

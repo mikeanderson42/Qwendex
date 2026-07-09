@@ -2248,6 +2248,118 @@ def test_qwendex_agent_pre_tool_hook_denies_unsafe_actions(tmp_path):
         "--json",
         env=env,
     )
+    inline_release_approved = json_result(
+        "agent",
+        "hook",
+        "PreToolUse",
+        "--event-json",
+        json.dumps({"tool_name": "exec_command", "command": "QWENDEX_RELEASE_APPROVED=1 gh release create v0.3.1"}),
+        "--json",
+        env=env,
+    )
+    env_release_approved = json_result(
+        "agent",
+        "hook",
+        "PreToolUse",
+        "--event-json",
+        json.dumps({"tool_name": "exec_command", "command": "env QWENDEX_RELEASE_APPROVED=1 gh release upload v0.3.1 dist.tgz"}),
+        "--json",
+        env=env,
+    )
+    env_ignore_release_approved = json_result(
+        "agent",
+        "hook",
+        "PreToolUse",
+        "--event-json",
+        json.dumps({"tool_name": "exec_command", "command": "env -i QWENDEX_RELEASE_APPROVED=1 gh release upload v0.3.1 dist.tgz"}),
+        "--json",
+        env=env,
+    )
+    env_unset_release_approved = json_result(
+        "agent",
+        "hook",
+        "PreToolUse",
+        "--event-json",
+        json.dumps({"tool_name": "exec_command", "command": "env -u HOME QWENDEX_RELEASE_APPROVED=1 gh release upload v0.3.1 dist.tgz"}),
+        "--json",
+        env=env,
+    )
+    env_split_release_approved = json_result(
+        "agent",
+        "hook",
+        "PreToolUse",
+        "--event-json",
+        json.dumps({"tool_name": "exec_command", "command": "env -S 'QWENDEX_RELEASE_APPROVED=1 gh release upload v0.3.1 dist.tgz'"}),
+        "--json",
+        env=env,
+    )
+    env_long_split_release_approved = json_result(
+        "agent",
+        "hook",
+        "PreToolUse",
+        "--event-json",
+        json.dumps({"tool_name": "exec_command", "command": "env --split-string='QWENDEX_RELEASE_APPROVED=1 gh release upload v0.3.1 dist.tgz'"}),
+        "--json",
+        env=env,
+    )
+    export_release_approved = json_result(
+        "agent",
+        "hook",
+        "PreToolUse",
+        "--event-json",
+        json.dumps({"tool_name": "exec_command", "command": "export QWENDEX_RELEASE_APPROVED=1; gh release edit v0.3.1 --draft=false"}),
+        "--json",
+        env=env,
+    )
+    parent_env_release_approved = json_result(
+        "agent",
+        "hook",
+        "PreToolUse",
+        "--event-json",
+        json.dumps({"tool_name": "exec_command", "command": "gh release delete v0.3.1 --yes"}),
+        "--json",
+        env={**env, "QWENDEX_RELEASE_APPROVED": "true"},
+    )
+    dev_branch_push = json_result(
+        "agent",
+        "hook",
+        "PreToolUse",
+        "--event-json",
+        json.dumps({"tool_name": "exec_command", "command": "git push origin dev/some-branch"}),
+        "--json",
+        env=env,
+    )
+    equivalent_release_results = [
+        run_qwendex(
+            "agent",
+            "hook",
+            "PreToolUse",
+            "--event-json",
+            json.dumps({"tool_name": "exec_command", "command": command}),
+            "--json",
+            env=env,
+        )
+        for command in (
+            "gh release upload v0.3.1 dist.tgz",
+            "gh release edit v0.3.1 --draft=false",
+            "gh release delete v0.3.1 --yes",
+            "env -i gh release upload v0.3.1 dist.tgz",
+            "env -u HOME gh release upload v0.3.1 dist.tgz",
+            "env -S 'gh release upload v0.3.1 dist.tgz'",
+            "env --split-string='gh release upload v0.3.1 dist.tgz'",
+            "gh api repos/owner/repo/releases -X POST -f tag_name=v0.3.1",
+            "gh api repos/owner/repo/releases/123 --method PATCH -f name=v0.3.1",
+            "QWENDEX_RELEASE_APPROVED=1 echo ok && gh release create v0.3.1",
+            "twine upload",
+            "python -m twine upload",
+            "python3 -m twine upload",
+            "poetry publish",
+            "uv publish",
+            "hatch publish",
+            "git push origin v0.3.1",
+            "git push origin refs/tags/v0.3.1",
+        )
+    ]
     raw_child_spawn = run_qwendex(
         "--agent-use",
         "Manager",
@@ -2276,6 +2388,19 @@ def test_qwendex_agent_pre_tool_hook_denies_unsafe_actions(tmp_path):
     assert release_publish.returncode != 0
     assert release_publish_data["data"]["hook_result"]["event"] == "agent.release_command_rejected"
     assert release_approved["data"]["hook_result"] == {}
+    assert inline_release_approved["data"]["hook_result"] == {}
+    assert env_release_approved["data"]["hook_result"] == {}
+    assert env_ignore_release_approved["data"]["hook_result"] == {}
+    assert env_unset_release_approved["data"]["hook_result"] == {}
+    assert env_split_release_approved["data"]["hook_result"] == {}
+    assert env_long_split_release_approved["data"]["hook_result"] == {}
+    assert export_release_approved["data"]["hook_result"] == {}
+    assert parent_env_release_approved["data"]["hook_result"] == {}
+    assert dev_branch_push["data"]["hook_result"] == {}
+    for result in equivalent_release_results:
+        result_data = parse_json_result(result)
+        assert result.returncode != 0
+        assert result_data["data"]["hook_result"]["event"] == "agent.release_command_rejected"
     comparison_command = "python3 -c \"print(1 >= 0); print(2 > 1)\""
     comparison = json_result(
         "agent",
