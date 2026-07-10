@@ -27,6 +27,14 @@ def load_release_gate():
     return module
 
 
+def test_codex_build_contract_requires_the_versioned_model_cache_patch():
+    release_gate = load_release_gate()
+    path = "codex-rs/models-manager/src/manager.rs"
+
+    assert path in release_gate.CODEX_ALLOWED_BUILD_PATHS
+    assert path in release_gate.CODEX_REQUIRED_PATCH_PATHS
+
+
 def run(*args: str, cwd: Path) -> str:
     result = subprocess.run(args, cwd=cwd, text=True, capture_output=True, check=True)
     return result.stdout.strip()

@@ -1,3 +1,22 @@
+# v0.5.3
+
+Codex-compatible launcher and mixed-version runtime isolation release.
+
+- Preserves native Codex arguments such as `exec --json`, `-C`/`--cd`,
+  `--add-dir`, directory-valued prompts, and non-git working directories while
+  keeping Qwendex manager scope aligned with the effective Codex directory.
+- Makes help/version inspection stateless and clean, and makes the sourced
+  `codex` command select the Qwendex wrapper while retaining `codex-main` as
+  the upstream escape hatch.
+- Carries Qwendex's verified Manager preflight into Codex's hook-trust bypass
+  so persistent lanes do not stop at a redundant review dialog.
+- Passes the canonical `--repo` target as a per-launch trusted Codex project so
+  automated lanes cannot lose their first prompt to directory onboarding.
+- Gives the patched Codex build a version-specific model-cache file so older
+  live clients cannot overwrite the active model catalog in a shared home.
+- Strips unneeded symbols from packaged Codex and code-mode-host binaries and
+  records pre/post-package byte counts in the build receipt.
+
 # v0.5.2
 
 Manager root ownership and Codex code-mode runtime contract hotfix.

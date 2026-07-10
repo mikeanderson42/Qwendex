@@ -155,7 +155,13 @@ trusted root. The generated isolated `CODEX_HOME` remains authoritative by
 default; preserving a caller's `CODEX_HOME` requires the explicit
 `QWENDEX_QDEX_PRESERVE_CODEX_HOME=1` opt-in. `qdex` defaults to
 `--dangerously-bypass-approvals-and-sandbox`; the repo binding is a
-Qwendex/MCP routing boundary, not OS-level filesystem confinement.
+Qwendex/MCP routing boundary, not OS-level filesystem confinement. Without an
+explicit `--repo`, Qdex keeps `$PWD` as the target even outside git. Native
+Codex `-C`/`--cd` selects both the Codex working directory and Qwendex manager
+scope; other native arguments are forwarded unchanged. Help and version calls
+do not create Manager decisions or rewrite status state. Qdex passes the same
+canonical target as a per-launch Codex trusted-project override so an
+automation primer cannot be consumed by directory onboarding.
 For direct `exec --cwd`, the default artifact-queue MCP trusted write root is
 only that execution directory; adding any other root requires an explicit
 `QWENDEX_MCP_TRUSTED_ROOTS` override. Qwendex source is not included in those

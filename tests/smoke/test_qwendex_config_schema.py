@@ -133,7 +133,7 @@ def test_validator_blocks_invalid_semver_and_published_version_drift(tmp_path: P
     assert result.returncode == 1
     assert "invalid_semver" in error_codes(payload)
 
-    default["version"] = "0.5.3"
+    default["version"] = "0.5.4"
     write_json(default_path, default)
     result, payload = run_validator(repo)
 

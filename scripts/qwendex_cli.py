@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.5.2"
+VERSION = "0.5.3"
 CONFIG_DIR = ROOT / "config" / "qwendex"
 DEFAULT_PROJECT_CONFIG = CONFIG_DIR / "qwendex.json"
 DEFAULT_USER_CONFIG = Path.home() / ".config" / "qwendex" / "config.json"
@@ -509,6 +509,7 @@ MANAGER_ROOT_TOOL_SEPARATOR = "--tool-"
 QWENDEX_CODEX_PATCH_MARKER = "QWENDEX_CODEX_TUI_PATCH_V1"
 QWENDEX_CODEX_STATUS_ITEM_ID = "qwendex-manager"
 QWENDEX_CODEX_STATUS_FILE_ENV = "QWENDEX_CODEX_STATUS_FILE"
+QWENDEX_MODELS_CACHE_FILE_ENV = "QWENDEX_MODELS_CACHE_FILE"
 CODEX_PATCH_MANIFESTS: dict[str, dict[str, Any]] = {
     "0.142.4": {
         "codex_tag": "rust-v0.142.4",
@@ -554,6 +555,10 @@ CODEX_PATCH_MANIFESTS: dict[str, dict[str, Any]] = {
                 "path": "codex-rs/tui/src/terminal_visualization_instructions.rs",
                 "anchors": ["with_terminal_visualization_instructions", "TERMINAL_VISUALIZATION_INSTRUCTIONS"],
             },
+            {
+                "path": "codex-rs/models-manager/src/manager.rs",
+                "anchors": ["const MODEL_CACHE_FILE", "ModelsCacheManager::new(cache_path"],
+            },
         ],
         "required_source_edits": [
             "Add StatusLineItem::QwendexManager serialized as qwendex-manager.",
@@ -563,6 +568,7 @@ CODEX_PATCH_MANIFESTS: dict[str, dict[str, Any]] = {
             "Dispatch those actions before generic composer input handling.",
             "After each action, call the configured Qwendex toggle command and refresh status surfaces.",
             "Append the active Kaveman directive from QWENDEX_CODEX_STATUS_FILE to TUI developer instructions.",
+            "Honor QWENDEX_MODELS_CACHE_FILE so mixed Codex versions do not overwrite one shared model catalog.",
         ],
     },
 }
@@ -4281,6 +4287,21 @@ pub(crate) fn with_terminal_visualization_instructions(
                 ),
             ],
         },
+        {
+            "path": "codex-rs/models-manager/src/manager.rs",
+            "replacements": [
+                (
+                    """        let cache_path = codex_home.join(MODEL_CACHE_FILE);
+""",
+                    f"""        {marker}
+        let cache_file = std::env::var_os(\"{QWENDEX_MODELS_CACHE_FILE_ENV}\")
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| MODEL_CACHE_FILE.into());
+        let cache_path = codex_home.join(cache_file);
+""",
+                ),
+            ],
+        },
     ]
 
 
@@ -4342,6 +4363,7 @@ def codex_patch_payload(args: argparse.Namespace) -> dict[str, Any]:
         "known_versions": sorted(CODEX_PATCH_MANIFESTS),
         "runtime_contract": {
             "status_file_env": QWENDEX_CODEX_STATUS_FILE_ENV,
+            "models_cache_file_env": QWENDEX_MODELS_CACHE_FILE_ENV,
             "status_line_item": QWENDEX_CODEX_STATUS_ITEM_ID,
             "status_command": "qwendex codex-status --write \"$QWENDEX_CODEX_STATUS_FILE\" --json",
             "manager_toggle": "qwendex manager mode --toggle --json",

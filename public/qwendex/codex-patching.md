@@ -10,6 +10,9 @@ source patch instead of mutating the binary in place.
 Qwendex owns a stable runtime contract:
 
 - `QWENDEX_CODEX_STATUS_FILE` points at a tiny JSON status file.
+- `QWENDEX_MODELS_CACHE_FILE` selects the model-cache filename for the patched
+  runtime, allowing each supported Codex build to avoid mixed-version cache
+  overwrites while retaining one isolated `CODEX_HOME`.
 - `qwendex codex-status --write "$QWENDEX_CODEX_STATUS_FILE" --json` refreshes
   the footer text.
 - `qwendex manager mode --toggle --json` cycles Agent Manager duty levels.
@@ -64,8 +67,8 @@ scripts/qwendex codex-patch apply --source /path/to/codex --json
 ```
 
 The apply step is idempotent. It first checks the version manifest and source
-anchors, writes only the known TUI/keymap edits, then reruns the source preflight
-state check. For a dry run:
+anchors, writes only the known TUI/keymap and model-cache-path edits, then
+reruns the source preflight state check. For a dry run:
 
 ```bash
 scripts/qwendex codex-patch apply --source /path/to/codex --dry-run --json
@@ -104,6 +107,7 @@ locations):
 - `codex-rs/tui/src/keymap.rs`
 - `codex-rs/tui/src/app/input.rs`
 - `codex-rs/tui/src/terminal_visualization_instructions.rs`
+- `codex-rs/models-manager/src/manager.rs`
 
 Inspect the active manifest with:
 

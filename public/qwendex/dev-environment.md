@@ -97,6 +97,10 @@ The dev environment exposes these wrappers in `~/qwendex-dev/bin`:
 - `codex`
 - `codex-main`
 
+Sourcing `.qwendex-dev/env.sh` places this `bin` directory before the user npm
+bin directory, so ordinary `codex` invocations use the Qwendex wrapper.
+`codex-main` is the explicit path back to the captured upstream CLI.
+
 The `codex` wrapper first uses `QWENDEX_DEV_CODEX_BIN` when set, then
 `~/qwendex-dev/.qwendex-dev/codex-build/bin/codex` when present, and finally the
 current system Codex binary. This keeps the larger main Codex install available
@@ -104,6 +108,14 @@ while a patched/dev Codex build is being prepared. A selected dev binary must
 have an executable `codex-code-mode-host` companion in the same directory; the
 wrapper blocks before launch when that Codex 0.144.0 runtime contract is
 incomplete.
+
+The generated environment also exports a Codex-versioned
+`QWENDEX_MODELS_CACHE_FILE`. The Qwendex source patch makes the active build use
+that file inside the otherwise shared isolated home, so an older still-running
+Codex client cannot replace the current build's model catalog. Stock Codex
+ignores this extension; the patch preflight names the boundary. Release builds
+strip unneeded symbols from both native binaries and record their unstripped
+and packaged sizes in `codex_build.json`.
 
 The dev launcher uses an isolated `CODEX_HOME` at
 `~/qwendex-dev/.qwendex-dev/codex_home`. `qwendex-dev status-json` records the
