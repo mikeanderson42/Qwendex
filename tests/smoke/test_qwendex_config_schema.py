@@ -288,6 +288,43 @@ def test_installer_adds_pep668_override_only_for_user_site_on_managed_python() -
     assert "--target" not in managed
 
 
+def test_installer_pep668_probe_executes_on_managed_python(tmp_path: Path) -> None:
+    installer = (ROOT / "scripts" / "qwendex_install_deps").read_text(encoding="utf-8")
+    probe = extract_shell_function(installer, "python_externally_managed")
+    marker_stdlib = tmp_path / "stdlib"
+    marker_stdlib.mkdir()
+    (marker_stdlib / "EXTERNALLY-MANAGED").touch()
+    sitecustomize = tmp_path / "sitecustomize.py"
+    sitecustomize.write_text(
+        "\n".join(
+            [
+                "import sys",
+                "import sysconfig",
+                "sys.prefix = sys.base_prefix",
+                "_original_get_path = sysconfig.get_path",
+                "def _get_path(name, *args, **kwargs):",
+                f"    return {str(marker_stdlib)!r} if name == 'stdlib' else _original_get_path(name, *args, **kwargs)",
+                "sysconfig.get_path = _get_path",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env["PATH"] = f"{Path(sys.executable).parent}{os.pathsep}{env.get('PATH', '')}"
+    env["PYTHONPATH"] = f"{tmp_path}{os.pathsep}{env.get('PYTHONPATH', '')}"
+
+    result = subprocess.run(
+        ["bash", "-c", f"set -euo pipefail\n{probe}\npython_externally_managed"],
+        text=True,
+        capture_output=True,
+        env=env,
+        check=False,
+    )
+
+    assert result.returncode == 0, "PEP 668 probe failed or hid a Python error"
+
+
 def test_installer_receipt_records_interpreter_specific_user_pip_policy() -> None:
     env = os.environ.copy()
     env["PATH"] = f"{Path(sys.executable).parent}{os.pathsep}{env.get('PATH', '')}"
