@@ -183,7 +183,7 @@ def test_qwendex_version_and_config_are_in_sync():
     sample_config = json.loads((ROOT / "config" / "qwendex" / "qwendex.sample.json").read_text(encoding="utf-8"))
     version = json_result("version", "--json")
 
-    assert qwendex.VERSION == "0.5.2"
+    assert qwendex.VERSION == "0.5.3"
     assert version["data"]["version"] == qwendex.VERSION
     assert project_config["version"] == qwendex.VERSION
     assert sample_config["version"] == qwendex.VERSION
@@ -1313,6 +1313,41 @@ def test_qwendex_dev_env_second_same_root_sync_skips_its_codex_wrapper(tmp_path)
     assert dry_run["command"][0] == str(checkout / "bin" / "codex")
 
 
+def test_qwendex_dev_env_prefers_replacement_codex_and_versions_model_cache(tmp_path):
+    _, checkout, _, env = same_root_dev_env_fixture(tmp_path)
+    dev_env = checkout / "scripts" / "qwendex_dev_env"
+    sync = subprocess.run(
+        [str(dev_env), "sync"],
+        cwd=checkout,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=60,
+    )
+    assert sync.returncode == 0, sync.stderr or sync.stdout
+
+    sourced = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; printf "%s\\n%s\\n" "$(command -v codex)" "$QWENDEX_MODELS_CACHE_FILE"',
+            "qwendex-env-probe",
+            str(checkout / ".qwendex-dev" / "env.sh"),
+        ],
+        cwd=checkout,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=10,
+    )
+    assert sourced.returncode == 0, sourced.stderr or sourced.stdout
+    resolved_codex, cache_file = sourced.stdout.splitlines()
+    assert resolved_codex == str(checkout / "bin" / "codex")
+    assert cache_file == "models_cache.qwendex-0.144.0.json"
+
+
 def test_qwendex_dev_codex_wrapper_requires_code_mode_host(tmp_path):
     _, checkout, _, env = same_root_dev_env_fixture(tmp_path)
     dev_env = checkout / "scripts" / "qwendex_dev_env"
@@ -1461,7 +1496,7 @@ def assert_same_root_supports_quoted_path(tmp_path, path_fragment):
 
     assert config["projects"] == {str(checkout): {"trust_level": "trusted"}}
     assert qwendex.returncode == 0, qwendex.stderr or qwendex.stdout
-    assert json.loads(qwendex.stdout)["data"]["version"] == "0.5.2"
+    assert json.loads(qwendex.stdout)["data"]["version"] == "0.5.3"
     assert qwendex_dev.returncode == 0, qwendex_dev.stderr or qwendex_dev.stdout
     assert sourced_env.returncode == 0, sourced_env.stderr or sourced_env.stdout
     assert sourced_env.stdout.strip() == str(checkout)
@@ -1606,6 +1641,7 @@ if sys.argv[1:] == ["--version"]:
 
 Path(os.environ["QWENDEX_FAKE_CODEX_ARGS"]).write_text(json.dumps({
     "args": sys.argv[1:],
+    "cwd": os.getcwd(),
     "codex_home": os.environ.get("CODEX_HOME", ""),
     "manager_target_repo": os.environ.get("QWENDEX_MANAGER_TARGET_REPO", ""),
     "manager_session_id": os.environ.get("QWENDEX_MANAGER_SESSION_ID", ""),
@@ -1761,7 +1797,12 @@ Path(os.environ["QWENDEX_FAKE_CODEX_ARGS"]).write_text(json.dumps({
     )
     assert launched.returncode == 0, launched.stderr or launched.stdout
     call = json.loads(args_file.read_text(encoding="utf-8"))
-    assert call["args"][:2] == ["--no-alt-screen", "--dangerously-bypass-approvals-and-sandbox"]
+    assert call["args"][:3] == [
+        "--no-alt-screen",
+        "--dangerously-bypass-approvals-and-sandbox",
+        "--dangerously-bypass-hook-trust",
+    ]
+    assert f'projects={{"{ROOT}"={{trust_level="trusted"}}}}' in call["args"]
     assert call["args"][call["args"].index("-C") + 1] == str(ROOT)
     assert call["manager_session_id"].startswith("mgrsess_")
     assert call["manager_ledger_id"].startswith("mgrldg_")
@@ -1780,6 +1821,131 @@ Path(os.environ["QWENDEX_FAKE_CODEX_ARGS"]).write_text(json.dumps({
     assert call["effective_agent_use"] == "Manager"
     assert call["agent_policy_hash"] == call["manager_policy_hash"]
     assert call["agent_policy_source"] == "manager-mode"
+
+    compatible_env = {
+        **env,
+        "QWENDEX_MANAGER_ALLOW_UNHOOKED": "1",
+    }
+
+    args_file.unlink()
+    json_exec = subprocess.run(
+        [str(qdex), "--repo", str(ROOT), "exec", "--json", "report status"],
+        cwd=ROOT,
+        env=compatible_env,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=60,
+    )
+    assert json_exec.returncode == 0, json_exec.stderr or json_exec.stdout
+    json_call = json.loads(args_file.read_text(encoding="utf-8"))
+    assert json_call["args"][-3:] == ["exec", "--json", "report status"]
+
+    args_file.unlink()
+    native_cd = subprocess.run(
+        [str(qdex), "-C", str(ROOT), "exec", "report cwd"],
+        cwd=tmp_path,
+        env=compatible_env,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=60,
+    )
+    assert native_cd.returncode == 0, native_cd.stderr or native_cd.stdout
+    native_cd_call = json.loads(args_file.read_text(encoding="utf-8"))
+    assert native_cd_call["args"].count("-C") == 1
+    assert native_cd_call["args"][-4:] == ["-C", str(ROOT), "exec", "report cwd"]
+    assert native_cd_call["manager_target_repo"] == str(ROOT)
+
+    args_file.unlink()
+    relative_cd = subprocess.run(
+        [str(qdex), "-C", ROOT.name, "exec", "report relative cwd"],
+        cwd=ROOT.parent,
+        env=compatible_env,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=60,
+    )
+    assert relative_cd.returncode == 0, relative_cd.stderr or relative_cd.stdout
+    relative_cd_call = json.loads(args_file.read_text(encoding="utf-8"))
+    assert relative_cd_call["args"][-4:] == ["-C", ROOT.name, "exec", "report relative cwd"]
+    assert relative_cd_call["cwd"] == str(ROOT.parent)
+    assert relative_cd_call["manager_target_repo"] == str(ROOT)
+
+    args_file.unlink()
+    add_dir = subprocess.run(
+        [str(qdex), "--repo", str(ROOT), "exec", "--add-dir", str(tmp_path), "report roots"],
+        cwd=ROOT,
+        env=compatible_env,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=60,
+    )
+    assert add_dir.returncode == 0, add_dir.stderr or add_dir.stdout
+    add_dir_call = json.loads(args_file.read_text(encoding="utf-8"))
+    assert add_dir_call["args"][-4:] == ["exec", "--add-dir", str(tmp_path), "report roots"]
+
+    args_file.unlink()
+    directory_prompt = subprocess.run(
+        [str(qdex), "--repo", str(ROOT), "exec", str(tmp_path)],
+        cwd=ROOT,
+        env=compatible_env,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=60,
+    )
+    assert directory_prompt.returncode == 0, directory_prompt.stderr or directory_prompt.stdout
+    directory_prompt_call = json.loads(args_file.read_text(encoding="utf-8"))
+    assert directory_prompt_call["args"][-2:] == ["exec", str(tmp_path)]
+
+    args_file.unlink()
+    non_git_cwd = subprocess.run(
+        [str(qdex), "exec", "report cwd"],
+        cwd=tmp_path,
+        env=compatible_env,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=60,
+    )
+    assert non_git_cwd.returncode == 0, non_git_cwd.stderr or non_git_cwd.stdout
+    non_git_call = json.loads(args_file.read_text(encoding="utf-8"))
+    assert non_git_call["args"][non_git_call["args"].index("-C") + 1] == str(tmp_path)
+    assert non_git_call["manager_target_repo"] == str(tmp_path)
+
+    args_file.unlink()
+    help_result = subprocess.run(
+        [str(qdex), "--help"],
+        cwd=ROOT,
+        env=compatible_env,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=60,
+    )
+    assert help_result.returncode == 0, help_result.stderr or help_result.stdout
+    help_call = json.loads(args_file.read_text(encoding="utf-8"))
+    assert help_call["args"] == ["--help"]
+    assert help_call["manager_ledger_id"] == ""
+    assert "Qwendex Manager preflight" not in help_result.stderr
+
+    args_file.unlink()
+    version_result = subprocess.run(
+        [str(qdex), "--version"],
+        cwd=ROOT,
+        env=compatible_env,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=60,
+    )
+    assert version_result.returncode == 0, version_result.stderr or version_result.stdout
+    assert version_result.stdout.strip() == "codex-cli 0.143.0"
+    assert version_result.stderr == ""
+    assert not args_file.exists()
 
 
 def test_qwendex_codex_status_tracks_manager_state_and_writes_surface_file(tmp_path):
@@ -1967,6 +2133,12 @@ def test_qwendex_codex_patch_apply_updates_supported_source_checkout(tmp_path):
     assert "Qwendex Kaveman directive" in terminal_instructions
     assert "if !visualization_enabled && kaveman_directive.is_none()" in terminal_instructions
     assert "return control_instructions;" in terminal_instructions
+    models_manager = (
+        source / "codex-rs/models-manager/src/manager.rs"
+    ).read_text(encoding="utf-8")
+    assert qwendex.QWENDEX_CODEX_PATCH_MARKER in models_manager
+    assert "QWENDEX_MODELS_CACHE_FILE" in models_manager
+    assert "var_os" in models_manager
 
 
 def test_qwendex_codex_patch_preflight_rejects_partially_applied_source(tmp_path):

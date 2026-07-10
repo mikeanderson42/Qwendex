@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+## 0.5.3
+
+- Made `qdex` preserve normal Codex CLI arguments, use `$PWD` outside git,
+  align `-C`/`--cd` with Manager scope, and keep help/version calls free of
+  status writes and Manager preflight state.
+- Made the generated environment resolve bare `codex` to the Qwendex wrapper;
+  `codex-main` remains the explicit upstream fallback.
+- Added Codex's hook-trust bypass to Manager launches after Qwendex verifies
+  the complete managed hook set during its required preflight.
+- Made the canonical Qdex target a per-launch trusted Codex project, preventing
+  persistent lanes from dropping their primer into the directory-trust prompt.
+- Added a patched-runtime `QWENDEX_MODELS_CACHE_FILE` contract with a
+  Codex-versioned cache filename, preventing older live Qwendex clients from
+  repeatedly replacing the active model catalog.
+- Added release-binary stripping plus pre/post-package size evidence to the
+  Codex build receipt.
+
 ## 0.5.2
 
 - Fixed the Codex `0.144.0` Manager hook contract by deriving root ownership

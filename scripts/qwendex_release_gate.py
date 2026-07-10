@@ -110,6 +110,7 @@ CI_REQUIRED_CHECKS = {
 CODEX_ALLOWED_BUILD_PATHS = {
     "codex-rs/Cargo.lock",
     "codex-rs/config/src/tui_keymap.rs",
+    "codex-rs/models-manager/src/manager.rs",
     "codex-rs/tui/src/app/input.rs",
     "codex-rs/tui/src/bottom_pane/status_line_setup.rs",
     "codex-rs/tui/src/bottom_pane/status_line_style.rs",

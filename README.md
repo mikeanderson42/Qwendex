@@ -89,7 +89,7 @@ Clone the current tagged release into the default Qwendex root:
 git clone https://github.com/mikeanderson42/Qwendex.git ~/qwendex-dev
 cd ~/qwendex-dev
 git fetch --tags origin
-git switch --detach v0.5.2
+git switch --detach v0.5.3
 ```
 
 Qwendex is currently distributed as source; GitHub source archives and the
@@ -132,6 +132,11 @@ scripts/qwendex_dev_env sync
 source ~/qwendex-dev/.qwendex-dev/env.sh
 qwendex-dev doctor
 ```
+
+The sourced environment makes bare `codex` use the Qwendex patched/dev wrapper;
+`codex-main` remains the explicit upstream CLI. Use `qdex --repo <project>` for
+repository-scoped Manager preflight while retaining normal Codex options such
+as `exec --json`, `-C`/`--cd`, and `--add-dir`.
 
 Qwendex separates health output into advisory and strict modes for `check` and
 `doctor`. Advisory mode is for daily operator visibility:
@@ -303,7 +308,7 @@ claims require GPT/Codex review and the appropriate Qwendex verification tier.
 
 ## Current Release / Known Limits
 
-This checkout is seeded as `v0.5.2`. The latest captured max-depth
+This checkout is seeded as `v0.5.3`. The latest captured max-depth
 validation summary in this repository is still
 [`docs/validation/v0.1.0-rc.1-validation_summary.json`](docs/validation/v0.1.0-rc.1-validation_summary.json)
 until a newer release validation run is recorded.

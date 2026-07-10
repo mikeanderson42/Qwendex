@@ -426,3 +426,30 @@ Reason: an approval-shaped command must not imply a mutation that does not
 exist, and descriptive config keys with no runtime reader violate the
 connectedness contract. Removing them prevents users from editing inert values
 or relying on nonexistent MCP status, receipt, eval, and learning tools.
+
+## Codex-Compatible Launch And Versioned Model Cache
+
+Decision: the generated environment resolves bare `codex` to the Qwendex
+wrapper and retains `codex-main` as the upstream escape hatch. `qdex` owns only
+its explicit repository/preflight-rendering options, defaults manager scope to
+`$PWD`, preserves native Codex arguments, and treats help/version as stateless
+inspection. The patched Codex model manager honors
+`QWENDEX_MODELS_CACHE_FILE`; Qwendex exports a filename containing the pinned
+Codex version while leaving the rest of the isolated home shared. Packaged
+release binaries are stripped with their pre/post sizes receipted.
+
+Reason: a launcher presented as the Codex entrypoint cannot consume native
+`exec --json`, split `-C` from its value, redirect non-git work to the Qwendex
+source tree, or mutate Manager state during `--version`. A single unversioned
+model cache also lets older live clients repeatedly replace a newer catalog,
+making newly available models appear and disappear. Versioning only that cache
+preserves authentication, history, hooks, and sessions while removing the
+cross-version writer race; stripping closes the avoidable native build-size
+overhead.
+
+For Manager launches, the same verified preflight authorizes Codex's explicit
+hook-trust bypass. This avoids a redundant interactive review dialog while
+keeping non-Manager launches on Codex's normal trust behavior.
+The canonical target is also passed as a per-launch trusted project; this trust
+is bounded to the same explicit Qdex repository and prevents an automation
+primer's first Enter from being consumed by Codex onboarding.

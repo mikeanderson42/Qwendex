@@ -31,9 +31,10 @@ QWENDEX_RELEASE_CODEX_SOURCE_REPO="https://github.com/openai/codex.git"
 QWENDEX_CODEX_SOURCE_REPO="${QWENDEX_CODEX_SOURCE_REPO:-$QWENDEX_RELEASE_CODEX_SOURCE_REPO}"
 QWENDEX_RELEASE_CODEX_VERSION="0.144.0"
 QWENDEX_RELEASE_CODEX_SOURCE_COMMIT="767822446c7a594caa19609ca435281a9ec67e0d"
-QWENDEX_RELEASE_CODEX_PATCH_SHA256="88c68b92a5dcf0e273bc05eb50a430d910ae1c46644eeba30dc1301105bcc7bb"
+QWENDEX_RELEASE_CODEX_PATCH_SHA256="b0eca97322be9b80e25627667d49edc85e0b2f35994d685930441e8f8450d183"
 QWENDEX_RELEASE_CODEX_CARGO_LOCK_SHA256="2a3f5a7bd2b571e94cf39e35180e88567989421893f2b600607026d7896ad9c6"
 QWENDEX_CODEX_SOURCE_REF="${QWENDEX_CODEX_SOURCE_REF:-rust-v$QWENDEX_RELEASE_CODEX_VERSION}"
+QWENDEX_MODELS_CACHE_FILE="models_cache.qwendex-$QWENDEX_RELEASE_CODEX_VERSION.json"
 
 resolve_main_codex_bin() {
   if [[ -n "${QWENDEX_MAIN_CODEX_BIN:-}" ]]; then
@@ -281,6 +282,7 @@ write_env_files() {
     printf 'export QWENDEX_RESULTS_ROOT=%q\n' "$RESULTS_ROOT"
     printf 'export QWENDEX_META_ROOT=%q\n' "$META_ROOT"
     printf 'export QWENDEX_CODEX_STATUS_FILE=%q\n' "$STATUS_FILE"
+    printf 'export QWENDEX_MODELS_CACHE_FILE=%q\n' "$QWENDEX_MODELS_CACHE_FILE"
     printf 'export QWENDEX_EXEC_CWD=%q\n' "$DEV_ROOT"
     printf 'export QWENDEX_MCP_TRUSTED_ROOTS=%q\n' "$DEV_ROOT:$SOURCE_ROOT"
     printf 'export CODEX_HOME=%q\n' "$CODEX_HOME_DIR"
@@ -292,7 +294,7 @@ write_env_files() {
     printf 'export LOCAL_QWEN_LOCAL_HARNESS_TRUSTED_ROOTS=%q\n' "$DEV_ROOT:$SOURCE_ROOT"
     printf 'export LOCAL_QWEN_HARNESS_LEDGER_DB=%q\n' "$LOCAL_HARNESS_LEDGER_DB"
     printf 'export PATH=%q:%q:%q:%q:%q:$PATH\n' \
-      "$HOME/.local/bin" "$HOME/.cargo/bin" "$DEV_ROOT/bin" "$DEV_ROOT" "$DEV_ROOT/scripts"
+      "$DEV_ROOT/bin" "$HOME/.local/bin" "$HOME/.cargo/bin" "$DEV_ROOT" "$DEV_ROOT/scripts"
   } > "$WORK_ROOT/env.sh"
   cat > "$WORK_ROOT/README.md" <<EOF
 # Qwendex Dev Environment
@@ -1066,16 +1068,30 @@ cmd_codex_source() {
         rm -rf "$CODEX_SOURCE_DIR"
         git clone --depth 1 --branch "$QWENDEX_CODEX_SOURCE_REF" "$QWENDEX_CODEX_SOURCE_REPO" "$CODEX_SOURCE_DIR"
       fi
-      "$DEV_ROOT/scripts/qwendex" codex-patch preflight --source "$CODEX_SOURCE_DIR" --json
+      "$DEV_ROOT/scripts/qwendex" codex-patch preflight \
+        --codex-bin "$MAIN_CODEX_BIN" \
+        --source "$CODEX_SOURCE_DIR" \
+        --json
       ;;
     patch)
       [[ -d "$CODEX_SOURCE_DIR" ]] || die "missing Codex source: run qwendex-dev codex-source sync"
-      "$DEV_ROOT/scripts/qwendex" codex-patch apply --source "$CODEX_SOURCE_DIR" --json
-      "$DEV_ROOT/scripts/qwendex" codex-patch preflight --source "$CODEX_SOURCE_DIR" --require-applied --json > "$META_ROOT/codex_source_preflight.json"
+      "$DEV_ROOT/scripts/qwendex" codex-patch apply \
+        --codex-bin "${QWENDEX_DEV_CODEX_BIN:-$DEV_CODEX_DEFAULT}" \
+        --source "$CODEX_SOURCE_DIR" \
+        --json
+      "$DEV_ROOT/scripts/qwendex" codex-patch preflight \
+        --codex-bin "${QWENDEX_DEV_CODEX_BIN:-$DEV_CODEX_DEFAULT}" \
+        --source "$CODEX_SOURCE_DIR" \
+        --require-applied \
+        --json > "$META_ROOT/codex_source_preflight.json"
       ;;
     preflight)
       [[ -d "$CODEX_SOURCE_DIR" ]] || die "missing Codex source: run qwendex-dev codex-source sync"
-      "$DEV_ROOT/scripts/qwendex" codex-patch preflight --source "$CODEX_SOURCE_DIR" --require-applied --json
+      "$DEV_ROOT/scripts/qwendex" codex-patch preflight \
+        --codex-bin "${QWENDEX_DEV_CODEX_BIN:-$DEV_CODEX_DEFAULT}" \
+        --source "$CODEX_SOURCE_DIR" \
+        --require-applied \
+        --json
       ;;
     build)
       [[ -d "$CODEX_SOURCE_DIR/codex-rs" ]] || die "missing Codex Rust source: run qwendex-dev codex-source sync"
@@ -1149,6 +1165,7 @@ source_path = Path(source)
 allowed_changes = {
     "codex-rs/Cargo.lock",
     "codex-rs/config/src/tui_keymap.rs",
+    "codex-rs/models-manager/src/manager.rs",
     "codex-rs/tui/src/app/input.rs",
     "codex-rs/tui/src/bottom_pane/status_line_setup.rs",
     "codex-rs/tui/src/bottom_pane/status_line_style.rs",
@@ -1307,6 +1324,13 @@ PY
       tmp_code_mode_host="$(mktemp "$(dirname "$DEV_CODE_MODE_HOST_DEFAULT")/.codex-code-mode-host.XXXXXX")"
       cp "$isolated_build_root/target/release/codex" "$tmp_codex"
       cp "$isolated_build_root/target/release/codex-code-mode-host" "$tmp_code_mode_host"
+      local codex_unstripped_bytes
+      local code_mode_host_unstripped_bytes
+      local strip_tool
+      codex_unstripped_bytes="$(stat -c %s "$tmp_codex")"
+      code_mode_host_unstripped_bytes="$(stat -c %s "$tmp_code_mode_host")"
+      strip_tool="$(command -v strip)" || die "strip is required to package the Qwendex Codex release binaries"
+      "$strip_tool" --strip-unneeded "$tmp_codex" "$tmp_code_mode_host"
       chmod +x "$tmp_codex"
       chmod +x "$tmp_code_mode_host"
       mv -f "$tmp_code_mode_host" "$DEV_CODE_MODE_HOST_DEFAULT"
@@ -1319,7 +1343,7 @@ PY
         --source "$CODEX_SOURCE_DIR" \
         --require-applied \
         --json > "$META_ROOT/codex_source_preflight.json"
-      python3 - "$META_ROOT/codex_build.json" "$CODEX_SOURCE_DIR" "$QWENDEX_CODEX_SOURCE_REF" "$DEV_CODEX_DEFAULT" "$DEV_CODE_MODE_HOST_DEFAULT" "$META_ROOT/codex_source_preflight.json" "$META_ROOT/codex_build_inputs.json" <<'PY'
+      python3 - "$META_ROOT/codex_build.json" "$CODEX_SOURCE_DIR" "$QWENDEX_CODEX_SOURCE_REF" "$DEV_CODEX_DEFAULT" "$DEV_CODE_MODE_HOST_DEFAULT" "$META_ROOT/codex_source_preflight.json" "$META_ROOT/codex_build_inputs.json" "$strip_tool" "$codex_unstripped_bytes" "$code_mode_host_unstripped_bytes" <<'PY'
 import hashlib
 import json
 import subprocess
@@ -1327,7 +1351,18 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-out, source, source_ref, binary, code_mode_host, preflight, build_inputs = sys.argv[1:8]
+(
+    out,
+    source,
+    source_ref,
+    binary,
+    code_mode_host,
+    preflight,
+    build_inputs,
+    strip_tool,
+    codex_unstripped_bytes,
+    code_mode_host_unstripped_bytes,
+) = sys.argv[1:11]
 source_path = Path(source)
 binary_path = Path(binary)
 code_mode_host_path = Path(code_mode_host)
@@ -1382,12 +1417,18 @@ data = {
     "build_inputs_sha256": sha256_file(build_inputs_path),
     "binary": str(binary_path),
     "binary_bytes": binary_path.stat().st_size,
+    "binary_unstripped_bytes": int(codex_unstripped_bytes),
     "binary_sha256": sha256_file(binary_path),
     "binary_version": run(str(binary_path), "--version"),
     "code_mode_host": {
         "binary": str(code_mode_host_path),
         "binary_bytes": code_mode_host_path.stat().st_size,
+        "binary_unstripped_bytes": int(code_mode_host_unstripped_bytes),
         "binary_sha256": sha256_file(code_mode_host_path),
+    },
+    "packaging": {
+        "strip_tool": strip_tool,
+        "strip_mode": "--strip-unneeded",
     },
     "preflight": {
         "path": str(preflight_path),

@@ -4,7 +4,9 @@ set -euo pipefail
 QWENDEX_DEV_ROOT="${QWENDEX_DEV_ROOT:-$HOME/qwendex-dev}"
 QWENDEX_ENV="$QWENDEX_DEV_ROOT/.qwendex-dev/env.sh"
 QWENDEX_YOLO_FLAG="${QWENDEX_YOLO_FLAG:---dangerously-bypass-approvals-and-sandbox}"
+QWENDEX_HOOK_TRUST_FLAG="${QWENDEX_HOOK_TRUST_FLAG:---dangerously-bypass-hook-trust}"
 caller_codex_home="${CODEX_HOME:-}"
+caller_cwd="$PWD"
 
 if [[ ! -f "$QWENDEX_ENV" ]]; then
   printf 'qdex: missing Qwendex env: %s\n' "$QWENDEX_ENV" >&2
@@ -56,15 +58,46 @@ manager_preflight_dry_run=0
 json_output=0
 target_repo=""
 codex_args=()
+codex_sets_cwd=0
+parse_qdex_options=1
+
+if [[ "${QWENDEX_QDEX_DRY_RUN:-0}" == "1" ]]; then
+  manager_preflight_dry_run=1
+fi
+for arg in "$@"; do
+  if [[ "$arg" == "--manager-preflight-dry-run" ]]; then
+    manager_preflight_dry_run=1
+    break
+  fi
+done
 
 while [[ $# -gt 0 ]]; do
+  if [[ "$parse_qdex_options" == "0" ]]; then
+    codex_args+=("$1")
+    shift
+    continue
+  fi
   case "$1" in
+    --)
+      parse_qdex_options=0
+      shift
+      ;;
     --manager-preflight-dry-run)
-      manager_preflight_dry_run=1
+      shift
+      ;;
+    --qdex-json)
+      json_output=1
       shift
       ;;
     --json)
-      json_output=1
+      if [[ "$manager_preflight_dry_run" == "1" ]]; then
+        # Backward-compatible dry-run rendering. Outside a Qdex dry run this
+        # is Codex's own flag (for example `codex exec --json`) and must pass
+        # through unchanged.
+        json_output=1
+      else
+        codex_args+=("$1")
+      fi
       shift
       ;;
     --repo)
@@ -76,27 +109,44 @@ while [[ $# -gt 0 ]]; do
       target_repo="$1"
       shift
       ;;
-    *)
-      if [[ -z "$target_repo" && "${1:0:1}" != "-" && -d "$1" ]]; then
-        target_repo="$1"
-        shift
-      else
-        codex_args+=("$1")
-        shift
+    -C|--cd)
+      cwd_option="$1"
+      codex_args+=("$1")
+      shift
+      if [[ $# -eq 0 ]]; then
+        printf 'qdex: %s requires a path\n' "$cwd_option" >&2
+        exit 2
       fi
+      target_repo="$1"
+      codex_args+=("$1")
+      codex_sets_cwd=1
+      shift
+      ;;
+    --cd=*)
+      target_repo="${1#--cd=}"
+      codex_args+=("$1")
+      codex_sets_cwd=1
+      shift
+      ;;
+    *)
+      codex_args+=("$1")
+      shift
       ;;
   esac
 done
 
 if [[ -z "$target_repo" ]]; then
-  if git -C "$PWD" rev-parse --show-toplevel >/dev/null 2>&1; then
-    target_repo="$(git -C "$PWD" rev-parse --show-toplevel)"
-  else
-    target_repo="$QWENDEX_DEV_ROOT"
-  fi
+  target_repo="$PWD"
 fi
 
 target_repo="$(cd "$target_repo" && pwd)"
+target_repo_toml="$(python3 - "$target_repo" <<'PY'
+import json
+import sys
+
+print(json.dumps(sys.argv[1]))
+PY
+)"
 export QWENDEX_MANAGER_TARGET_REPO="$target_repo"
 export QWENDEX_EXEC_CWD="$target_repo"
 export QWENDEX_MCP_TRUSTED_ROOTS="$target_repo"
@@ -113,6 +163,30 @@ fi
 if ! "$QWENDEX_DEV_ROOT/bin/codex" --version >/dev/null; then
   printf 'qdex: Qwendex Codex runtime preflight failed.\n' >&2
   exit 127
+fi
+
+# Metadata/help calls are Codex CLI inspection, not agent sessions. Keep them
+# byte-for-byte compatible and free of Qwendex status writes or manager ledger
+# mutations.
+informational_only=0
+if [[ "${codex_args[0]:-}" == "help" ]]; then
+  informational_only=1
+fi
+for arg in "${codex_args[@]}"; do
+  case "$arg" in
+    -h|--help|-V|--version)
+      informational_only=1
+      break
+      ;;
+  esac
+done
+if [[ "$informational_only" == "1" ]]; then
+  if [[ "$codex_sets_cwd" == "1" ]]; then
+    cd "$caller_cwd"
+  else
+    cd "$target_repo"
+  fi
+  exec "$QWENDEX_DEV_ROOT/bin/codex" "${codex_args[@]}"
 fi
 
 "$QWENDEX_DEV_ROOT/scripts/qwendex" codex-status \
@@ -139,14 +213,18 @@ cmd=(
   "$QWENDEX_DEV_ROOT/bin/codex"
   --no-alt-screen
   "$QWENDEX_YOLO_FLAG"
-  -C "$target_repo"
 )
+if [[ "$manager_preflight_required" == "1" ]]; then
+  # Manager preflight verifies the generated Qwendex hook set before launch;
+  # tell Codex not to stop at a second interactive trust dialog.
+  cmd+=("$QWENDEX_HOOK_TRUST_FLAG")
+fi
+cmd+=(--config "projects={$target_repo_toml={trust_level=\"trusted\"}}")
+if [[ "$codex_sets_cwd" == "0" ]]; then
+  cmd+=(-C "$target_repo")
+fi
 
 preflight_file="$QWENDEX_META_ROOT/manager_preflight.json"
-
-if [[ "${QWENDEX_QDEX_DRY_RUN:-0}" == "1" ]]; then
-  manager_preflight_dry_run=1
-fi
 
 if [[ "$manager_preflight_required" == "1" ]]; then
   preflight_rc=0
@@ -289,5 +367,9 @@ PY
   exit 0
 fi
 
-cd "$target_repo"
+if [[ "$codex_sets_cwd" == "1" ]]; then
+  cd "$caller_cwd"
+else
+  cd "$target_repo"
+fi
 exec "${cmd[@]}" "${codex_args[@]}"
