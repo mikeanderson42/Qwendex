@@ -12,7 +12,6 @@ from typing import Any
 
 import pytest
 
-
 ROOT = Path(__file__).resolve().parents[2]
 VALIDATOR = ROOT / "scripts" / "validate_qwendex_config.py"
 JSONSCHEMA_VERSION = "4.26.0"
@@ -133,7 +132,7 @@ def test_validator_blocks_invalid_semver_and_published_version_drift(tmp_path: P
     assert result.returncode == 1
     assert "invalid_semver" in error_codes(payload)
 
-    default["version"] = "0.5.4"
+    default["version"] = "0.5.5"
     write_json(default_path, default)
     result, payload = run_validator(repo)
 

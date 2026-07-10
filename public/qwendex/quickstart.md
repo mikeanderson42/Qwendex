@@ -9,7 +9,7 @@ Clone it directly at the default runtime root, then pin the current release:
 git clone https://github.com/mikeanderson42/Qwendex.git ~/qwendex-dev
 cd ~/qwendex-dev
 git fetch --tags origin
-git switch --detach v0.5.3
+git switch --detach v0.5.4
 git status --short
 ```
 
@@ -39,8 +39,8 @@ binary differs. For intentional compatibility testing, set both
 `QWENDEX_CODEX_NPM_SPEC` and `QWENDEX_CODEX_REQUIRED_VERSION`.
 
 `sync` installs the tracked `scripts/qdex` wrapper into `~/.local/bin/qdex`.
-Ensure `~/.local/bin` is on `PATH`; then `qdex --repo <project>` launches the
-selected project through the Qwendex Codex wrapper. By default `qdex` supplies
+Ensure `~/.local/bin` is on `PATH`; then run `qdex` from the selected project or
+use Codex's native `qdex -C <project>` form. By default `qdex` supplies
 `--dangerously-bypass-approvals-and-sandbox` (YOLO mode). In Manager Mode it
 also supplies `--dangerously-bypass-hook-trust` only after the required Qwendex
 preflight verifies the managed hook set. That project becomes
@@ -56,8 +56,11 @@ separately built, version-checked integration.
 
 After the generated environment is sourced, bare `codex` resolves to the same
 Qwendex patched/dev wrapper; use `codex-main` when the upstream npm binary is
-required explicitly. `qdex` otherwise preserves Codex CLI options, including
-`exec --json`, `-C`/`--cd`, and `--add-dir`. Qdex-only dry-run JSON can be
+required explicitly. A plain `qdex` inherits `$PWD` without synthesizing a
+directory option, while native `-C`/`--cd` is forwarded unchanged and also
+selects Manager scope. The older Qdex-only `--repo` option remains a
+compatibility alias. Other Codex CLI options, including `exec --json` and
+`--add-dir`, also pass through unchanged. Qdex-only dry-run JSON can be
 requested without colliding with Codex as
 `qdex --manager-preflight-dry-run --qdex-json`; the older trailing `--json`
 form remains accepted during a Qdex dry run. Use `--` to end Qdex option

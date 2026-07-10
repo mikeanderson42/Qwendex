@@ -6,11 +6,11 @@ import shutil
 import sqlite3
 import subprocess
 import sys
-import tomllib
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
+import tomllib
 
 ROOT = Path(__file__).resolve().parents[2]
 QWENDEX = ROOT / "scripts" / "qwendex"
@@ -183,7 +183,7 @@ def test_qwendex_version_and_config_are_in_sync():
     sample_config = json.loads((ROOT / "config" / "qwendex" / "qwendex.sample.json").read_text(encoding="utf-8"))
     version = json_result("version", "--json")
 
-    assert qwendex.VERSION == "0.5.3"
+    assert qwendex.VERSION == "0.5.4"
     assert version["data"]["version"] == qwendex.VERSION
     assert project_config["version"] == qwendex.VERSION
     assert sample_config["version"] == qwendex.VERSION
@@ -1496,7 +1496,7 @@ def assert_same_root_supports_quoted_path(tmp_path, path_fragment):
 
     assert config["projects"] == {str(checkout): {"trust_level": "trusted"}}
     assert qwendex.returncode == 0, qwendex.stderr or qwendex.stdout
-    assert json.loads(qwendex.stdout)["data"]["version"] == "0.5.3"
+    assert json.loads(qwendex.stdout)["data"]["version"] == "0.5.4"
     assert qwendex_dev.returncode == 0, qwendex_dev.stderr or qwendex_dev.stdout
     assert sourced_env.returncode == 0, sourced_env.stderr or sourced_env.stdout
     assert sourced_env.stdout.strip() == str(checkout)
@@ -1913,7 +1913,9 @@ Path(os.environ["QWENDEX_FAKE_CODEX_ARGS"]).write_text(json.dumps({
     )
     assert non_git_cwd.returncode == 0, non_git_cwd.stderr or non_git_cwd.stdout
     non_git_call = json.loads(args_file.read_text(encoding="utf-8"))
-    assert non_git_call["args"][non_git_call["args"].index("-C") + 1] == str(tmp_path)
+    assert "-C" not in non_git_call["args"]
+    assert "--cd" not in non_git_call["args"]
+    assert non_git_call["cwd"] == str(tmp_path)
     assert non_git_call["manager_target_repo"] == str(tmp_path)
 
     args_file.unlink()

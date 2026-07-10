@@ -1,3 +1,14 @@
+# v0.5.4
+
+Codex-native working-directory pass-through release.
+
+- Makes plain `qdex` inherit the caller's working directory without injecting
+  a redundant `-C`, matching a normal `codex` launch.
+- Makes `qdex -C <project>` the canonical explicit-directory form and preserves
+  the exact native option/value passed to Codex while aligning Manager and MCP
+  scope to the same canonical directory.
+- Retains Qdex-only `--repo` as a compatibility alias for existing automation.
+
 # v0.5.3
 
 Codex-compatible launcher and mixed-version runtime isolation release.

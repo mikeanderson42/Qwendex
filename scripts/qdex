@@ -59,6 +59,7 @@ json_output=0
 target_repo=""
 codex_args=()
 codex_sets_cwd=0
+qdex_sets_repo=0
 parse_qdex_options=1
 
 if [[ "${QWENDEX_QDEX_DRY_RUN:-0}" == "1" ]]; then
@@ -107,6 +108,7 @@ while [[ $# -gt 0 ]]; do
         exit 2
       fi
       target_repo="$1"
+      qdex_sets_repo=1
       shift
       ;;
     -C|--cd)
@@ -220,7 +222,11 @@ if [[ "$manager_preflight_required" == "1" ]]; then
   cmd+=("$QWENDEX_HOOK_TRUST_FLAG")
 fi
 cmd+=(--config "projects={$target_repo_toml={trust_level=\"trusted\"}}")
-if [[ "$codex_sets_cwd" == "0" ]]; then
+# Normal Qdex launches inherit the caller's working directory exactly like
+# Codex. Keep the older Qdex-only --repo option as a compatibility alias that
+# still needs an injected native -C; an operator-supplied -C/--cd is already in
+# codex_args and must remain byte-for-byte pass-through.
+if [[ "$codex_sets_cwd" == "0" && "$qdex_sets_repo" == "1" ]]; then
   cmd+=(-C "$target_repo")
 fi
 

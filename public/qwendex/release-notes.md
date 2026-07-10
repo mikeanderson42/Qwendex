@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.5.4
+
+- Made plain `qdex` inherit the caller's working directory without adding a
+  synthetic `-C`, matching normal Codex launch semantics.
+- Made native `qdex -C <project>` the documented repository-selection form;
+  Qdex continues to observe it for Manager/MCP scope while passing the exact
+  option and value through to Codex.
+- Retained Qdex-only `--repo` as a compatibility alias for existing wrappers.
+
 ## 0.5.3
 
 - Made `qdex` preserve normal Codex CLI arguments, use `$PWD` outside git,
