@@ -149,16 +149,19 @@ conflicting inherited `CODEX_OSS_BASE_URL` blocks before execution instead of
 silently sending the run to an endpoint different from the one that passed
 preflight.
 
-`qdex --repo <project>` makes the selected repository the manager target,
+Run `qdex` from the desired directory or use Codex's native
+`qdex -C <project>` form. The selected directory becomes the manager target,
 execution working directory, Codex add-dir, local-harness trusted root, and MCP
 trusted root. The generated isolated `CODEX_HOME` remains authoritative by
 default; preserving a caller's `CODEX_HOME` requires the explicit
 `QWENDEX_QDEX_PRESERVE_CODEX_HOME=1` opt-in. `qdex` defaults to
 `--dangerously-bypass-approvals-and-sandbox`; the repo binding is a
 Qwendex/MCP routing boundary, not OS-level filesystem confinement. Without an
-explicit `--repo`, Qdex keeps `$PWD` as the target even outside git. Native
-Codex `-C`/`--cd` selects both the Codex working directory and Qwendex manager
-scope; other native arguments are forwarded unchanged. Help and version calls
+an explicit native directory option, Qdex inherits `$PWD` even outside git and
+does not synthesize `-C`. Native Codex `-C`/`--cd` selects both the Codex
+working directory and Qwendex manager scope and is forwarded unchanged. The
+older Qdex-only `--repo` option remains a compatibility alias. Other native
+arguments are forwarded unchanged. Help and version calls
 do not create Manager decisions or rewrite status state. Qdex passes the same
 canonical target as a per-launch Codex trusted-project override so an
 automation primer cannot be consumed by directory onboarding.

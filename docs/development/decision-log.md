@@ -447,6 +447,20 @@ preserves authentication, history, hooks, and sessions while removing the
 cross-version writer race; stripping closes the avoidable native build-size
 overhead.
 
+## Codex-Native Qdex Working Directory
+
+Decision: plain `qdex` inherits the caller's working directory without adding a
+synthetic `-C`. Codex-native `-C`/`--cd` is the canonical explicit-directory
+form: Qdex observes its value only to align Manager, MCP, and trust scope, then
+passes the original option and value through unchanged. The older Qdex-only
+`--repo` option remains a compatibility alias and may inject `-C` for existing
+callers.
+
+Reason: Qdex is presented as a Codex-compatible entrypoint. Its default argv
+should therefore match `codex` rather than contain a redundant wrapper-created
+directory option, while the control-plane scope must still follow an explicit
+native Codex working root end to end.
+
 For Manager launches, the same verified preflight authorizes Codex's explicit
 hook-trust bypass. This avoids a redundant interactive review dialog while
 keeping non-Manager launches on Codex's normal trust behavior.
