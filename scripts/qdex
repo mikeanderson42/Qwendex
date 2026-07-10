@@ -17,6 +17,40 @@ source "$QWENDEX_ENV"
 if [[ "${QWENDEX_QDEX_PRESERVE_CODEX_HOME:-0}" =~ ^(1|true|yes|on)$ && -n "$caller_codex_home" ]]; then
   export CODEX_HOME="$caller_codex_home"
 fi
+# Dynamic Manager identities belong to one qdex launch. Never let a caller's
+# stale child-process environment select or collide with a prior lease.
+unset \
+  QWENDEX_MANAGER_SESSION_ID \
+  QWENDEX_MANAGER_LEDGER_ID \
+  QWENDEX_MANAGER_ROOT_AGENT_ID \
+  QWENDEX_MANAGER_LAUNCH_PID \
+  QWENDEX_MANAGER_LAUNCH_START_TICKS \
+  QWENDEX_MANAGER_POLICY_HASH \
+  QWENDEX_MANAGER_STOP_STATUS
+
+export QWENDEX_MANAGER_LAUNCH_PID="$$"
+QWENDEX_MANAGER_LAUNCH_START_TICKS="$(python3 - "$$" <<'PY'
+import sys
+from pathlib import Path
+
+pid = sys.argv[1]
+try:
+    stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+except OSError:
+    print("")
+    raise SystemExit(0)
+closing = stat.rfind(")")
+fields = stat[closing + 2:].split() if closing >= 0 else []
+if len(fields) <= 19:
+    print("")
+    raise SystemExit(0)
+print(fields[19])
+PY
+)" || {
+  printf 'qdex: cannot establish launcher process identity.\n' >&2
+  exit 127
+}
+export QWENDEX_MANAGER_LAUNCH_START_TICKS
 
 manager_preflight_dry_run=0
 json_output=0
@@ -74,6 +108,10 @@ export ARTIFACT_QUEUE_MCP_TRUSTED_ROOTS="$target_repo"
 if [[ ! -x "$QWENDEX_DEV_ROOT/bin/codex" ]]; then
   printf 'qdex: missing Qwendex Codex wrapper: %s/bin/codex\n' "$QWENDEX_DEV_ROOT" >&2
   printf 'qdex: run qwendex-dev doctor from a shell that has sourced %s.\n' "$QWENDEX_ENV" >&2
+  exit 127
+fi
+if ! "$QWENDEX_DEV_ROOT/bin/codex" --version >/dev/null; then
+  printf 'qdex: Qwendex Codex runtime preflight failed.\n' >&2
   exit 127
 fi
 
@@ -149,6 +187,7 @@ route = data.get("routing_decision", {})
 hook = data.get("hook_status", {})
 print(f"Qwendex Manager preflight: {'ready' if data.get('ok') else 'blocked'}")
 print(f"ledger: {data.get('ledger_id', '')}")
+print(f"root: {data.get('root_agent_id', '')}")
 print(f"route: {route.get('selected_route', '')}")
 print(f"hooks: {'override' if hook.get('override') else 'verified' if hook.get('verified') else 'missing'}")
 print(f"verifier: {'required' if route.get('verifier_required') else 'not_required'}")
@@ -163,9 +202,14 @@ import json
 import sys
 with open(sys.argv[1], encoding="utf-8") as handle:
     payload = json.load(handle)
-sys.exit(0 if payload.get("data", {}).get("ok") else 1)
+data = payload.get("data", {})
+root_agent_id = str(data.get("exports", {}).get("QWENDEX_MANAGER_ROOT_AGENT_ID") or "").strip()
+sys.exit(0 if data.get("ok") and root_agent_id else 1)
 PY
   then
+    if [[ "$preflight_rc" -eq 0 ]]; then
+      preflight_rc=1
+    fi
     python3 - "$preflight_file" >&2 <<'PY'
 import json
 import sys
@@ -174,7 +218,11 @@ with open(sys.argv[1], encoding="utf-8") as handle:
 data = payload.get("data", {})
 hook = data.get("hook_status", {})
 print("Qwendex Manager preflight: blocked")
-print(f"reason: {data.get('routing_decision', {}).get('routing_reason', '')}")
+root_agent_id = str(data.get("exports", {}).get("QWENDEX_MANAGER_ROOT_AGENT_ID") or "").strip()
+reason = data.get('routing_decision', {}).get('routing_reason', '')
+if data.get("ok") and not root_agent_id:
+    reason = "manager preflight did not establish a trusted root identity"
+print(f"reason: {reason}")
 print(f"install: {hook.get('install_command', '')}")
 print(f"verify: {hook.get('verify_command', '')}")
 print(f"stop: {data.get('stop_status', '')}")
@@ -204,6 +252,7 @@ route = data.get("routing_decision", {})
 hook = data.get("hook_status", {})
 print("Qwendex Manager preflight: ready")
 print(f"ledger: {data.get('ledger_id', '')}")
+print(f"root: {data.get('root_agent_id', '')}")
 print(f"route: {route.get('selected_route', '')}")
 print(f"hooks: {'override' if hook.get('override') else 'verified' if hook.get('verified') else 'missing'}")
 print(f"verifier: {'required' if route.get('verifier_required') else 'not_required'}")

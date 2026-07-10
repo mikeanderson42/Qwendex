@@ -1,3 +1,18 @@
+# v0.5.2
+
+Manager root ownership and Codex code-mode runtime contract hotfix.
+
+- Derives Manager root ownership from the repository-scoped `qdex` preflight
+  ledger, matching Codex `0.144.0` lifecycle events that omit root `agent_id`.
+- Uses bounded per-tool root leases, successful `PostToolUse` cleanup, Stop
+  fallback, and dead-launch reclamation without stealing a live launch lease.
+- Keeps native workers strict to active registration, current task, repository,
+  and registered path scope while leaving non-Manager root execution unchanged.
+- Upgrades Qwendex-managed hooks in place, preserves unrelated handlers, and
+  classifies goal/plan bookkeeping plus bounded inspections without false write
+  locks.
+- Installs and validates `codex-code-mode-host` beside the patched Codex binary.
+
 # v0.5.1
 
 PEP 668 clean-install hotfix.

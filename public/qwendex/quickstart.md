@@ -9,7 +9,7 @@ Clone it directly at the default runtime root, then pin the current release:
 git clone https://github.com/mikeanderson42/Qwendex.git ~/qwendex-dev
 cd ~/qwendex-dev
 git fetch --tags origin
-git switch --detach v0.5.1
+git switch --detach v0.5.2
 git status --short
 ```
 

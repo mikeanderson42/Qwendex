@@ -69,7 +69,15 @@ managed `PreToolUse` hook is installed and verified; OS sandboxing and command
 side effects outside that syntax-level contract remain separate controls.
 
 For writer profiles, the same classifier treats every non-allowlisted managed
-shell event as write-capable. The event must declare its `agent_id` and explicit
-target paths so the existing single-writer lock gate can run; arbitrary shell
-commands never bypass ownership merely because their side effects are difficult
-to infer.
+shell event as write-capable. Native subagents must use their top-level Codex
+`agent_id` and match an active registration, repository, current task, and
+declared write scope. Codex root events intentionally omit `agent_id`; in
+Manager Mode Qwendex accepts only the root owner derived from the matching
+`qdex` preflight and ignores identity claims in prompt or tool input. Opaque
+writes take the conservative repository lease, so arbitrary shell commands
+never bypass ownership merely because their side effects are difficult to
+infer. Per-tool root leases are released on `PostToolUse`, with Manager `Stop`
+providing turn-boundary cleanup. An aborted tool remains locked rather than
+weakening the single-writer boundary. After an abrupt launcher exit, orphan
+reclamation requires the recorded PID/process-start identity to be dead; a
+still-live prior launcher remains blocking.

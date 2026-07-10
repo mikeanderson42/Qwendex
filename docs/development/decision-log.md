@@ -22,6 +22,17 @@ installed binary.
 Reason: npm-installed Codex ships a native binary; source patching is auditable,
 repeatable, and can block safely when Codex versions change.
 
+## Codex Code-Mode Companion
+
+Decision: the patched Codex build installs and receipts both `codex` and the
+sibling `codex-code-mode-host`, and the dev wrapper blocks before launch if the
+selected dev runtime is missing that executable companion.
+
+Reason: Codex 0.144.0 enables code mode by default and resolves its host beside
+the running executable. Installing only `codex` allows the TUI to start but
+leaves execution and goal tools unusable, which can also prevent Manager Mode
+from recording or closing its decision ledger.
+
 ## Codex 0.143.0 Launcher Target
 
 Decision: Qwendex `0.1.0-rc.5` targets Codex CLI `0.143.0` and
@@ -166,10 +177,10 @@ Decision: normal `qdex` launches in Manager Mode must run
 `manager_decision` ledger record and receipt with policy hash, hook status,
 local/cloud availability, prompt digest or interactive-unknown marker, selected
 route, routing reason, verifier requirement, validation plan, and STOP status.
-The `qdex` wrapper exports the manager session id, ledger id, and policy hash
-to Codex only after the preflight record exists. Manager Stop gates require that
-ledger and close either a managed-lane completion or a direct-work exception
-with validation evidence.
+The `qdex` wrapper exports the manager session id, ledger id, launcher-derived
+root ownership id, and policy hash to Codex only after the preflight record
+exists. Manager Stop gates require that ledger and close either a managed-lane
+completion or a direct-work exception with validation evidence.
 
 Reason: Manager Mode is an execution contract, not only a selected label. The
 operator should not be able to start write-capable direct Codex work in Manager
@@ -177,6 +188,27 @@ Mode without a recorded route decision, hook posture, verifier expectation, and
 finalization path. Interactive prompts can still start before the task text is
 known, but that path is explicitly recorded as
 `interactive_prompt_unknown_prelaunch`.
+
+## Launcher-Derived Manager Root Ownership
+
+Decision: Codex root hook events remain identity-less as defined by the native
+hook schema. In Manager Mode, Qwendex derives a stable root owner only from the
+matching `qdex` preflight ledger, rejects stale or mismatched launch exports,
+and gives opaque root writes a repository-wide per-tool lease. `PostToolUse`
+releases the exact tool lease and Manager `Stop` releases the launch family.
+Native subagents remain strict:
+their top-level runtime id must be actively registered for the same repository
+and current manager task, with paths resolved from hook metadata or registered
+scope. Goal and plan bookkeeping is outside the filesystem lock plane.
+
+Reason: requiring a root `agent_id` contradicts Codex's hook contract, and
+putting `agent_id=main` in prompt or tool input cannot populate or authenticate
+the lifecycle envelope. A trusted launcher identity preserves the single-writer
+boundary without blocking the root on every tool, while short per-tool leases
+release promptly after successful tools. Codex does not emit `PostToolUse` for
+an aborted tool, so that lease intentionally remains blocking until `Stop`;
+after an abrupt process exit, a later launcher reclaims it only when the
+recorded PID and process-start identity are no longer live.
 
 ## Agent Team Planning
 

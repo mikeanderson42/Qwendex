@@ -89,7 +89,7 @@ Clone the current tagged release into the default Qwendex root:
 git clone https://github.com/mikeanderson42/Qwendex.git ~/qwendex-dev
 cd ~/qwendex-dev
 git fetch --tags origin
-git switch --detach v0.5.1
+git switch --detach v0.5.2
 ```
 
 Qwendex is currently distributed as source; GitHub source archives and the
@@ -303,7 +303,7 @@ claims require GPT/Codex review and the appropriate Qwendex verification tier.
 
 ## Current Release / Known Limits
 
-This checkout is seeded as `v0.5.1`. The latest captured max-depth
+This checkout is seeded as `v0.5.2`. The latest captured max-depth
 validation summary in this repository is still
 [`docs/validation/v0.1.0-rc.1-validation_summary.json`](docs/validation/v0.1.0-rc.1-validation_summary.json)
 until a newer release validation run is recorded.
