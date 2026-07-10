@@ -1,3 +1,14 @@
+# v0.5.1
+
+PEP 668 clean-install hotfix.
+
+- Fixes externally managed Python detection in the dependency installer so
+  CachyOS, Arch, and other PEP 668 systems receive the required pip override.
+- Keeps Python dependency writes restricted to the user site while installing
+  the exact pinned jsonschema, pytest, and ruff versions.
+- Adds a regression that executes the embedded PEP 668 probe against a
+  deterministic managed-Python marker instead of mocking away its body.
+
 # v0.5.0
 
 Qwendex manager, bridge, and release-integrity hardening release.
