@@ -22,6 +22,17 @@ installed binary.
 Reason: npm-installed Codex ships a native binary; source patching is auditable,
 repeatable, and can block safely when Codex versions change.
 
+## Codex Code-Mode Companion
+
+Decision: the patched Codex build installs and receipts both `codex` and the
+sibling `codex-code-mode-host`, and the dev wrapper blocks before launch if the
+selected dev runtime is missing that executable companion.
+
+Reason: Codex 0.144.0 enables code mode by default and resolves its host beside
+the running executable. Installing only `codex` allows the TUI to start but
+leaves execution and goal tools unusable, which can also prevent Manager Mode
+from recording or closing its decision ledger.
+
 ## Codex 0.143.0 Launcher Target
 
 Decision: Qwendex `0.1.0-rc.5` targets Codex CLI `0.143.0` and

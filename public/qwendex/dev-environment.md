@@ -100,7 +100,10 @@ The dev environment exposes these wrappers in `~/qwendex-dev/bin`:
 The `codex` wrapper first uses `QWENDEX_DEV_CODEX_BIN` when set, then
 `~/qwendex-dev/.qwendex-dev/codex-build/bin/codex` when present, and finally the
 current system Codex binary. This keeps the larger main Codex install available
-while a patched/dev Codex build is being prepared.
+while a patched/dev Codex build is being prepared. A selected dev binary must
+have an executable `codex-code-mode-host` companion in the same directory; the
+wrapper blocks before launch when that Codex 0.144.0 runtime contract is
+incomplete.
 
 The dev launcher uses an isolated `CODEX_HOME` at
 `~/qwendex-dev/.qwendex-dev/codex_home`. `qwendex-dev status-json` records the
@@ -169,14 +172,16 @@ qwendex-dev codex-source preflight
 qwendex-dev codex-source build
 ```
 
-Unknown Codex versions or moved anchors block before writing. After building a
-patched Codex binary, either place it at:
+Unknown Codex versions or moved anchors block before writing. The build command
+installs both of these sibling files:
 
 ```text
 ~/qwendex-dev/.qwendex-dev/codex-build/bin/codex
+~/qwendex-dev/.qwendex-dev/codex-build/bin/codex-code-mode-host
 ```
 
-or export:
+For an external patched build, place `codex-code-mode-host` beside the binary
+and export:
 
 ```bash
 export QWENDEX_DEV_CODEX_BIN=/path/to/patched/codex

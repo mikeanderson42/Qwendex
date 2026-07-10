@@ -24,6 +24,7 @@ INSTALL_DEPS_JSON="$META_ROOT/install_deps.json"
 DEV_STATUS_JSON="$META_ROOT/dev_status.json"
 RELEASE_SUMMARY_JSON="$META_ROOT/release_validation_summary.json"
 DEV_CODEX_DEFAULT="$WORK_ROOT/codex-build/bin/codex"
+DEV_CODE_MODE_HOST_DEFAULT="$WORK_ROOT/codex-build/bin/codex-code-mode-host"
 CODEX_SOURCE_DIR="$WORK_ROOT/codex-source/codex"
 QWENDEX_CODEX_YOLO_FLAG="--dangerously-bypass-approvals-and-sandbox"
 QWENDEX_RELEASE_CODEX_SOURCE_REPO="https://github.com/openai/codex.git"
@@ -236,6 +237,12 @@ dev_codex_default=$dev_codex_default_shell
 main_codex=$main_codex_shell
 dev_codex="\${QWENDEX_DEV_CODEX_BIN:-\$dev_codex_default}"
 if [[ -x "\$dev_codex" ]]; then
+  code_mode_host="\$(dirname "\$dev_codex")/codex-code-mode-host"
+  if [[ ! -x "\$code_mode_host" ]]; then
+    printf 'Codex code-mode host is missing or not executable: %s\n' "\$code_mode_host" >&2
+    printf 'Rebuild with: qwendex-dev codex-source build\n' >&2
+    exit 127
+  fi
   exec "\$dev_codex" "\$@"
 fi
 if [[ ! -x "\$main_codex" ]]; then
@@ -554,8 +561,11 @@ write_validated_codex_build_receipt() {
   local source_receipt="$META_ROOT/codex_build.json"
   local output="$1"
   local run_id="$2"
+  local binary="${QWENDEX_DEV_CODEX_BIN:-$DEV_CODEX_DEFAULT}"
+  local code_mode_host
+  code_mode_host="$(dirname "$binary")/codex-code-mode-host"
   [[ -f "$source_receipt" ]] || die "missing Codex build receipt: run qwendex-dev codex-source build"
-  python3 - "$source_receipt" "$output" "$CODEX_SOURCE_DIR" "${QWENDEX_DEV_CODEX_BIN:-$DEV_CODEX_DEFAULT}" "$META_ROOT/codex_build_inputs.json" "$META_ROOT/codex_source_preflight.json" "$run_id" <<'PY'
+  python3 - "$source_receipt" "$output" "$CODEX_SOURCE_DIR" "$binary" "$code_mode_host" "$META_ROOT/codex_build_inputs.json" "$META_ROOT/codex_source_preflight.json" "$run_id" <<'PY'
 import hashlib
 import json
 import subprocess
@@ -563,8 +573,8 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-source_receipt, output, source_root, binary, build_inputs_path, preflight_path = map(Path, sys.argv[1:7])
-run_id = sys.argv[7]
+source_receipt, output, source_root, binary, code_mode_host, build_inputs_path, preflight_path = map(Path, sys.argv[1:8])
+run_id = sys.argv[8]
 receipt = json.loads(source_receipt.read_text(encoding="utf-8"))
 build_inputs = json.loads(build_inputs_path.read_text(encoding="utf-8"))
 
@@ -583,6 +593,12 @@ if not binary.is_file():
     raise SystemExit(f"built Codex binary is missing: {binary}")
 if binary.is_symlink():
     raise SystemExit(f"built Codex binary must not be a symlink: {binary}")
+if not code_mode_host.is_file():
+    raise SystemExit(f"built Codex code-mode host is missing: {code_mode_host}")
+if code_mode_host.is_symlink():
+    raise SystemExit(f"built Codex code-mode host must not be a symlink: {code_mode_host}")
+if not code_mode_host.stat().st_mode & 0o111:
+    raise SystemExit(f"built Codex code-mode host is not executable: {code_mode_host}")
 head = subprocess.run(
     ["git", "-C", str(source_root), "rev-parse", "HEAD"],
     text=True,
@@ -598,6 +614,7 @@ diff = subprocess.run(
 ).stdout
 patch_sha = hashlib.sha256(diff).hexdigest()
 binary_sha = sha256_file(binary)
+code_mode_host_sha = sha256_file(code_mode_host)
 tree_manifest = subprocess.run(
     ["git", "-C", str(source_root), "ls-tree", "-r", "--full-tree", "HEAD"],
     capture_output=True,
@@ -682,6 +699,15 @@ if receipt.get("binary") != str(binary) or receipt.get("binary_bytes") != binary
     raise SystemExit("Codex dev binary path/size no longer matches the build receipt")
 if receipt.get("binary_version") != binary_version:
     raise SystemExit("Codex dev binary version no longer matches the build receipt")
+host_receipt = receipt.get("code_mode_host")
+if not isinstance(host_receipt, dict):
+    raise SystemExit("Codex build receipt is missing the code-mode host contract")
+if host_receipt.get("binary") != str(code_mode_host):
+    raise SystemExit("Codex code-mode host path no longer matches the build receipt")
+if host_receipt.get("binary_bytes") != code_mode_host.stat().st_size:
+    raise SystemExit("Codex code-mode host size no longer matches the build receipt")
+if host_receipt.get("binary_sha256") != code_mode_host_sha:
+    raise SystemExit("Codex code-mode host digest no longer matches the build receipt")
 validated = dict(receipt)
 validated.update(
     {
@@ -750,7 +776,7 @@ PY
 
 write_dev_status_json() {
   local mode="${1:-status}"
-  python3 - "$DEV_STATUS_JSON" "$mode" "$DEV_ROOT" "$SOURCE_ROOT" "$WORK_ROOT" "$STATE_DB" "$LEDGER_DB" "$LOCAL_HARNESS_LEDGER_DB" "$RESULTS_ROOT" "$STATUS_FILE" "$CODEX_SOURCE_DIR" "$DEV_CODEX_DEFAULT" "$MAIN_CODEX_BIN" <<'PY'
+  python3 - "$DEV_STATUS_JSON" "$mode" "$DEV_ROOT" "$SOURCE_ROOT" "$WORK_ROOT" "$STATE_DB" "$LEDGER_DB" "$LOCAL_HARNESS_LEDGER_DB" "$RESULTS_ROOT" "$STATUS_FILE" "$CODEX_SOURCE_DIR" "$DEV_CODEX_DEFAULT" "$DEV_CODE_MODE_HOST_DEFAULT" "$MAIN_CODEX_BIN" <<'PY'
 import json
 import os
 import shutil
@@ -772,8 +798,9 @@ from pathlib import Path
     status_file,
     codex_source,
     dev_codex,
+    dev_code_mode_host,
     main_codex,
-) = sys.argv[1:14]
+) = sys.argv[1:15]
 out = Path(out)
 paths = {k: Path(v) for k, v in {
     "dev_root": dev_root,
@@ -786,6 +813,7 @@ paths = {k: Path(v) for k, v in {
     "status_file": status_file,
     "codex_source": codex_source,
     "dev_codex": dev_codex,
+    "dev_code_mode_host": dev_code_mode_host,
     "main_codex": main_codex,
 }.items()}
 
@@ -860,6 +888,8 @@ data = {
     "state_isolation": state_isolation,
     "codex": {
         "dev_binary_exists": paths["dev_codex"].is_file(),
+        "dev_code_mode_host_exists": paths["dev_code_mode_host"].is_file(),
+        "dev_code_mode_host_executable": paths["dev_code_mode_host"].is_file() and bool(paths["dev_code_mode_host"].stat().st_mode & 0o111),
         "main_binary_exists": paths["main_codex"].is_file(),
         "source_exists": paths["codex_source"].is_dir(),
         "active_codex_home": str(active_codex_home),
@@ -878,6 +908,8 @@ if not data["git"]["dev_is_worktree"]:
     blockers.append("dev root is not a git worktree")
 if not tools["python3"] or not tools["git"] or not tools["codex"]:
     blockers.append("required tool missing")
+if data["codex"]["dev_binary_exists"] and not data["codex"]["dev_code_mode_host_executable"]:
+    blockers.append("dev Codex binary is missing its executable codex-code-mode-host companion")
 if not active_hook_sources and global_hook_sources:
     warnings.append("active dev CODEX_HOME has no hooks while ~/.codex has hooks")
 data["blockers"] = blockers
@@ -967,12 +999,15 @@ cmd_doctor() {
   "$DEV_ROOT/scripts/qwendex" codex-status --write "$STATUS_FILE" --json > "$META_ROOT/codex_status_write.json"
   write_codex_patch_preflight_json
   write_dev_status_json doctor
+  local dev_status_rc=0
+  require_json_pass "$DEV_STATUS_JSON" || dev_status_rc=$?
   summary_json \
     "$META_ROOT/qwendex_check.json" \
     "$META_ROOT/qwendex_doctor.json" \
     "$META_ROOT/llmstack_check.json" \
     "$META_ROOT/codex_status_write.json" \
     "$META_ROOT/codex_patch_preflight.json"
+  return "$dev_status_rc"
 }
 
 cmd_status_json() {
@@ -1261,13 +1296,20 @@ PY
             --locked \
             --release \
             -p codex-cli \
-            --bin codex
+            -p codex-code-mode-host \
+            --bin codex \
+            --bin codex-code-mode-host
       )
       mkdir -p "$(dirname "$DEV_CODEX_DEFAULT")"
       local tmp_codex
+      local tmp_code_mode_host
       tmp_codex="$(mktemp "$(dirname "$DEV_CODEX_DEFAULT")/.codex.XXXXXX")"
+      tmp_code_mode_host="$(mktemp "$(dirname "$DEV_CODE_MODE_HOST_DEFAULT")/.codex-code-mode-host.XXXXXX")"
       cp "$isolated_build_root/target/release/codex" "$tmp_codex"
+      cp "$isolated_build_root/target/release/codex-code-mode-host" "$tmp_code_mode_host"
       chmod +x "$tmp_codex"
+      chmod +x "$tmp_code_mode_host"
+      mv -f "$tmp_code_mode_host" "$DEV_CODE_MODE_HOST_DEFAULT"
       mv -f "$tmp_codex" "$DEV_CODEX_DEFAULT"
       rm -rf "$isolated_build_root"
       isolated_build_root=""
@@ -1277,7 +1319,7 @@ PY
         --source "$CODEX_SOURCE_DIR" \
         --require-applied \
         --json > "$META_ROOT/codex_source_preflight.json"
-      python3 - "$META_ROOT/codex_build.json" "$CODEX_SOURCE_DIR" "$QWENDEX_CODEX_SOURCE_REF" "$DEV_CODEX_DEFAULT" "$META_ROOT/codex_source_preflight.json" "$META_ROOT/codex_build_inputs.json" <<'PY'
+      python3 - "$META_ROOT/codex_build.json" "$CODEX_SOURCE_DIR" "$QWENDEX_CODEX_SOURCE_REF" "$DEV_CODEX_DEFAULT" "$DEV_CODE_MODE_HOST_DEFAULT" "$META_ROOT/codex_source_preflight.json" "$META_ROOT/codex_build_inputs.json" <<'PY'
 import hashlib
 import json
 import subprocess
@@ -1285,9 +1327,10 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-out, source, source_ref, binary, preflight, build_inputs = sys.argv[1:7]
+out, source, source_ref, binary, code_mode_host, preflight, build_inputs = sys.argv[1:8]
 source_path = Path(source)
 binary_path = Path(binary)
+code_mode_host_path = Path(code_mode_host)
 preflight_path = Path(preflight)
 build_inputs_path = Path(build_inputs)
 
@@ -1341,6 +1384,11 @@ data = {
     "binary_bytes": binary_path.stat().st_size,
     "binary_sha256": sha256_file(binary_path),
     "binary_version": run(str(binary_path), "--version"),
+    "code_mode_host": {
+        "binary": str(code_mode_host_path),
+        "binary_bytes": code_mode_host_path.stat().st_size,
+        "binary_sha256": sha256_file(code_mode_host_path),
+    },
     "preflight": {
         "path": str(preflight_path),
         "sha256": sha256_file(preflight_path),
