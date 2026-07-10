@@ -5,10 +5,10 @@ receipts, evals, Codex patching, and release-facing docs.
 
 ```text
 GOAL: <Qwendex product objective>
-TARGET_WORKSPACE: /home/tweak/repohome/qwendex-dev
+TARGET_WORKSPACE: <operator-supplied-worktree or $QWENDEX_DEV_ROOT or ~/qwendex-dev>
 MODE: compile_goal | execute_goal | next_goal_from_result
 EFFORT_BUDGET: focused | standard | heavy | max
-LANE: qwendex_product
+LANE: product | manager | local_bridge | codex_patch | release | git_docs_context
 
 OWNER_DOCS_TO_READ:
 - AGENTS.md
@@ -22,7 +22,7 @@ SCOPE:
 - Connectedness chain for visible controls or claims.
 
 OUT_OF_SCOPE:
-- Private Jarvis runtime details in public docs.
+- Private downstream-runtime details in public docs.
 - Local secrets, transcripts, model weights, generated caches.
 
 ARTIFACT_CONTRACT:

@@ -9,9 +9,15 @@
     "codex"
   ],
   "validation_python_modules": [
+    "jsonschema",
     "pytest",
     "ruff"
   ],
+  "validation_python_module_versions": {
+    "jsonschema": "4.26.0",
+    "pytest": "9.0.3",
+    "ruff": "0.15.20"
+  },
   "developer_commands": [
     "cargo",
     "rustfmt",

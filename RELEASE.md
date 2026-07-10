@@ -1,3 +1,33 @@
+# v0.5.0
+
+Qwendex manager, bridge, and release-integrity hardening release.
+
+- Ships the generic local-Qwen Responses bridge v2 with bounded parsing,
+  correct streaming/non-streaming responses, guard recovery, and live
+  fresh-home Codex acceptance.
+- Binds three separate live proofs when requested: canonical `/status` launcher
+  preflight (`live_launcher`), exact parsed assistant `QWENDEX_OK`
+  (`live_reliability`), and a fresh isolated Codex home completing one to three
+  bounded successful `TOOL_OK` commands while a normal-home decoy remains
+  unchanged (`live_codex_acceptance`). The live binary digest and size must
+  match the validated Codex build receipt.
+- Binds Codex to the same normalized `<bridge-base>/v1` endpoint that passed
+  preflight and scopes qdex execution/add-dir/MCP trust to the selected target
+  repository instead of the Qwendex source checkout.
+- Scopes Manager decisions, sessions, validation debt, and file locks by
+  repository and by root turn so stale cross-project state or prior verifier
+  evidence cannot satisfy a new edit.
+- Enforces local-off and GPT authority, active-agent limits, atomic state and
+  digest-verified receipts, and fail-closed legacy-state handling.
+- Builds the patched Codex `0.144.0` binary from an isolated archive plus an
+  exact allowlisted patch, with bound source, lockfile, toolchain, preflight,
+  and binary evidence.
+- Replaces the legacy release summary with per-run receipt binding, tracked-
+  artifact/privacy scans, CI and install acceptance, and strict remote/default-
+  branch/annotated-tag publication gates.
+- Removes downstream-specific workflows, machine-local launchers, private
+  model inventory, and raw historical transcripts from the public artifact.
+
 # v0.4.0
 
 Codex 0.144.0 patched launcher release.

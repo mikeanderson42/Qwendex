@@ -19,7 +19,8 @@ must fail on those issues. Require strict receipts before making
 release-readiness claims.
 
 `scripts/qwendex eval --json` runs the full offline harness suite by default.
-Use `--case exact_marker` only for a quick marker probe.
+Use `--case exact_marker` only for an offline marker fixture; it is not live
+model evidence.
 
 Development worktree gates:
 
@@ -31,12 +32,44 @@ qwendex-dev verify --tier release
 
 `quick` runs the dev lint and smoke-test path, then records Qwendex `check`,
 `doctor`, Codex status writing, and Codex patch preflight receipts under the
-dev results tree. `full` adds public JSON config validation, the offline
-Qwendex eval suite, harness gate, and local harness eval receipts. `release`
-uses strict checks with an isolated release state DB and writes the release
-summary. `live` runs the live launcher check; set
-`QWENDEX_RELEASE_REQUIRE_LIVE=1` only when the local stack is intentionally
-running and release should include that live check.
+dev results tree. `full` adds public JSON syntax plus Draft 2020-12 schema and
+version-parity validation, the offline Qwendex eval suite, harness gate, and
+local harness eval receipts. `release` uses strict checks with an isolated
+release state DB and writes the release summary. `live` runs all three live
+acceptance gates below. Set `QWENDEX_RELEASE_REQUIRE_LIVE=1` only when the local
+stack is intentionally running and the release summary should require and bind
+those gates.
+
+The live gate contracts are:
+
+- `live_launcher`: launcher preflight reaches the configured model and the
+  bridge's canonical `/status` endpoint.
+- `live_reliability`: the validator parses JSON or SSE assistant output and
+  accepts only an exact normalized `QWENDEX_OK`, never prompt echo or a
+  substring match.
+- `live_codex_acceptance`: a fresh isolated Codex home completes one to three
+  bounded successful shell-tool commands producing `TOOL_OK`, emits an exact
+  final `TOOL_OK`, leaves a decoy normal home/XDG tree unchanged, and uses the
+  exact executable digest and size recorded by the validated Codex build.
+
+Release verification writes per-run evidence under the ignored dev results
+tree and invokes `scripts/qwendex_release_gate.py`. The gate hashes current-run
+bootstrap, static, test, config, Codex-build, check/doctor, patch/status, eval,
+and harness receipts. Each receipt has a run/command/source-bound payload digest;
+strict native fields are cross-checked. Publish evidence additionally requires a
+trusted configured origin, annotated tag, matching default-branch CI attestation,
+and an unchanged source recheck. Publish-ready mode queries the trusted remote
+branch and GitHub Actions online, downloads the authoritative artifact, compares
+its attestation and artifact-report bytes, and ignores caller-supplied local CI
+overrides. The sealed summary has a whole-receipt digest that must be reverified
+before publication. That digest detects accidental/post-run content changes; it
+is not a signature, so publish verification also replays the local gate hashes,
+tracked-tree scan, source/tag state, trusted remote, workflow, and CI artifact
+online. The gate scans every tracked release blob,
+including binary data, for private/runtime material and scans every evidence
+file for guard markers without a size or timeout exception. Candidate mode may
+omit publish-only origin/tag/CI requirements, but cannot bypass local evidence
+failures or return `publish-ready`.
 
 Harness gates:
 
@@ -49,11 +82,19 @@ scripts/llm harness-ledger index --json
 Live gates, only when the local stack is intentionally running:
 
 ```bash
-scripts/run_local_qwen_codex.sh --check
-python3 scripts/validate_local_qwen_reliability.py --require-live-bridge
+qwendex-dev verify --tier live
 ```
 
-Receipt reads verify supported schemas and SHA-256 digests. Eval output includes
+The tier orchestrator invokes `scripts/run_local_qwen_codex.sh --check`,
+`validate_local_qwen_reliability.py --require-live-bridge`, and
+`validate_local_qwen_codex_acceptance.py` with unique ignored fresh-home,
+normal-home-decoy, and final-output paths. Do not replace the fresh-home gate
+with a seat-configuration receipt or the offline eval fixtures.
+
+Receipt reads verify supported schemas, release bindings, source identity, and
+SHA-256 digests. The matching `CI` artifact proves the actual checkout passed
+compile/lint/tests, strict surface checks, tracked-artifact scanning, and a
+same-root fresh installation. Eval output includes
 a compact case-count metrics summary; pass@k, marker-rate, loop-rate, synthetic
 recovery, Qwen handoff, and task-quality dashboards remain future release-gated
 work.

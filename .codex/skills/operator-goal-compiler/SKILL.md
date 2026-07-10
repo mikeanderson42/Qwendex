@@ -1,92 +1,51 @@
 ---
 name: operator-goal-compiler
-description: Compile rough operator intent or prior Codex closeouts into bounded DeskAgent, Clippy, Qmsg, Jarvis, Qwendex, or GTM development goals with lane classification, git custody, effort budgets, anti-loop rules, artifact contracts, validation gates, STOP statuses, and next-goal routing.
+description: Compile rough Qwendex operator intent or prior Codex closeouts into bounded Qwendex development goals with git custody, effort budgets, anti-loop rules, artifact contracts, validation gates, STOP statuses, and next-goal routing.
 ---
 
-# Operator Goal Compiler
+# Qwendex Operator Goal Compiler
 
-Use this skill when Mike asks for a Codex/Qwendex goal, project prompt, next
-goal, execution packet, "the goal skill", or analysis of a prior Codex
-closeout. The default job is to compile a paste-ready goal, not to edit code,
-unless Mike explicitly asks to execute.
+Compile a paste-ready Qwendex goal when the operator asks for a goal, project
+prompt, next goal, execution packet, "the goal skill", or analysis of a prior
+Codex closeout. Do not edit code unless the operator explicitly asks to execute
+the compiled goal.
 
-## Inputs
+## Inputs And Modes
 
 Accept rough intent, pasted results, transfer notes, validation output, or
-repo/project direction. Prefer direct best-effort compilation over questions
-unless ambiguity would make the goal unsafe to execute.
+Qwendex project direction. Prefer best-effort compilation over questions unless
+ambiguity would make the goal unsafe.
 
-Always identify:
+- `compile_goal`: turn fresh intent into a complete goal packet.
+- `next_goal_from_result`: extract verified state, branch/commit, dirty paths,
+  validation, STOP status, blockers, and the true next frontier from a prior
+  closeout. Generate the next highest-value goal, not a recap.
+- `execute_goal`: inspect and execute only when explicitly requested. Validate
+  before committing and never push unless explicitly authorized.
 
-- target project/repo
-- primary lane
-- mode
-- effort budget
-- git custody policy
-- validation tier
-- artifact contract
-- STOP statuses
+Resolve the Qwendex workspace from the operator's target or
+`$QWENDEX_DEV_ROOT`, defaulting to `~/qwendex-dev`.
 
-## Modes
+## Lane And Effort
 
-`compile_goal`: turn rough intent into a complete goal packet.
+Choose one primary Qwendex lane. Split combined work into ordered goals unless
+the operator explicitly requests one sprint.
 
-`next_goal_from_result`: use when Mike pastes a prior Codex closeout, progress
-summary, or validation result. Extract verified state, branch/commit, dirty
-paths, validation status, STOP status, blockers, and the true next frontier.
-Generate the next highest-value goal, not a recap.
+- `product`: CLI, config, routing, receipts, seats, and reusable packages.
+- `manager`: manager mode, agent policy, lifecycle, hooks, and orchestration.
+- `local_bridge`: Responses compatibility, parser recovery, runtime guards,
+  marker suppression, and local stack wiring.
+- `codex_patch`: supported Codex source patching and patched-TUI boundaries.
+- `release`: packaging, public docs, release receipts, and publication gates.
+- `git_docs_context`: Qwendex instructions, skills, branch custody, and docs.
 
-`execute_goal`: only when Mike explicitly asks to execute. Inspect repo state,
-compile internally, work through bounded phases, validate, commit only if
-allowed, and never push unless the project policy allows it or Mike asks.
+Set one effort budget:
 
-## Project Defaults
-
-- `deskagent_clippy`: use `/home/tweak/repohome/jarvis` for local PC,
-  DeskAgent runtime, Clippy/Jarvis/Qmsg, voice/tray/remote, and operator
-  recovery. Do not push unless explicitly requested.
-- `qwendex`: use `/home/tweak/repohome/qwendex-dev` for Qwendex product,
-  manager mode, local-Qwen bridge, Codex patching, receipts, evals, reusable
-  packages, and release docs. Do not push unless explicitly requested.
-- `gtm_framework`: use the active GTM repo/project context. Push scoped,
-  validated changes by default only when that project policy is in effect.
-
-Preserve compatibility for `jarvis-*`, `clippy-*`, `qmsg`, `qmsg-tmux`,
-`qmsg-watchdog`, Qmsg units, and `qwendex-phone:0.0` unless a migration goal
-explicitly includes tested compatibility replacement.
-
-## Lane Classifier
-
-Pick one primary lane. Split multi-lane requests into ordered goals unless Mike
-explicitly asks for a combined sprint.
-
-- `deskagent_backend`: config, CLI, process registry, package boundaries,
-  verification, docs.
-- `qmsg_bridge`: `deskagent.messaging.qmsg`, qmsg status/verify, watchdog,
-  legacy compatibility.
-- `clippy_visual`: renderer, SVG assets, body/eyes/brows/paper, proof images.
-- `clippy_animation`: animation catalog, idle policy, behavior controller.
-- `live_acceptance`: wake model, live voice, remote keyboard, restart survival.
-- `service_runtime`: systemd/user services, wrappers, runtime status.
-- `doctor_verifier`: doctor/verify classification and live-gate boundaries.
-- `qwendex_product`: manager mode, estimates, bridge/parser/runtime guards,
-  receipts, evals, release docs.
-- `git_docs_context`: project instructions, AGENTS, skills, branch custody,
-  docs consolidation.
-- `gtm_application`: admission review, source gaps, application harnesses,
-  parser/schema repair, row queues, lineage, and patch-safe rows.
-
-## Effort Budgets
-
-- `micro`: one file, wording, docs, or focused bug; no broad audit.
+- `micro`: one file, wording, docs, or a focused bug.
 - `focused`: one lane or artifact family with focused validation.
 - `standard`: normal implementation with scoped tests and final validation.
-- `heavy`: multi-phase repo work with docs, receipts, validation, and commit.
-- `max`: only when Mike explicitly asks to push hard or run a long autonomous
-  sprint.
-
-The compiled goal must name the budget and validation tier. Do not choose heavy
-validation for docs-only, visual-only, or prompt-only work unless requested.
+- `heavy`: multi-phase Qwendex work with docs, receipts, and full validation.
+- `max`: only for an explicitly requested long autonomous sprint.
 
 ## Git Custody
 
@@ -101,60 +60,42 @@ git ls-files --others --exclude-standard
 ```
 
 Classify dirty files as `in_scope`, `related_existing`, `unrelated`, or
-`generated_private`. Track durable source/docs/tests/configs/scripts/services.
-Keep generated/private artifacts ignored. Split commits by lane. Do not reset,
-delete, revert, broad-chown/chmod, or push unless Mike explicitly asks.
+`generated_private`. Track durable source, docs, tests, configs, and scripts.
+Keep generated/private artifacts ignored. Do not reset, delete, revert,
+broad-chown/chmod, commit, or push outside the goal's explicit authority.
 
 ## Anti-Loop Rules
 
-- If a harness was built, consume its outputs next.
-- If a queue was generated, resolve the queue next.
-- If blockers were found, cluster and repair blockers next.
-- If source contracts were emitted, execute or machine-close them next.
-- If two consecutive runs end on the same machine-blocked condition, pivot to
-  deterministic field/materialization repair, source-contract repair, or
-  application-boundary review.
-- If rows or patches are staged patch-safe, prefer admission-grade audit or
-  application-rule extraction over discovery.
-- Do not allow two consecutive report-only goals unless Mike asks for analysis
-  only.
+- Consume existing harness outputs instead of rebuilding the harness.
+- Resolve an existing queue before generating another queue.
+- Cluster and repair known blockers instead of repeating discovery.
+- Execute or machine-close emitted source contracts next.
+- After two runs on the same blocker, pivot to deterministic contract, state,
+  schema, or boundary repair.
+- Do not produce two consecutive report-only goals unless analysis-only work was
+  requested.
 
-## Artifact Contracts
+## Artifact And Validation Contract
 
-Use concrete deliverables:
+Require concrete Qwendex evidence appropriate to the lane:
 
-- DeskAgent/Qmsg: status JSON, verify JSON, compatibility receipt, process
-  registry diff, focused tests.
-- Clippy visual: proof assets, review notes, changed visual sources,
-  `human_review_required` if visual approval is needed.
-- Doctor/verifier: classified failures, package failures, deferred live gates,
-  command outputs.
-- Qwendex product: receipt/eval output, connectedness proof, docs update,
-  quick/full/release gate result as appropriate.
-- Git/docs context: branch, commits, changed docs, ignored private artifacts,
-  validation commands, remaining dirty-state classification.
-- GTM/application: input rows/contracts, admitted/rejected rows, source-gap
-  clusters, schema/parser diffs, lineage notes, application-boundary decisions.
+- changed source/docs/tests/config paths
+- routing, manager, bridge, patch, receipt, or eval JSON when applicable
+- connectedness proof for visible controls or public claims
+- private/generated artifact classification
+- focused tests plus `qwendex-dev verify --tier quick`
+- `qwendex-dev verify --tier full` for shared contracts
+- `qwendex-dev verify --tier release` for release-readiness claims
 
-## Template Selection
+Local Qwen output is advisory. Require GPT/Codex review for release, security,
+architecture, protocol, and public claims.
 
-For detailed packet shape, read only the relevant template:
+Read `templates/qwendex_product_goal.md` for the detailed packet shape. Read
+`examples/rough_intent_to_goal_examples.md` only when an example is useful.
 
-- `templates/deskagent_backend_goal.md`
-- `templates/qmsg_bridge_goal.md`
-- `templates/clippy_visual_goal.md`
-- `templates/clippy_animation_goal.md`
-- `templates/live_acceptance_goal.md`
-- `templates/doctor_verifier_goal.md`
-- `templates/qwendex_product_goal.md`
-- `templates/git_docs_context_goal.md`
-- `templates/gtm_application_goal.md`
+## Goal Packet
 
-For sample outputs, read `examples/rough_intent_to_goal_examples.md`.
-
-## Goal Packet Format
-
-Use this structure unless a template overrides it:
+Use this structure:
 
 ```text
 GOAL
@@ -178,24 +119,9 @@ STOP_STATUSES
 NEXT_GOAL_ROUTING
 ```
 
-## Final Report Requirements
-
-Generated goals should require final reports with:
-
-```text
-SOURCE_CHECK
-LANE_CLASSIFICATION
-DIRTY_STATE_AUDIT
-CHANGE_SUMMARY
-ARTIFACTS
-VALIDATION_RESULTS
-GATE_RESULTS
-COMMIT_STATUS
-DEFERRED_ITEMS
-NEXT_RECOMMENDED_GOAL
-FINAL_STOP_STATUS
-```
-
-Never report a ready status if branch custody is unclear, unrelated dirty state
-was discarded or staged, validation was skipped without explanation,
-compatibility was broken, or live/human gates were falsely claimed complete.
+Require final reports with source/branch checks, dirty-state classification,
+change and artifact summaries, validation and gate results, commit status,
+deferred items, the next recommended goal, and a specific final STOP status.
+Never report ready when custody is unclear, unrelated dirty state was discarded
+or staged, required validation lacks evidence, or public/runtime boundaries are
+overclaimed.

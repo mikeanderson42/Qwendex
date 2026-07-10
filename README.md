@@ -83,6 +83,23 @@ Qwendex is primarily Python, shell, and JSON:
 
 ## Quick Start
 
+Clone the current tagged release into the default Qwendex root:
+
+```bash
+git clone https://github.com/mikeanderson42/Qwendex.git ~/qwendex-dev
+cd ~/qwendex-dev
+git fetch --tags origin
+git switch --detach v0.5.0
+```
+
+Qwendex is currently distributed as source; GitHub source archives and the
+matching git tag are the release artifact. It does not install as a Python or
+npm package.
+
+No open-source license is included in this release. Public source visibility
+does not grant reuse, modification, or redistribution rights; the repository
+owner can add an explicit license in a later release.
+
 Install or check dependencies:
 
 ```bash
@@ -90,11 +107,30 @@ scripts/qwendex_install_deps --install
 scripts/qwendex_install_deps --check --json
 ```
 
+The supported runtime baseline is Bash 4+ and Python 3.11+; the dependency
+receipt blocks older interpreters instead of failing later in Qwendex startup.
+
+The installer requires `@openai/codex@0.144.0`, matching this release's
+native-patch compatibility contract. For intentional compatibility testing,
+override both `QWENDEX_CODEX_NPM_SPEC` and
+`QWENDEX_CODEX_REQUIRED_VERSION`.
+
+Rollback to a pre-`0.5.0` tag requires separate source and runtime roots; see
+the [public quickstart](public/qwendex/quickstart.md#upgrade-or-roll-back).
+
 Run baseline checks:
 
 ```bash
 scripts/qwendex check --json
 scripts/qwendex doctor --json
+```
+
+Create the isolated runtime wiring and expose `qdex` in `~/.local/bin`:
+
+```bash
+scripts/qwendex_dev_env sync
+source ~/qwendex-dev/.qwendex-dev/env.sh
+qwendex-dev doctor
 ```
 
 Qwendex separates health output into advisory and strict modes for `check` and
@@ -218,8 +254,9 @@ bridge/parser behavior, shared contracts, or release-adjacent changes. Use
 
 `qwendex-dev verify --tier quick` runs lint, smoke tests, `scripts/qwendex
 check`, `scripts/qwendex doctor`, Codex status writing, and Codex patch
-preflight. `full` adds JSON config validation, the offline Qwendex eval suite,
-and local harness eval/gate receipts. `release` uses strict checks with an
+preflight. `full` adds JSON syntax plus published Draft 2020-12 schema and
+version-parity validation, the offline Qwendex eval suite, and local harness
+eval/gate receipts. `release` uses strict checks with an
 isolated release state DB and writes the release summary. Run `live`, or set
 `QWENDEX_RELEASE_REQUIRE_LIVE=1` for `release`, only when the local stack is
 intentionally available.
@@ -266,7 +303,7 @@ claims require GPT/Codex review and the appropriate Qwendex verification tier.
 
 ## Current Release / Known Limits
 
-This checkout is seeded as `v0.4.0`. The latest captured max-depth
+This checkout is seeded as `v0.5.0`. The latest captured max-depth
 validation summary in this repository is still
 [`docs/validation/v0.1.0-rc.1-validation_summary.json`](docs/validation/v0.1.0-rc.1-validation_summary.json)
 until a newer release validation run is recorded.
@@ -275,7 +312,9 @@ Known limits:
 
 - Live local Qwen checks require the local stack to be running.
 - Local Qwen is not release authority.
-- SkillOpt adoption remains staged and review-gated.
+- The built-in learning mock is non-mutating; external SkillOpt is required for
+  status, harvest, and run actions, and `learn adopt --approve` is only an
+  allowlist preflight that never applies files.
 - Tool capability manifests with per-tool network/write scopes are planned but
   are not yet a general permission engine in the public CLI.
 - Patched Codex footer and hotkeys depend on a supported source checkout and a

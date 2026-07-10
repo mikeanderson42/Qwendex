@@ -6,18 +6,29 @@ INSTALL_SYSTEM=1
 INSTALL_USER=1
 JSON=0
 ASSUME_YES=1
+export QWENDEX_CODEX_REQUIRED_VERSION="${QWENDEX_CODEX_REQUIRED_VERSION:-0.144.0}"
+export QWENDEX_JSONSCHEMA_REQUIRED_VERSION="${QWENDEX_JSONSCHEMA_REQUIRED_VERSION:-4.26.0}"
+export QWENDEX_PYTEST_REQUIRED_VERSION="${QWENDEX_PYTEST_REQUIRED_VERSION:-9.0.3}"
+export QWENDEX_RUFF_REQUIRED_VERSION="${QWENDEX_RUFF_REQUIRED_VERSION:-0.15.20}"
 
 usage() {
   cat <<'EOF'
 Usage: scripts/qwendex_install_deps [--check|--install] [--no-system] [--no-user] [--json]
 
 Installs or checks the host tools Qwendex needs for the current public harness:
-bash, python3, git, rsync, curl, Codex CLI, pytest, ruff, Rust/cargo/rustfmt,
-ripgrep, tmux, and GitHub CLI where available.
+bash, python3, git, rsync, curl, Codex CLI, jsonschema, pytest, ruff,
+Rust/cargo/rustfmt, ripgrep, tmux, and GitHub CLI where available.
+
+Qwendex requires Bash 4 or newer and Python 3.11 or newer.
 
 System package installation is best-effort and non-interactive. User-scope
 installs use python3 -m pip --user, rustup, cargo install, and npm with a
 ~/.local prefix when needed.
+PEP 668's pip override is added only for an externally managed, non-virtualenv
+Python and remains paired with --user.
+
+Codex CLI must match QWENDEX_CODEX_REQUIRED_VERSION (default 0.144.0).
+Override both it and QWENDEX_CODEX_NPM_SPEC only for compatibility testing.
 EOF
 }
 
@@ -57,6 +68,29 @@ have() {
   command -v "$1" >/dev/null 2>&1
 }
 
+bash_compatible() {
+  [[ "${BASH_VERSINFO[0]:-0}" -ge 4 ]]
+}
+
+python_compatible() {
+  have python3 && python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)' >/dev/null 2>&1
+}
+
+python_externally_managed() {
+  python3 - <<'PY' >/dev/null 2>&1
+import sysconfig
+from pathlib import Path
+
+stdlib = sysconfig.get_path("stdlib")
+outside_venv = sys.prefix == sys.base_prefix
+raise SystemExit(
+    0
+    if outside_venv and stdlib and (Path(stdlib) / "EXTERNALLY-MANAGED").is_file()
+    else 1
+)
+PY
+}
+
 record() {
   printf '%s\n' "$*" >> "$LOG_FILE"
 }
@@ -65,9 +99,10 @@ run_logged() {
   record "+ $*"
   if "$@" >> "$LOG_FILE" 2>&1; then
     return 0
+  else
+    local rc=$?
+    record "command failed ($rc): $*"
   fi
-  local rc=$?
-  record "command failed ($rc): $*"
   return 0
 }
 
@@ -96,9 +131,9 @@ system_install() {
     fi
   elif have pacman; then
     if [[ "$(id -u)" -eq 0 ]]; then
-      run_logged pacman -Sy --noconfirm --needed "${packages[@]}"
+      run_logged pacman -S --noconfirm --needed "${packages[@]}"
     elif have sudo && sudo -n true >/dev/null 2>&1; then
-      run_logged sudo pacman -Sy --noconfirm --needed "${packages[@]}"
+      run_logged sudo pacman -S --noconfirm --needed "${packages[@]}"
     else
       record "system install skipped: sudo is not available non-interactively"
     fi
@@ -111,33 +146,38 @@ system_install() {
 
 install_system_basics() {
   local missing=()
+  bash_compatible || missing+=(bash)
   have git || missing+=(git)
   have rsync || missing+=(rsync)
   have curl || missing+=(curl)
   have tmux || missing+=(tmux)
 
   if have apt-get; then
-    have python3 || missing+=(python3)
+    python_compatible || missing+=(python3)
     python3 -m pip --version >/dev/null 2>&1 || missing+=(python3-pip python3-venv)
     have npm || missing+=(npm nodejs)
     have cargo || missing+=(cargo rustc)
+    have gh || missing+=(gh)
     system_install "${missing[@]}"
   elif have dnf; then
-    have python3 || missing+=(python3)
+    python_compatible || missing+=(python3)
     python3 -m pip --version >/dev/null 2>&1 || missing+=(python3-pip)
     have npm || missing+=(npm nodejs)
     have cargo || missing+=(cargo rust)
+    have gh || missing+=(gh)
     system_install "${missing[@]}"
   elif have pacman; then
-    have python3 || missing+=(python)
+    python_compatible || missing+=(python)
     python3 -m pip --version >/dev/null 2>&1 || missing+=(python-pip)
     have npm || missing+=(npm nodejs)
     have cargo || missing+=(rust)
+    have gh || missing+=(github-cli)
     system_install "${missing[@]}"
   elif have brew; then
-    have python3 || missing+=(python)
+    python_compatible || missing+=(python)
     have npm || missing+=(node)
     have cargo || missing+=(rust)
+    have gh || missing+=(gh)
     system_install "${missing[@]}"
   else
     system_install "${missing[@]}"
@@ -146,12 +186,21 @@ install_system_basics() {
 
 install_python_tools() {
   [[ "$MODE" == "install" && "$INSTALL_USER" -eq 1 ]] || return 0
-  have python3 || return 0
+  python_compatible || return 0
   if ! python3 -m pip --version >/dev/null 2>&1; then
     python3 -m ensurepip --user >> "$LOG_FILE" 2>&1 || true
   fi
   if python3 -m pip --version >/dev/null 2>&1; then
-    run_logged python3 -m pip install --user --upgrade pytest ruff
+    local pip_args=(--user --upgrade)
+    if python_externally_managed; then
+      # PEP 668 blocks even user-site writes unless pip receives this explicit
+      # override. Keep --user so no system-site package is ever replaced.
+      pip_args=(--user --break-system-packages --upgrade)
+    fi
+    run_logged python3 -m pip install "${pip_args[@]}" \
+      "jsonschema==$QWENDEX_JSONSCHEMA_REQUIRED_VERSION" \
+      "pytest==$QWENDEX_PYTEST_REQUIRED_VERSION" \
+      "ruff==$QWENDEX_RUFF_REQUIRED_VERSION"
   fi
 }
 
@@ -176,10 +225,17 @@ install_rust_tools() {
 
 install_codex() {
   [[ "$MODE" == "install" && "$INSTALL_USER" -eq 1 ]] || return 0
-  have codex && return 0
+  local installed_codex_version=""
+  if have codex; then
+    installed_codex_version="$(codex --version 2>/dev/null || true)"
+  fi
+  if [[ "$installed_codex_version" == "codex-cli $QWENDEX_CODEX_REQUIRED_VERSION" ]]; then
+    return 0
+  fi
   if have npm; then
     mkdir -p "$HOME/.local"
-    run_logged npm install -g --prefix "$HOME/.local" @openai/codex
+    local codex_npm_spec="${QWENDEX_CODEX_NPM_SPEC:-@openai/codex@$QWENDEX_CODEX_REQUIRED_VERSION}"
+    run_logged npm install -g --prefix "$HOME/.local" "$codex_npm_spec"
   else
     record "codex install skipped: npm is unavailable"
   fi
@@ -187,14 +243,26 @@ install_codex() {
 
 tool_json() {
   python3 - "$LOG_FILE" <<'PY'
+from __future__ import annotations
+
 import json
+import os
+import re
 import shutil
 import subprocess
 import sys
-from datetime import UTC, datetime
+import sysconfig
+from datetime import datetime, timezone
+from importlib.metadata import PackageNotFoundError, version as distribution_version
 from pathlib import Path
 
 log_file = Path(sys.argv[1])
+required_codex_version = os.environ.get("QWENDEX_CODEX_REQUIRED_VERSION", "0.144.0")
+required_module_versions = {
+    "jsonschema": os.environ.get("QWENDEX_JSONSCHEMA_REQUIRED_VERSION", "4.26.0"),
+    "pytest": os.environ.get("QWENDEX_PYTEST_REQUIRED_VERSION", "9.0.3"),
+    "ruff": os.environ.get("QWENDEX_RUFF_REQUIRED_VERSION", "0.15.20"),
+}
 
 def version(cmd: str) -> dict[str, object]:
     path = shutil.which(cmd)
@@ -203,41 +271,120 @@ def version(cmd: str) -> dict[str, object]:
     try:
         args = [path, "-V"] if cmd == "tmux" else [path, "--version"]
         result = subprocess.run(args, text=True, capture_output=True, timeout=15, check=False)
-        raw = (result.stdout or result.stderr).strip().splitlines()
-        return {
+        normalized_output = (result.stdout or result.stderr).strip()
+        raw = normalized_output.splitlines()
+        data = {
             "available": result.returncode == 0,
             "path": path,
             "version": raw[0] if raw else "",
             "returncode": result.returncode,
         }
+        if cmd == "codex":
+            data["normalized_output"] = normalized_output
+        return data
     except Exception as exc:
         return {"available": False, "path": path, "version": "", "error": str(exc)}
 
-def module_available(name: str) -> bool:
-    return subprocess.run(
+def module_version(name: str) -> dict[str, object]:
+    result = subprocess.run(
         [sys.executable, "-m", name, "--version"],
         text=True,
         capture_output=True,
         timeout=15,
         check=False,
-    ).returncode == 0
+    )
+    output = (result.stdout or result.stderr).strip()
+    first_line = output.splitlines()[0] if output else ""
+    try:
+        observed_distribution_version = distribution_version(name)
+    except PackageNotFoundError:
+        observed_distribution_version = ""
+    return {
+        "available": result.returncode == 0 and bool(observed_distribution_version),
+        "version": (
+            f"{name} {observed_distribution_version}"
+            if observed_distribution_version
+            else first_line
+        ),
+        "module_cli_version": first_line,
+        "distribution_version": observed_distribution_version,
+        "returncode": result.returncode,
+    }
 
 commands = ["bash", "python3", "git", "rsync", "curl", "codex", "cargo", "rustfmt", "rg", "tmux", "gh", "npm"]
 tools = {name: version(name) for name in commands}
-python_modules = {name: module_available(name) for name in ["pytest", "ruff"]}
+python_module_versions = {
+    name: module_version(name) for name in required_module_versions
+}
+python_modules = {
+    name: bool(details["available"])
+    for name, details in python_module_versions.items()
+}
 required = ["bash", "python3", "git", "rsync", "curl", "codex"]
-developer = ["cargo", "rustfmt", "rg", "tmux"]
+developer = ["cargo", "rustfmt", "rg", "tmux", "gh"]
 missing_required = [name for name in required if not tools[name]["available"]]
+python_compatible = sys.version_info >= (3, 11)
+bash_match = re.search(r"version\s+(\d+)(?:\.|\b)", str(tools["bash"].get("version", "")))
+bash_compatible = bool(bash_match and int(bash_match.group(1)) >= 4)
+expected_codex_version = f"codex-cli {required_codex_version}"
+observed_codex_version = str(tools["codex"].get("normalized_output", ""))
+codex_compatible = bool(
+    tools["codex"]["available"]
+    and observed_codex_version == expected_codex_version
+)
+incompatible_required = (
+    []
+    if codex_compatible or not tools["codex"]["available"]
+    else [
+        f"codex version {observed_codex_version!r} does not match required {expected_codex_version!r}"
+    ]
+)
+if not python_compatible:
+    incompatible_required.append(
+        f"python version {sys.version.split()[0]!r} is below required 3.11"
+    )
+if not bash_compatible:
+    incompatible_required.append(
+        f"bash version {tools['bash'].get('version', '')!r} is below required 4"
+    )
 missing_python = [name for name, available in python_modules.items() if not available]
+incompatible_python = [
+    name
+    for name, expected in required_module_versions.items()
+    if python_modules[name]
+    and python_module_versions[name]["distribution_version"] != expected
+]
 missing_developer = [name for name in developer if not tools[name]["available"]]
+stdlib = sysconfig.get_path("stdlib")
+python_externally_managed = bool(
+    sys.prefix == sys.base_prefix
+    and stdlib
+    and (Path(stdlib) / "EXTERNALLY-MANAGED").is_file()
+)
 data = {
     "schema_version": "qwendex.install_deps.v1",
-    "generated_at": datetime.now(UTC).isoformat(),
-    "status": "pass" if not missing_required and not missing_python else "blocked",
+    "generated_at": datetime.now(timezone.utc).isoformat(),
+    "status": "pass" if not missing_required and not incompatible_required and not missing_python and not incompatible_python else "blocked",
     "tools": tools,
     "python_modules": python_modules,
+    "python_module_versions": python_module_versions,
+    "required_python_module_versions": required_module_versions,
     "missing_required": missing_required,
+    "required_codex_version": required_codex_version,
+    "required_python_version": "3.11",
+    "python_compatible": python_compatible,
+    "required_bash_version": "4",
+    "bash_compatible": bash_compatible,
+    "python_pip_policy": {
+        "scope": "user",
+        "externally_managed": python_externally_managed,
+        "break_system_packages": python_externally_managed,
+        "system_site_writes": False,
+    },
+    "codex_compatible": codex_compatible,
+    "incompatible_required": incompatible_required,
     "missing_python_modules": missing_python,
+    "incompatible_python_modules": incompatible_python,
     "missing_developer": missing_developer,
     "log_file": str(log_file),
 }

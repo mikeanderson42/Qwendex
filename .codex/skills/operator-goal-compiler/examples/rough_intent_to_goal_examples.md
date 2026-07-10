@@ -1,44 +1,26 @@
-# Operator Goal Compiler Examples
+# Qwendex Goal Compiler Examples
 
-## Rough Intent: "clean up qmsg"
+## Rough Intent: "make manager mode reliable"
 
-Compile as `qmsg_bridge`, not a broad cleanup. Require Jarvis owner docs,
-current branch/status, no service renames, compatibility for `qmsg`,
-`qmsg-tmux`, `qmsg-watchdog`, Qmsg units, and `qwendex-phone:0.0`, focused Qmsg
-tests, `qmsg status --json`, `qmsg-tmux status`, and a compatibility receipt.
-
-STOP status should be `qmsg_bridge_ready` or a specific blocked status, never a
-generic "done".
+Compile a `manager` lane goal. Require current manager status, state-source and
+hook boundaries, focused lifecycle tests, a connectedness proof, quick/full
+verification as appropriate, and a specific ready or blocked STOP status.
 
 ## Pasted Result: Harness Built, Outputs Pending
 
-Use `next_goal_from_result`. Extract the harness path, generated output files,
-branch/commit, dirty paths, and validation. The next goal must consume harness
-outputs and target the blocker frontier. Do not rebuild the harness.
+Use `next_goal_from_result`. Extract the harness path, output files,
+branch/commit, dirty paths, and validation. The next goal must consume those
+outputs and target the blocker frontier instead of rebuilding the harness.
 
-## Pasted Result: Two Machine-Blocked Runs
+## Pasted Result: Two Runs Hit The Same Blocker
 
-Use `next_goal_from_result`. Prohibit broad retries. Classify whether the
-blocker is source, schema, split, uncertainty, leakage, lineage, policy, or
-application boundary. Compile a deterministic repair or source-contract goal.
+Prohibit another broad retry. Classify the blocker as source, state, schema,
+protocol, validation, artifact, or public/private boundary, then compile a
+deterministic repair goal.
 
-## Rough Intent: "make Clippy look right"
+## Rough Intent: "publish the next release"
 
-Compile as `clippy_visual`. Require canonical geometry/source docs, visual-only
-scope, rendered proof assets, focused visual tests, and
-`human_review_required` when subjective approval remains. Do not include Qmsg,
-DeskAgent package cleanup, or live voice gates.
-
-## Rough Intent: "make verify green"
-
-Compile as `doctor_verifier` unless the user explicitly asks for live
-acceptance. Require classified failures, package failures, deferred live gates,
-focused doctor/verifier tests, and command outputs. Do not mark deferred live
-gates as package failures.
-
-## Rough Intent: "update project instructions"
-
-Compile as `git_docs_context`. Require both repo statuses, tracked docs/skills
-updates, ignored private context notes, `git diff --check`, Qwendex quick
-verification if Qwendex skill/docs changed, scoped commits, and a remaining
-dirty-state handoff.
+Compile a `release` lane goal. Require exact version-source alignment, full
+tracked-artifact scanning, immutable gate receipts bound to a clean default
+branch commit and tag, full/release verification, and explicit commit, push,
+tag, and GitHub release authority.

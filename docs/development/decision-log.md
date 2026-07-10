@@ -104,6 +104,27 @@ merge/conflict handling. A conservative single-writer rule is simpler to
 explain, easier to verify, and prevents accidental same-worktree corruption
 while leaving worktree-per-writer as a later enhancement.
 
+## Fail-Closed Managed Shell Hooks
+
+Decision: managed `PreToolUse` events for read-only profiles accept shell
+execution only when a quote-aware parser proves that every command-list or
+pipeline segment is in the public inspection allowlist. Unknown commands,
+interpreters, wrappers, expansion, redirects, unquoted globs, and unparseable
+syntax are denied. Git, ripgrep, and find receive command-specific option gates
+that exclude output files, external helpers, preprocessors, execution actions,
+and deletion. For write-capable profiles, any managed shell command outside the
+same inspection allowlist is presumed to write and must provide agent identity
+and explicit target paths before the existing lock gate runs.
+
+Reason: recognizing a short blacklist of write-shaped strings cannot establish
+that a shell command is read-only. Common mutators, interpreter snippets, shell
+wrappers, option-driven output, and expansion can all bypass such a detector.
+A deliberately small positive grammar keeps read-only exploration useful while
+making ambiguity a blocking result. Presuming ambiguous writer commands to
+write also prevents an endless mutation blacklist from becoming a lock bypass.
+The contract remains a managed-hook classifier layered with, not a replacement
+for, the host sandbox and stock runtime tool permissions.
+
 ## Agent Raw Output Preservation
 
 Decision: Manager Mode stores child final output as ignored local artifacts
@@ -196,3 +217,165 @@ Decision: local Qwen is useful but never release authority.
 
 Reason: Qwendex is built around receipts, guard markers, and GPT review gates;
 release, security, architecture, and public claims require GPT/Codex review.
+
+## Public Source And Release Evidence Boundary
+
+Decision: the public Qwendex release artifact is the exact tagged git tree.
+Operator recovery history, downstream assistant workflows, absolute machine
+paths, local model inventory, runtime state, and locally built Codex binaries
+do not belong in tracked Qwendex files or attached release assets.
+
+Reason: GitHub source archives include every tracked blob. Labeling a file as
+developer instructions does not make its private or downstream-specific content
+non-public. Qwendex must keep reusable product rules tracked and move
+operator-local context to ignored overlays or the owning downstream repo.
+
+## Immutable Release Gate
+
+Decision: release evidence is generated in a unique per-run directory. Every
+local receipt is bound to the run, stable command/gate identity, exact commit and
+tree, strict mode where required, generation time, and canonical payload digest.
+Publish readiness additionally requires a clean default branch, trusted
+configured origin, annotated local tag, source-bound remote CI attestation,
+isolated Codex build proof, tracked-artifact scan, all-file guard-marker scan,
+and an unchanged-source recheck. A fixed latest-summary path is not authoritative
+because later commands can overwrite the files it references.
+
+Reason: a green mutable summary can otherwise outlive or drift away from the
+commands and source it claims to validate. Candidate branches may produce
+candidate evidence, but only the clean tagged default-branch commit can be
+`publish-ready`.
+
+## Remote Pull Request Gate
+
+Decision: GitHub Actions runs full Python compile/lint, tracked JSON syntax and
+published-config schema validation, Bash syntax, the full pytest suite, strict
+public surface checks, the artifact contract against actual HEAD, and the
+documented same-root installation path on pushes and pull requests. A
+successful run emits a commit/tree/ref-bound CI
+attestation for the local publish gate. Release publication remains a deliberate
+operator action.
+
+Reason: local receipts and remote review are complementary. A public release
+branch with no remote checks provides no independent evidence that the pushed
+tree matches a passing build.
+
+## Release Command Approval Provenance
+
+Decision: the managed pre-tool gate recognizes direct and path-qualified
+release commands through common shell wrappers, substitutions, pipelines, and
+newline-separated commands. Publication approval is accepted only when
+`QWENDEX_RELEASE_APPROVED` already exists in the managed hook process
+environment. Inline assignments, `env`, `export`, and agent-controlled event
+JSON cannot create that authority.
+
+Reason: parsing command text as both the requested action and its authorization
+lets an agent self-approve publication. Static recognition still cannot prove
+arbitrary interpreter-generated commands, so credentials, network policy, and
+the execution sandbox remain the ultimate publication boundary.
+
+## Repository-Scoped Manager State
+
+Decision: new manager sessions, decisions, active limits, and file locks record
+the canonical target repository. Stop gates join agents by both manager task id
+and repository. Operational health is scoped, while full-ledger validation debt
+is counted truthfully with bounded samples and explicit legacy-unscoped counts.
+Legacy rows are not silently migrated or marked validated; active unscoped
+write locks remain conservative blockers until an owning session is explicitly
+re-registered or reviewed.
+
+Reason: a shared dev SQLite file previously allowed unrelated downstream agent
+history to block or satisfy Qwendex gates, hid debt behind status limits, and
+made independent repositories contend for one writer slot. Scope metadata
+preserves one inspectable ledger without treating cross-project state as proof
+for the current run.
+
+## Interactive Manager Attachment And Receipts
+
+Decision: each root `UserPromptSubmit` attaches the real prompt to a turn
+decision under the exported preflight launch ledger, ignoring Codex's generic
+thread `session_id`, and returns the deterministic plan plus runtime-id
+registration instructions. Later Codex `turn_id` values create additive child
+decision rows and distinct `agent_task_id` validation scopes without changing
+the parent process environment.
+Manager decision receipts use `qwendex.manager_decision.v1`, a self-digest, and
+atomic replacement so the normal receipt verifier and concurrent readers see a
+complete artifact.
+
+Reason: interactive `qdex` launches do not know the prompt during preflight.
+Without hook-time attachment the persisted direct-work exception could diverge
+from an actual manager task, and without a digest the newest manager receipt
+caused `qwendex receipt latest` to fail its own verification contract.
+
+## Published Configuration Schema Gate
+
+Decision: Qwendex validates `qwendex.json` and `qwendex.sample.json` with the
+exactly pinned `jsonschema` 4.26.0 `Draft202012Validator`. The published schema
+must itself pass the Draft 2020-12 meta-schema, use its canonical schema ID and
+local fragment references only, and agree with both configs on the schema
+version. Config product versions must be SemVer values that match each other
+and the current `RELEASE.md` heading. The full dev gate and both supported CI
+Python versions run this validator, and remote release evidence requires the
+named CI schema check. The `learning` object rejects undeclared keys; the prior
+`auto_harvest` and `auto_stage_safe_proposals` placeholders remain absent until
+they have connected runtime behavior and proof.
+
+Reason: JSON syntax alone cannot detect a valid-looking configuration that has
+drifted from its published contract. Pinning the implementation and checking
+schema, semantic, release-version, and bounded-reference invariants makes the
+same failure reproducible locally, on Python 3.11, and in publication evidence.
+
+## Live Codex Binary And Home Isolation Binding
+
+Decision: live Codex acceptance hashes the launcher and Codex executable before
+and after execution, requires every successful command event to identify the
+requested `printf TOOL_OK` command, rejects non-JSON stdout, and hashes a
+controlled HOME/CODEX_HOME/XDG decoy tree. Release validation requires the live
+executable digest and size to equal the validated Codex build receipt from the
+same source-bound run.
+
+Reason: a tool transcript alone does not prove which executable produced it,
+and checking only an explicit CODEX_HOME misses regressions that fall back to
+HOME or XDG state. Binding both executable identity and all normal-home roots
+closes those substitution and isolation gaps without retaining raw transcripts.
+
+## Canonical Responses Bridge Status Contract
+
+Decision: `/status` is the canonical local-Qwen Responses bridge readiness
+endpoint and returns `qwendex.responses_bridge.status.v1` with `status: ok`.
+Launcher and stack startup validate that payload rather than accepting any HTTP
+200. `/__tabby_proxy_status` remains an identical legacy alias.
+
+Reason: a configured status URL is not useful evidence if arbitrary content or
+a different service can satisfy it. A small versioned contract makes bridge
+identity and readiness testable while preserving existing local integrations.
+
+## Local Endpoint And Target-Repository Binding
+
+Decision: the local Codex launcher derives one canonical bridge base from the
+routing contract, exports exactly `<base>/v1` as `CODEX_OSS_BASE_URL`, and
+blocks a conflicting inherited endpoint. `qdex --repo` uses the selected
+repository as the manager scope, execution directory, Codex add-dir, and MCP
+trusted root while retaining the generated isolated `CODEX_HOME` unless the
+operator explicitly opts into preserving a caller home.
+
+Reason: probing one endpoint and executing against another invalidates live
+evidence. Likewise, launching Qwendex for a downstream repository must not make
+the Qwendex product checkout an implicit manager, execution, local-harness, or
+MCP capability root. This routing boundary does not claim filesystem
+confinement for the deliberately unsandboxed `qdex` process.
+
+## Learning And Descriptive-Config Boundary
+
+Decision: the built-in mock learning dry-run is a non-mutating contract check.
+External SkillOpt remains required for status, harvest, and run actions.
+`learn adopt --approve` performs only a proposal-path allowlist preflight and
+never applies files. The unused top-level `mcp_tools` catalog and Qwen-seat
+`prompt_template` key are removed from built-in and published configuration;
+the MCP server's callable tool list and the launcher/runtime instruction sources
+remain authoritative instead.
+
+Reason: an approval-shaped command must not imply a mutation that does not
+exist, and descriptive config keys with no runtime reader violate the
+connectedness contract. Removing them prevents users from editing inert values
+or relying on nonexistent MCP status, receipt, eval, and learning tools.

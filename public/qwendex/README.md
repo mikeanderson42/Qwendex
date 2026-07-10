@@ -25,6 +25,8 @@ Codex remains the execution plane. Token-saver routing can prefer local Qwen
 when the Codex-facing bridge is healthy, but local Qwen can operate only through
 Qwendex seats, guard profiles, bounded tools, eval receipts, and GPT review
 gates.
+`scripts/qwendex seat <name>` inspects configured seat policy only; choose the
+seat for a run with `exec --seat <name>` or `exec --seat auto`.
 
 ## Start Here
 
@@ -47,16 +49,23 @@ gates.
 - [Release Notes](release-notes.md)
 - [Staging Receipt](staging-receipt.md)
 
-## Compatibility
+## Runtime Delegates And Distinct Checks
 
-| Existing command | Qwendex command |
+Only stack mutation has a direct legacy-to-public delegate:
+
+| Legacy stack command | Public Qwendex command |
 | --- | --- |
-| `scripts/llm doctor --json` | `scripts/qwendex doctor --json` |
-| `./llmstack status --json` | `scripts/qwendex llmstack check --json` |
 | `scripts/llm start --json` | `scripts/qwendex up --json` |
 | `scripts/llm stop --json` | `scripts/qwendex down --json` |
-| `scripts/llm harness-eval --json` | `scripts/qwendex eval --json` |
-| `scripts/llm skillopt dry-run --json` | `scripts/qwendex learn dry-run --json` |
-| `scripts/run_local_qwen_codex.sh --check` | `scripts/qwendex check --json` |
+| `scripts/llm restart --json` | `scripts/qwendex restart --json` |
 
-Qwendex keeps those internal commands available as compatibility delegates.
+The inspection commands are intentionally not aliases:
+
+- `scripts/qwendex check --json` checks the static Qwendex product surface.
+- `scripts/qwendex llmstack check --json` checks the static public LLMStack
+  contract.
+- `./llmstack status --json` reports live managed-service state.
+- `scripts/run_local_qwen_codex.sh --check` performs launcher and endpoint
+  preflight.
+
+Do not substitute one result for another kind of evidence.

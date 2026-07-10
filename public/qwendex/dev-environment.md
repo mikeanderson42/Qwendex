@@ -1,8 +1,10 @@
 # Qwendex Dev Environment
 
-`scripts/qwendex_dev_env` manages the dedicated Qwendex development worktree at
-`~/qwendex-dev`. It is for working on Qwendex itself while keeping the current
-system Codex install available as the fallback execution plane.
+`scripts/qwendex_dev_env` manages runtime wiring for a dedicated Qwendex git
+checkout/worktree at `~/qwendex-dev`. It does not clone or upgrade Qwendex.
+Install from a tagged clone as described in the quickstart, or create a named
+git worktree before using it. The current system Codex install remains
+available as the fallback execution plane.
 
 ## Create Or Refresh Runtime Wiring
 
@@ -13,12 +15,16 @@ scripts/qwendex_install_deps --install
 scripts/qwendex_install_deps --check --json
 ```
 
-The installer is best-effort and non-interactive. It installs user-scope Python
-tools (`pytest`, `ruff`), Rust tooling through `rustup`/`cargo`, `ripgrep`, and
-the Codex CLI through npm when available. It also attempts system package
-installs for required host tools such as `git`, `rsync`, `curl`, `python3`, and
-`tmux` when a supported package manager and non-interactive sudo/root access are
-available. Remaining blockers are reported in JSON instead of being hidden.
+The installer is best-effort and non-interactive. It installs exactly pinned,
+user-scope Python tools (`jsonschema`, `pytest`, `ruff`), Rust tooling through
+`rustup`/`cargo`, `ripgrep`, and the Codex CLI through npm when available. On a
+PEP 668 externally managed interpreter, pip's explicit managed-environment
+override is used only together with `--user`; the receipt records that policy
+and the installer never writes validation tools into the system site. It also
+attempts system package installs for required host tools such as `git`, `rsync`,
+`curl`, `python3`, and `tmux` when a supported package manager and
+non-interactive sudo/root access are available. Remaining blockers are reported
+in JSON instead of being hidden.
 
 Optional interactive discovery tools are useful in a developer shell but are not
 part of the Qwendex runtime contract. If `fd` and `fzf` are available, a local
@@ -42,8 +48,9 @@ scripts/qwendex_dev_env sync
 ```
 
 In worktree mode, `sync` refreshes wrappers, env files, Codex home config, and
-status files. It does not overwrite source files. The legacy generated-copy path
-is retained only through explicit repair commands.
+status files. It does not fetch, merge, check out, or overwrite source files.
+The legacy generated-copy path is retained only through explicit repair
+commands and is not a supported install or release workflow.
 
 Generated state lives under:
 

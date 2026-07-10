@@ -1,5 +1,4 @@
 {
-  "command_receipts_root": "results/qwendex_release_validation/20260701T032059Z",
   "critical_gates": {
     "fresh_home_ab": true,
     "ledger_index": true,
@@ -105,19 +104,7 @@
         "source": "probe",
         "url": "http://127.0.0.1:1234/v1/models",
         "visible_models": [
-          "qwen-local",
-          "qwen36-27Bb",
-          "llmfanq36-27b-tweak-no-mtp",
-          "simonycl-qwen3-30b-plateau-6skill-0617-iter399",
-          "llmfanq36-27b-qwopus-coder-no-mtp-exl3-4p5bpw-h6",
-          "Jackrong-Qwopus3.6-27B-Coder-textonly-nonmtp",
-          "Jackrong-Qwopus3.6-27B-Coder-vision-nonmtp",
-          "Qwopus3.6-27B-Coder.i1-Q4_K_M",
-          "Qwopus3.6-27B-Coder-heretic-Q4_K_M-thinking-budget256",
-          "Qwopus3.6-27B-Coder-heretic-Q4_K_M-thinking-chat2048",
-          "Qwopus3.6-27B-Coder-heretic-Q4_K_M-thinking-unlimited",
-          "Qwen3.6-27B-Anderson-Operator-Uncen-step1400-textonly-nonmtp",
-          "Qwopucode-full-v15-27B-FP8-Block-i1-Q4_K_M"
+          "qwen-local"
         ]
       },
       "reason": "model_visible",
@@ -308,7 +295,6 @@
     }
   },
   "run_id": "20260701T032059Z",
-  "run_root": "results/qwendex_release_validation/20260701T032059Z",
   "schema_version": "qwendex_release_validation.summary.v1",
   "static_gates": {
     "config_qwendex_json_tool": true,
@@ -326,11 +312,8 @@
         "lane": "direct",
         "markers": [],
         "model": "qwen-local",
-        "receipt_paths": [],
         "returncode": 0,
         "seat": "direct-local",
-        "stderr_tail": "Reading additional input from stdin...\nOpenAI Codex v0.142.4\n--------\nworkdir: {source_workspace}\nmodel: qwen-local\nprovider: lmstudio\napproval: never\nsandbox: workspace-write [workdir, /tmp, $TMPDIR]\nreasoning effort: none\nreasoning summaries: none\nsession id: 019f1bb9-94ea-7001-91a9-c540b8f54e9e\n--------\nuser\nReply with exactly: QWENDEX_OK\ncodex\nQWENDEX_OK\ntokens used\n5,431\n",
-        "stdout_tail": "QWENDEX_OK\n",
         "success": true,
         "synthetic_exact_marker": false,
         "visible_tool_markup": []
@@ -343,11 +326,8 @@
         "lane": "direct",
         "markers": [],
         "model": "qwen-local",
-        "receipt_paths": [],
         "returncode": 0,
         "seat": "direct-local",
-        "stderr_tail": "Reading additional input from stdin...\nOpenAI Codex v0.142.4\n--------\nworkdir: {source_workspace}\nmodel: qwen-local\nprovider: lmstudio\napproval: never\nsandbox: workspace-write [workdir, /tmp, $TMPDIR]\nreasoning effort: none\nreasoning summaries: none\nsession id: 019f1bb9-b356-7633-94ec-30f940b4adce\n--------\nuser\nUse one bounded shell command to print the first Markdown heading in public/qwendex/README.md, then final answer exactly QWENDEX_OK.\nexec\n/bin/bash -lc \"head -20 public/qwendex/README.md | grep -m1 '\"'^#'\"'\" in {source_workspace}\n succeeded in 0ms:\n# Qwendex\n\ncodex\nQWENDEX_OK\ntokens used\n11,148\n",
-        "stdout_tail": "QWENDEX_OK\n",
         "success": true,
         "synthetic_exact_marker": false,
         "visible_tool_markup": []
@@ -360,11 +340,8 @@
         "lane": "direct",
         "markers": [],
         "model": "qwen-local",
-        "receipt_paths": [],
         "returncode": 0,
         "seat": "direct-local",
-        "stderr_tail": "Reading additional input from stdin...\nOpenAI Codex v0.142.4\n--------\nworkdir: {source_workspace}\nmodel: qwen-local\nprovider: lmstudio\napproval: never\nsandbox: workspace-write [workdir, /tmp, $TMPDIR]\nreasoning effort: none\nreasoning summaries: none\nsession id: 019f1bb9-df8a-78a3-a9a7-98470907572f\n--------\nuser\nUse one bounded shell command to count JSON files under results/qwendex_release_validation/20260701T032059Z/qwendex_eval, then final answer exactly QWENDEX_OK.\nexec\n/bin/bash -lc \"find results/qwendex_release_validation/20260701T032059Z/qwendex_eval -name '*.json' | wc -l\" in {source_workspace}\n succeeded in 0ms:\n16\n\ncodex\nQWENDEX_OK\ntokens used\n11,228\n",
-        "stdout_tail": "QWENDEX_OK\n",
         "success": true,
         "synthetic_exact_marker": false,
         "visible_tool_markup": []
@@ -377,11 +354,8 @@
         "lane": "direct",
         "markers": [],
         "model": "qwen-local",
-        "receipt_paths": [],
         "returncode": 0,
         "seat": "direct-local",
-        "stderr_tail": "Reading additional input from stdin...\nOpenAI Codex v0.142.4\n--------\nworkdir: {source_workspace}\nmodel: qwen-local\nprovider: lmstudio\napproval: never\nsandbox: workspace-write [workdir, /tmp, $TMPDIR]\nreasoning effort: none\nreasoning summaries: none\nsession id: 019f1bba-11a4-74c0-870b-1419a4e4ae90\n--------\nuser\nUse one bounded shell command to print schema_version from config/qwendex/qwendex.json, then final answer exactly QWENDEX_OK.\nexec\n/bin/bash -lc \"python3 -c \\\"import json; print(json.load(open('config/qwendex/qwendex.json'))['schema_version'])\\\"\" in {source_workspace}\n succeeded in 0ms:\nqwendex.config.v1\n\ncodex\nQWENDEX_OK\ntokens used\n11,162\n",
-        "stdout_tail": "QWENDEX_OK\n",
         "success": true,
         "synthetic_exact_marker": false,
         "visible_tool_markup": []
@@ -394,11 +368,8 @@
         "lane": "direct",
         "markers": [],
         "model": "qwen-local",
-        "receipt_paths": [],
         "returncode": 0,
         "seat": "direct-local",
-        "stderr_tail": "Reading additional input from stdin...\nOpenAI Codex v0.142.4\n--------\nworkdir: {source_workspace}\nmodel: qwen-local\nprovider: lmstudio\napproval: never\nsandbox: workspace-write [workdir, /tmp, $TMPDIR]\nreasoning effort: none\nreasoning summaries: none\nsession id: 019f1bba-3ce6-7772-8c93-382458220361\n--------\nuser\nUse one bounded shell command to print the first Markdown link target from public/qwendex/README.md, then final answer exactly QWENDEX_OK.\nexec\n/bin/bash -lc \"grep -oP '\\\\]\\\\(([\"'^)]+)'\"\\\\)' public/qwendex/README.md | head -1 | grep -oP '\\\\([\"'^)]+'\"\\\\)' | tr -d '()'\" in {source_workspace}\n succeeded in 0ms:\nquickstart.md\n\ncodex\nQWENDEX_OK\ntokens used\n11,180\n",
-        "stdout_tail": "QWENDEX_OK\n",
         "success": true,
         "synthetic_exact_marker": false,
         "visible_tool_markup": []
@@ -412,13 +383,8 @@
         "lane": "qwendex",
         "markers": [],
         "model": "qwen-local",
-        "receipt_paths": [
-          "{source_workspace}/results/qwendex_release_validation/20260701T032059Z/stress/qwendex_receipts/exec_20260701T033054441054Z.json"
-        ],
         "returncode": 0,
         "seat": "qwen",
-        "stderr_tail": "",
-        "stdout_tail": "able\",\n      \"reasoning_source\": \"local_qwen_token_saver\",\n      \"requested_seat\": \"auto\",\n      \"routing\": {\n        \"fallback_seat\": \"primary\",\n        \"local_model\": \"qwen-local\",\n        \"local_probe_url\": \"http://127.0.0.1:1234/v1/models\",\n        \"mode\": \"token_saver\",\n        \"prefer_for_task_classes\": [\n          \"exec\",\n          \"read-heavy audit\",\n          \"docs draft\",\n          \"queue workflow\",\n          \"bounded patch\",\n          \"smoke probe\",\n          \"artifact summary\"\n        ],\n        \"prefer_local_qwen_when_available\": true,\n        \"primary_required_for_task_classes\": [\n          \"release acceptance\",\n          \"architecture\",\n          \"security\",\n          \"public docs claims\",\n          \"protocol changes\"\n        ],\n        \"probe_timeout_seconds\": 2\n      },\n      \"seat\": \"qwen\",\n      \"selected_model\": \"qwen-local\",\n      \"selected_reasoning\": \"low\",\n      \"task_class\": \"exec\",\n      \"token_saver_used\": true\n    },\n    \"seat\": \"qwen\"\n  },\n  \"errors\": [],\n  \"next_actions\": [\n    \"Review the receipt before accepting Qwen output.\"\n  ],\n  \"schema_version\": \"qwendex.cli.v1\",\n  \"status\": \"pass\",\n  \"summary\": \"Qwendex exec completed.\",\n  \"version\": \"0.1.0\"\n}\n",
         "success": true,
         "summary": "Qwendex exec completed.",
         "synthetic_exact_marker": false,
@@ -433,13 +399,8 @@
         "lane": "qwendex",
         "markers": [],
         "model": "qwen-local",
-        "receipt_paths": [
-          "{source_workspace}/results/qwendex_release_validation/20260701T032059Z/stress/qwendex_receipts/exec_20260701T033105849467Z.json"
-        ],
         "returncode": 0,
         "seat": "qwen",
-        "stderr_tail": "",
-        "stdout_tail": "able\",\n      \"reasoning_source\": \"local_qwen_token_saver\",\n      \"requested_seat\": \"auto\",\n      \"routing\": {\n        \"fallback_seat\": \"primary\",\n        \"local_model\": \"qwen-local\",\n        \"local_probe_url\": \"http://127.0.0.1:1234/v1/models\",\n        \"mode\": \"token_saver\",\n        \"prefer_for_task_classes\": [\n          \"exec\",\n          \"read-heavy audit\",\n          \"docs draft\",\n          \"queue workflow\",\n          \"bounded patch\",\n          \"smoke probe\",\n          \"artifact summary\"\n        ],\n        \"prefer_local_qwen_when_available\": true,\n        \"primary_required_for_task_classes\": [\n          \"release acceptance\",\n          \"architecture\",\n          \"security\",\n          \"public docs claims\",\n          \"protocol changes\"\n        ],\n        \"probe_timeout_seconds\": 2\n      },\n      \"seat\": \"qwen\",\n      \"selected_model\": \"qwen-local\",\n      \"selected_reasoning\": \"low\",\n      \"task_class\": \"exec\",\n      \"token_saver_used\": true\n    },\n    \"seat\": \"qwen\"\n  },\n  \"errors\": [],\n  \"next_actions\": [\n    \"Review the receipt before accepting Qwen output.\"\n  ],\n  \"schema_version\": \"qwendex.cli.v1\",\n  \"status\": \"pass\",\n  \"summary\": \"Qwendex exec completed.\",\n  \"version\": \"0.1.0\"\n}\n",
         "success": true,
         "summary": "Qwendex exec completed.",
         "synthetic_exact_marker": false,
@@ -454,13 +415,8 @@
         "lane": "qwendex",
         "markers": [],
         "model": "qwen-local",
-        "receipt_paths": [
-          "{source_workspace}/results/qwendex_release_validation/20260701T032059Z/stress/qwendex_receipts/exec_20260701T033116505075Z.json"
-        ],
         "returncode": 0,
         "seat": "qwen",
-        "stderr_tail": "",
-        "stdout_tail": "able\",\n      \"reasoning_source\": \"local_qwen_token_saver\",\n      \"requested_seat\": \"auto\",\n      \"routing\": {\n        \"fallback_seat\": \"primary\",\n        \"local_model\": \"qwen-local\",\n        \"local_probe_url\": \"http://127.0.0.1:1234/v1/models\",\n        \"mode\": \"token_saver\",\n        \"prefer_for_task_classes\": [\n          \"exec\",\n          \"read-heavy audit\",\n          \"docs draft\",\n          \"queue workflow\",\n          \"bounded patch\",\n          \"smoke probe\",\n          \"artifact summary\"\n        ],\n        \"prefer_local_qwen_when_available\": true,\n        \"primary_required_for_task_classes\": [\n          \"release acceptance\",\n          \"architecture\",\n          \"security\",\n          \"public docs claims\",\n          \"protocol changes\"\n        ],\n        \"probe_timeout_seconds\": 2\n      },\n      \"seat\": \"qwen\",\n      \"selected_model\": \"qwen-local\",\n      \"selected_reasoning\": \"low\",\n      \"task_class\": \"exec\",\n      \"token_saver_used\": true\n    },\n    \"seat\": \"qwen\"\n  },\n  \"errors\": [],\n  \"next_actions\": [\n    \"Review the receipt before accepting Qwen output.\"\n  ],\n  \"schema_version\": \"qwendex.cli.v1\",\n  \"status\": \"pass\",\n  \"summary\": \"Qwendex exec completed.\",\n  \"version\": \"0.1.0\"\n}\n",
         "success": true,
         "summary": "Qwendex exec completed.",
         "synthetic_exact_marker": false,
@@ -475,13 +431,8 @@
         "lane": "qwendex",
         "markers": [],
         "model": "qwen-local",
-        "receipt_paths": [
-          "{source_workspace}/results/qwendex_release_validation/20260701T032059Z/stress/qwendex_receipts/exec_20260701T033129142871Z.json"
-        ],
         "returncode": 0,
         "seat": "qwen",
-        "stderr_tail": "",
-        "stdout_tail": "able\",\n      \"reasoning_source\": \"local_qwen_token_saver\",\n      \"requested_seat\": \"auto\",\n      \"routing\": {\n        \"fallback_seat\": \"primary\",\n        \"local_model\": \"qwen-local\",\n        \"local_probe_url\": \"http://127.0.0.1:1234/v1/models\",\n        \"mode\": \"token_saver\",\n        \"prefer_for_task_classes\": [\n          \"exec\",\n          \"read-heavy audit\",\n          \"docs draft\",\n          \"queue workflow\",\n          \"bounded patch\",\n          \"smoke probe\",\n          \"artifact summary\"\n        ],\n        \"prefer_local_qwen_when_available\": true,\n        \"primary_required_for_task_classes\": [\n          \"release acceptance\",\n          \"architecture\",\n          \"security\",\n          \"public docs claims\",\n          \"protocol changes\"\n        ],\n        \"probe_timeout_seconds\": 2\n      },\n      \"seat\": \"qwen\",\n      \"selected_model\": \"qwen-local\",\n      \"selected_reasoning\": \"low\",\n      \"task_class\": \"exec\",\n      \"token_saver_used\": true\n    },\n    \"seat\": \"qwen\"\n  },\n  \"errors\": [],\n  \"next_actions\": [\n    \"Review the receipt before accepting Qwen output.\"\n  ],\n  \"schema_version\": \"qwendex.cli.v1\",\n  \"status\": \"pass\",\n  \"summary\": \"Qwendex exec completed.\",\n  \"version\": \"0.1.0\"\n}\n",
         "success": true,
         "summary": "Qwendex exec completed.",
         "synthetic_exact_marker": false,
@@ -496,13 +447,8 @@
         "lane": "qwendex",
         "markers": [],
         "model": "qwen-local",
-        "receipt_paths": [
-          "{source_workspace}/results/qwendex_release_validation/20260701T032059Z/stress/qwendex_receipts/exec_20260701T033141132593Z.json"
-        ],
         "returncode": 0,
         "seat": "qwen",
-        "stderr_tail": "",
-        "stdout_tail": "able\",\n      \"reasoning_source\": \"local_qwen_token_saver\",\n      \"requested_seat\": \"auto\",\n      \"routing\": {\n        \"fallback_seat\": \"primary\",\n        \"local_model\": \"qwen-local\",\n        \"local_probe_url\": \"http://127.0.0.1:1234/v1/models\",\n        \"mode\": \"token_saver\",\n        \"prefer_for_task_classes\": [\n          \"exec\",\n          \"read-heavy audit\",\n          \"docs draft\",\n          \"queue workflow\",\n          \"bounded patch\",\n          \"smoke probe\",\n          \"artifact summary\"\n        ],\n        \"prefer_local_qwen_when_available\": true,\n        \"primary_required_for_task_classes\": [\n          \"release acceptance\",\n          \"architecture\",\n          \"security\",\n          \"public docs claims\",\n          \"protocol changes\"\n        ],\n        \"probe_timeout_seconds\": 2\n      },\n      \"seat\": \"qwen\",\n      \"selected_model\": \"qwen-local\",\n      \"selected_reasoning\": \"low\",\n      \"task_class\": \"exec\",\n      \"token_saver_used\": true\n    },\n    \"seat\": \"qwen\"\n  },\n  \"errors\": [],\n  \"next_actions\": [\n    \"Review the receipt before accepting Qwen output.\"\n  ],\n  \"schema_version\": \"qwendex.cli.v1\",\n  \"status\": \"pass\",\n  \"summary\": \"Qwendex exec completed.\",\n  \"version\": \"0.1.0\"\n}\n",
         "success": true,
         "summary": "Qwendex exec completed.",
         "synthetic_exact_marker": false,

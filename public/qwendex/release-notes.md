@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+## 0.5.0
+
+- Replaced the downstream-specific local-Qwen bridge monolith with a generic
+  Responses-compatible v2 bridge, including bounded request parsing, correct
+  JSON/SSE behavior, runtime-guard recovery, a versioned canonical `/status`
+  readiness contract, and fresh-home Codex probes.
+- Bound Codex execution to the exact preflighted bridge base, blocked conflicting
+  inherited endpoint overrides, and scoped qdex working/add-dir/MCP trust to
+  the selected target repository.
+- Made Manager decisions repository- and turn-scoped, enforced local-off/GPT
+  authority rules, bounded active agents, protected legacy locks, and required
+  fresh verifier evidence for every edited turn.
+- Added digest-verified manager receipts, atomic shared-state writes, honest
+  full-ledger aggregates, and explicit migration boundaries for legacy state.
+- Added an isolated, allowlisted Codex `0.144.0` source build with bound binary,
+  source-patch, lockfile, toolchain, and preflight provenance.
+- Added a fail-closed release-summary v2 contract, GitHub CI, same-root install
+  acceptance, full tracked-artifact/privacy scanning, and version/tag/default-
+  branch/remote evidence binding.
+- Made the clean-install learning mock an explicit non-mutating contract check;
+  external SkillOpt remains required for status, harvest, and run, while
+  `adopt --approve` performs allowlist preflight only and never applies files.
+- Removed machine-local launchers, downstream workflow templates, private
+  inventory, and raw validation transcripts from the public source artifact.
+
 ## 0.4.0
 
 - Added Codex CLI `0.144.0` / `rust-v0.144.0` to the supported TUI patch
@@ -205,4 +230,5 @@ Known limitations:
 - Auto routing falls back to the configured primary seat when local Qwen is not
   visible; it does not make Qwen release authority.
 - Qwen is not release authority.
-- SkillOpt adoption remains staged and review-gated.
+- Qwendex does not adopt SkillOpt proposals; its approved adopt action is a
+  path-allowlist preflight only.
