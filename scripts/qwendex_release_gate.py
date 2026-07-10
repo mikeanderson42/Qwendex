@@ -1950,7 +1950,7 @@ def inspect_ci_attestation(
         and isinstance(payload.get("run_attempt"), int)
         and not isinstance(payload.get("run_attempt"), bool)
         and payload.get("run_attempt", 0) > 0
-        and run_url == expected_run_url,
+        and run_url.casefold() == expected_run_url.casefold(),
         "required_checks_present": CI_REQUIRED_CHECKS <= checked,
         "artifact_contract_matches": artifact_matches,
     }
