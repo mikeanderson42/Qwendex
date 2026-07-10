@@ -31,6 +31,21 @@ Run:
 scripts/qwendex seat qwen --json
 ```
 
+This confirms configuration only. It returns `availability.status=not_probed`
+and is not live model or endpoint evidence. A seat command does not persist a
+selection; pass `--seat qwen` or `--seat auto` to an `exec` command. Reserve
+`exec --synthetic` for an explicitly labeled offline marker check.
+
+For release-grade live evidence, run:
+
+```bash
+qwendex-dev verify --tier live
+```
+
+The live tier proves the launcher/canonical bridge status contract, an exact
+parsed `QWENDEX_OK` assistant response, and a fresh isolated Codex tool
+round-trip with the normal-home decoy unchanged.
+
 Then inspect the receipt:
 
 ```bash

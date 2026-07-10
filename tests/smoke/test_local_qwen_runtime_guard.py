@@ -196,23 +196,43 @@ def test_proposed_duplicate_read_gets_one_recovery_then_stops():
     assert second.loop_type == guard.LoopType.STALE_RECOVERY_LOOP
 
 
+def test_new_user_request_resets_duplicate_read_recovery_marker():
+    guard = load_guard_module()
+    runtime_guard = guard.RuntimeGuard(guard.GuardConfig(profile="max_safety"))
+    read_args = {"cmd": "head -40 README.md"}
+    history = [
+        user_message("Old request."),
+        call("old_read", arguments=read_args),
+        output("old_read", "# README\n"),
+        output("old_recovery", "DUPLICATE_READ_ALREADY_DONE\n"),
+        user_message("New request."),
+    ]
+
+    decision = runtime_guard.evaluate_proposed_call(
+        history,
+        call("new_read", arguments=read_args),
+    )
+
+    assert decision.action == guard.GuardAction.ALLOW
+
+
 def test_proposed_duplicate_terminal_upsert_gets_finalize_recovery():
     guard = load_guard_module()
     runtime_guard = guard.RuntimeGuard(guard.GuardConfig(profile="balanced"))
     cmd = (
         f"python3 {ROOT}/scripts/local_harness_document_section_upsert.py "
-        "--dir . --file monetization_research/digital_products.md "
-        "--section-title 'Competitive Analysis' --body-b64 Zm9v "
-        "--item-number 10 --total-items 10 --done-marker ITEM_10_DONE "
-        "--already-marker ITEM_10_ALREADY_PRESENT"
+        "--dir . --file docs/example.md "
+        "--section-title 'Compatibility Notes' --body-b64 Zm9v "
+        "--item-number 3 --total-items 3 --done-marker ITEM_3_DONE "
+        "--already-marker ITEM_3_ALREADY_PRESENT"
     )
     history = [
-        user_message("Work through each of the 10 items."),
-        call("call_item_10", arguments={"cmd": cmd}),
+        user_message("Work through each of the three items."),
+        call("call_item_3", arguments={"cmd": cmd}),
         output(
-            "call_item_10",
+            "call_item_3",
             (
-                "ITEM_10_ALREADY_PRESENT monetization_research/digital_products.md "
+                "ITEM_3_ALREADY_PRESENT docs/example.md "
                 "bytes=13444 action=already_present next_item=None\n"
             ),
         ),
@@ -220,7 +240,7 @@ def test_proposed_duplicate_terminal_upsert_gets_finalize_recovery():
 
     decision = runtime_guard.evaluate_proposed_call(
         history,
-        call("call_repeat_item_10", arguments={"cmd": cmd}),
+        call("call_repeat_item_3", arguments={"cmd": cmd}),
     )
 
     assert decision.action == guard.GuardAction.RECOVER

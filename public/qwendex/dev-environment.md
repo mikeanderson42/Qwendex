@@ -1,8 +1,10 @@
 # Qwendex Dev Environment
 
-`scripts/qwendex_dev_env` manages the dedicated Qwendex development worktree at
-`~/qwendex-dev`. It is for working on Qwendex itself while keeping the current
-system Codex install available as the fallback execution plane.
+`scripts/qwendex_dev_env` manages runtime wiring for a dedicated Qwendex git
+checkout/worktree at `~/qwendex-dev`. It does not clone or upgrade Qwendex.
+Install from a tagged clone as described in the quickstart, or create a named
+git worktree before using it. The current system Codex install remains
+available as the fallback execution plane.
 
 ## Create Or Refresh Runtime Wiring
 
@@ -13,20 +15,42 @@ scripts/qwendex_install_deps --install
 scripts/qwendex_install_deps --check --json
 ```
 
-The installer is best-effort and non-interactive. It installs user-scope Python
-tools (`pytest`, `ruff`), Rust tooling through `rustup`/`cargo`, `ripgrep`, and
-the Codex CLI through npm when available. It also attempts system package
-installs for required host tools such as `git`, `rsync`, `curl`, `python3`, and
-`tmux` when a supported package manager and non-interactive sudo/root access are
-available. Remaining blockers are reported in JSON instead of being hidden.
+The installer is best-effort and non-interactive. It installs exactly pinned,
+user-scope Python tools (`jsonschema`, `pytest`, `ruff`), Rust tooling through
+`rustup`/`cargo`, `ripgrep`, and the Codex CLI through npm when available. On a
+PEP 668 externally managed interpreter, pip's explicit managed-environment
+override is used only together with `--user`; the receipt records that policy
+and the installer never writes validation tools into the system site. It also
+attempts system package installs for required host tools such as `git`, `rsync`,
+`curl`, `python3`, and `tmux` when a supported package manager and
+non-interactive sudo/root access are available. Remaining blockers are reported
+in JSON instead of being hidden.
+
+Optional interactive discovery tools are useful in a developer shell but are not
+part of the Qwendex runtime contract. If `fd` and `fzf` are available, a local
+operator can make fzf path picking use fd:
+
+```bash
+if command -v fd >/dev/null 2>&1 && command -v fzf >/dev/null 2>&1; then
+  export FZF_DEFAULT_COMMAND='fd --type f --strip-cwd-prefix --hidden --follow --exclude .git'
+  export FZF_CTRL_T_COMMAND="$FZF_DEFAULT_COMMAND"
+fi
+```
+
+This enables `fzf` and, when shell key bindings are loaded, `Ctrl+T` path
+insertion inside an unfinished command. Keep Qwendex scripts and validation
+gates on explicit paths, `ripgrep`, and repo-owned checks. Use `plocate` only
+as an optional indexed filename lookup tool; its database depends on the host's
+updatedb timer or an intentional `updatedb` run.
 
 ```bash
 scripts/qwendex_dev_env sync
 ```
 
 In worktree mode, `sync` refreshes wrappers, env files, Codex home config, and
-status files. It does not overwrite source files. The legacy generated-copy path
-is retained only through explicit repair commands.
+status files. It does not fetch, merge, check out, or overwrite source files.
+The legacy generated-copy path is retained only through explicit repair
+commands and is not a supported install or release workflow.
 
 Generated state lives under:
 
@@ -57,12 +81,13 @@ request, re-run Qwendex posture checks, inspect existing diffs/state before
 editing, and use `qwendex-dev snapshot` plus `scripts/qwendex context
 snapshot|reminder|compact-plan` at phase boundaries or before manual
 compaction. Manager Mode sessions must check Agent Manager/Kaveman/Local state
-at the start of substantial tasks, spawn bounded subagents early for
-independent non-blocking read, review, docs, or verification lanes, keep
-critical-path implementation local, use disjoint write scopes and explicit stop
-conditions, treat subagent output as advisory until integrated and verified,
-and close both spawned agents and matching Qwendex manager sessions after
-integration.
+at the start of substantial tasks and use manager planning/preflight first.
+Spawn bounded subagents only when current tool policy, task shape, and
+write-surface separation make delegation safe. Keep critical-path
+implementation local, avoid duplicate/conflicting writes, treat subagent output
+as advisory until integrated and verified, record or state the direct-work
+reason and validation path when subagents are not used, and close both spawned
+agents and matching Qwendex manager sessions after integration.
 
 The dev environment exposes these wrappers in `~/qwendex-dev/bin`:
 
@@ -83,6 +108,13 @@ active hook source count for that home and also reports whether global
 `~/.codex/hooks.json` exists. If global hooks exist but the isolated dev home has
 none, the dev status JSON includes a warning so hook behavior is not silently
 lost after a TUI refresh.
+
+Active `config.toml` stays stock-Codex compatible by default. Qwendex patched
+TUI keymaps are written to `patched-tui.example.toml` as copy-only reference
+config; they are appended to active config only when launching or syncing with
+`QWENDEX_DEV_ENABLE_PATCHED_TUI_CONFIG=1` after selecting a patched Codex build.
+The stock-compatible `[tui] status_line` entry remains in active config when a
+dev Codex binary path is configured.
 
 ## Developer Lifecycle
 

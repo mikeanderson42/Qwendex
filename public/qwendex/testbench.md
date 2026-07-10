@@ -11,8 +11,8 @@ scripts/qwendex_testbench status
 scripts/qwendex_testbench tmux
 ```
 
-By default the project folder is `$HOME/thehub` when that folder exists,
-otherwise the current working directory. Override it with:
+By default the project folder is the current working directory. Override it
+with:
 
 ```bash
 QWENDEX_BENCH_PROJECT=/path/to/project scripts/qwendex_testbench tmux
@@ -37,10 +37,10 @@ The Codex TUI header itself is owned by Codex. Unpatched Codex builds get a
 visible launch banner above the TUI and run without the alternate screen:
 
 ```text
->_ OpenAI Codex (v0.142.4) /w Qwendex
+>_ OpenAI Codex (v0.144.0) /w Qwendex
 ```
 
-The banner also prints the Qwendex mode, selected model path, project folder,
+The banner also prints the Qwendex mode, selected model, project folder,
 Qwendex root, state DB, and receipt root.
 
 Patched Codex TUI builds can add `qwendex-manager` to `[tui].status_line` and
@@ -95,6 +95,10 @@ The bench sets:
 
 The local-harness MCP is overridden on the Codex command line so a project-local
 `.codex/config.toml` cannot silently route the bench back to another repo.
+Its working directory and trusted roots are limited to the selected project and
+the isolated bench root. The Qwendex source checkout supplies executables and
+configuration, but it is not added as a writable or MCP-trusted root unless it
+is itself the selected project.
 
 ## Notes
 

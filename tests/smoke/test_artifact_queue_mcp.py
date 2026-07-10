@@ -107,15 +107,13 @@ def test_mcp_queue_lifecycle(tmp_path: Path) -> None:
     assert next_item["next"]["file"] == "two.md"
 
 
-def test_mcp_local_qwen_run_report_dispatches_repo_script(tmp_path: Path) -> None:
+def test_mcp_local_qwen_run_report_never_executes_repo_script(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     scripts = repo / "scripts"
     scripts.mkdir(parents=True)
+    executed = tmp_path / "repo-script-executed"
     (scripts / "local_qwen_run_report.py").write_text(
-        "import sys\n"
-        "assert '--markdown' in sys.argv\n"
-        "print('# Local Qwen Run Report')\n"
-        "print('status: pass')\n",
+        f"from pathlib import Path\nPath({str(executed)!r}).write_text('unsafe')\n",
         encoding="utf-8",
     )
 
@@ -128,7 +126,7 @@ def test_mcp_local_qwen_run_report_dispatches_repo_script(tmp_path: Path) -> Non
                 "method": "tools/call",
                 "params": {
                     "name": "local_qwen_run_report",
-                    "arguments": {"repo": str(repo), "max_chars": 2000, "timeout_seconds": 5},
+                    "arguments": {"repo": str(repo), "max_chars": 2000},
                 },
             },
         ],
@@ -139,8 +137,9 @@ def test_mcp_local_qwen_run_report_dispatches_repo_script(tmp_path: Path) -> Non
     assert payload["schema"] == "local_harness_mcp.run_report.v1"
     assert payload["status"] == "pass"
     assert payload["repo"] == str(repo)
-    assert payload["source"] == "repo_script"
+    assert payload["source"] == "mcp_builtin"
     assert "# Local Qwen Run Report" in payload["report"]
+    assert not executed.exists()
 
 
 def test_mcp_local_qwen_run_report_has_builtin_fallback(tmp_path: Path) -> None:
@@ -177,16 +176,84 @@ def test_mcp_local_qwen_run_report_has_builtin_fallback(tmp_path: Path) -> None:
     assert "blocked=1" in payload["report"]
 
 
+def test_explicit_trusted_root_does_not_implicitly_trust_server_cwd(
+    tmp_path: Path,
+) -> None:
+    trusted = tmp_path / "trusted"
+    trusted.mkdir()
+    responses = run_mcp(
+        [
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "queue_status",
+                    "arguments": {"dir": str(ROOT)},
+                },
+            }
+        ],
+        trusted,
+    )
+
+    payload = tool_payload(responses[0])
+    assert responses[0]["result"]["isError"] is True
+    assert "outside trusted roots" in payload["error"]
+
+
+def test_search_web_rejects_non_loopback_configured_origin(
+    tmp_path: Path,
+) -> None:
+    env = os.environ.copy()
+    env["ARTIFACT_QUEUE_MCP_TRUSTED_ROOTS"] = str(tmp_path)
+    env["SEARXNG_URL"] = "http://169.254.169.254"
+    message = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {"name": "search_web", "arguments": {"query": "test"}},
+    }
+    proc = subprocess.run(
+        [sys.executable, str(SERVER)],
+        input=json.dumps(message) + "\n",
+        cwd=str(ROOT),
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=10,
+        check=True,
+    )
+
+    response = json.loads(proc.stdout)
+    payload = tool_payload(response)
+    assert response["result"]["isError"] is True
+    assert "exact loopback" in payload["error"]
+
+
+def test_search_web_schema_does_not_accept_caller_selected_base_url(
+    tmp_path: Path,
+) -> None:
+    responses = run_mcp(
+        [{"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}],
+        tmp_path,
+    )
+    search = next(
+        tool for tool in responses[0]["result"]["tools"] if tool["name"] == "search_web"
+    )
+
+    assert "base_url" not in search["inputSchema"]["properties"]
+
+
 def test_mcp_document_section_upsert_is_idempotent(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
-    doc = repo / "monetization_research" / "digital_products.md"
+    doc = repo / "docs" / "example.md"
     doc.parent.mkdir(parents=True)
-    doc.write_text("# Digital Products\n\n## Existing\n\nKeep this.\n", encoding="utf-8")
+    doc.write_text("# Example Guide\n\n## Existing\n\nKeep this.\n", encoding="utf-8")
     args = {
         "dir": str(repo),
-        "file": "monetization_research/digital_products.md",
+        "file": "docs/example.md",
         "section_title": "Workflow Steps",
-        "body": "1. Research the niche.\n2. Build the product.\n3. Verify with a launch gate.",
+        "body": "1. Inspect the input.\n2. Update the artifact.\n3. Run the verifier.",
         "item_number": 2,
         "total_items": 10,
         "min_bytes": 50,
@@ -265,9 +332,9 @@ def test_mcp_document_section_upsert_rejects_path_escape(tmp_path: Path) -> None
 
 def test_document_section_upsert_cli_is_idempotent(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
-    doc = repo / "monetization_research" / "digital_products.md"
+    doc = repo / "docs" / "example.md"
     doc.parent.mkdir(parents=True)
-    doc.write_text("# Digital Products\n", encoding="utf-8")
+    doc.write_text("# Example Guide\n", encoding="utf-8")
     env = os.environ.copy()
     env["ARTIFACT_QUEUE_MCP_TRUSTED_ROOTS"] = str(tmp_path)
     args = [
@@ -276,7 +343,7 @@ def test_document_section_upsert_cli_is_idempotent(tmp_path: Path) -> None:
         "--dir",
         str(repo),
         "--file",
-        "monetization_research/digital_products.md",
+        "docs/example.md",
         "--section-title",
         "Workflow Steps",
         "--body",

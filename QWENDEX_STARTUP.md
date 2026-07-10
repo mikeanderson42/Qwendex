@@ -17,6 +17,10 @@ Read only the files named by the task or the smallest files needed to verify the
 current claim. Prefer Qwendex receipts and JSON summaries over long transcripts.
 After orientation, answer `STARTUP_READ_COMPACT_OK`.
 
+For Qwendex goal/prompt generation, "the goal skill", or a pasted Codex
+closeout that needs the next goal, use
+`.codex/skills/operator-goal-compiler/`.
+
 ## Dev Worktree
 
 For Qwendex product development, use `~/qwendex-dev` and start with:

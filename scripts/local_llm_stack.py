@@ -132,6 +132,7 @@ class ServiceRuntimeState:
     tmux_window: TmuxWindowState
     runtime_state: str
     last_error: str = ""
+    status_health: HealthCheckResult | None = None
 
 
 @dataclass(frozen=True)
@@ -446,12 +447,23 @@ def http_health(url: str, port: int, timeout: float = 3.0) -> HealthCheckResult:
             state = "healthy"
             if url.endswith("/v1/models") and not models:
                 state = "unhealthy"
+            status_payload_ready = not url.endswith("/status") or (
+                isinstance(raw, dict)
+                and raw.get("schema_version")
+                == "qwendex.responses_bridge.status.v1"
+                and raw.get("status") == "ok"
+            )
+            if not status_payload_ready:
+                state = "unhealthy"
             return HealthCheckResult(
                 state=state,
                 endpoint_responding=True,
                 port_occupied=True,
                 url=url,
                 status_code=getattr(resp, "status", None),
+                error=""
+                if status_payload_ready
+                else "status payload did not report ready",
                 models=models,
                 raw=raw,
             )
@@ -513,28 +525,36 @@ def tmux_session_state(cfg: StackConfig) -> TmuxSessionState:
     return TmuxSessionState(cfg.tmux_session, exists, windows, duplicates)
 
 
+def health_is_ready(health: HealthCheckResult) -> bool:
+    return health.endpoint_responding and health.state == "healthy"
+
+
 def service_runtime_state(service: ServiceDefinition, session: TmuxSessionState) -> ServiceRuntimeState:
     health = http_health(service.health_url, service.port)
+    status_health = http_health(service.status_url, service.port) if service.status_url else None
+    ready = health_is_ready(health) and (status_health is None or health_is_ready(status_health))
     window = session.windows.get(service.name, TmuxWindowState(service.window_name, False, False, False))
     last_error = health.error
+    if status_health is not None and not health_is_ready(status_health):
+        last_error = status_health.error or f"status endpoint is {status_health.state}: {service.status_url}"
     if window.count > 1:
         runtime = "duplicate"
     elif window.exists and window.pane_dead:
         runtime = "stale"
-    elif health.endpoint_responding and health.state == "healthy" and not window.exists:
+    elif ready and not window.exists:
         runtime = "externally-managed"
-    elif health.endpoint_responding and health.state == "healthy":
+    elif ready:
         runtime = "healthy"
+    elif health.port_occupied and not window.exists:
+        runtime = "unhealthy"
+        last_error = last_error or "port occupied but the configured health endpoints are not ready"
     elif window.live and not health.port_occupied:
         runtime = "starting"
     elif window.live and health.port_occupied:
         runtime = "unhealthy"
-    elif health.port_occupied and not window.exists:
-        runtime = "externally-managed"
-        last_error = health.error or "port occupied but managed tmux window is missing"
     else:
         runtime = "stopped"
-    return ServiceRuntimeState(service, health, window, runtime, last_error)
+    return ServiceRuntimeState(service, health, window, runtime, last_error, status_health)
 
 
 def collect_runtime(cfg: StackConfig) -> tuple[TmuxSessionState, list[ServiceRuntimeState]]:
@@ -590,7 +610,12 @@ def build_reconcile_plan(cfg: StackConfig) -> ReconcilePlan:
         elif state.runtime_state == "externally-managed":
             warnings.append(f"{service.name} endpoint or port exists outside the managed tmux window; leaving it alone.")
         elif state.runtime_state == "unhealthy":
-            warnings.append(f"{service.name} is live but unhealthy; use restart after reviewing logs.")
+            if state.tmux_window.live:
+                warnings.append(f"{service.name} is live but unhealthy; use restart after reviewing logs.")
+            else:
+                warnings.append(
+                    f"{service.name} has an unhealthy endpoint outside the managed tmux window; leaving it alone."
+                )
     return ReconcilePlan(actions, warnings, destructive)
 
 
@@ -721,10 +746,17 @@ def wait_for_service(service: ServiceDefinition) -> ActionResult:
     deadline = time.monotonic() + service.startup_timeout_seconds
     while time.monotonic() < deadline:
         health = http_health(service.health_url, service.port)
-        if health.endpoint_responding and health.state == "healthy":
-            return ActionResult(True, f"{service.name} is healthy at {service.health_url}")
+        status_health = http_health(service.status_url, service.port) if service.status_url else None
+        if health_is_ready(health) and (status_health is None or health_is_ready(status_health)):
+            endpoints = service.health_url
+            if service.status_url:
+                endpoints += f" and {service.status_url}"
+            return ActionResult(True, f"{service.name} is healthy at {endpoints}")
         time.sleep(5)
-    return ActionResult(False, f"{service.name} did not become healthy at {service.health_url}")
+    endpoints = service.health_url
+    if service.status_url:
+        endpoints += f" and {service.status_url}"
+    return ActionResult(False, f"{service.name} did not become healthy at {endpoints}")
 
 
 def service_by_name(cfg: StackConfig, name: str) -> ServiceDefinition:
@@ -802,6 +834,11 @@ def start_one(cfg: StackConfig, name: str, *, wait: bool = False) -> ActionResul
         session, states = collect_runtime(cfg)
         state_by_name = {item.definition.name: item for item in states}
         current = state_by_name[name]
+    if current.runtime_state == "unhealthy" and not current.tmux_window.exists and current.health.port_occupied:
+        return ActionResult(
+            False,
+            f"{service.name} port {service.port} is occupied by an unmanaged process with unhealthy endpoints.",
+        )
     if current.health.port_occupied and not current.health.endpoint_responding and not current.tmux_window.exists:
         if wait_for_port_closed(service.port, timeout_seconds=10.0):
             session, states = collect_runtime(cfg)
@@ -1298,6 +1335,32 @@ def provider_sessions_to_dict(cfg: StackConfig) -> list[dict[str, Any]]:
     ]
 
 
+def wait_for_http_ok(url: str, timeout_seconds: float = 30.0) -> tuple[bool, str]:
+    deadline = time.monotonic() + timeout_seconds
+    last_error = ""
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen(url, timeout=3.0) as resp:
+                status = getattr(resp, "status", 0) or 0
+                if 200 <= status < 400:
+                    return True, f"HTTP {status}"
+                last_error = f"HTTP {status}"
+        except Exception as exc:
+            last_error = str(exc)
+        time.sleep(1.0)
+    return False, last_error or f"timed out waiting for {url}"
+
+
+def open_url_detached(url: str) -> str:
+    if run(["bash", "-lc", "command -v xdg-open >/dev/null 2>&1"], capture=True).returncode != 0:
+        return "xdg-open is not available; service is running but browser was not opened"
+    try:
+        subprocess.Popen(["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception as exc:
+        return f"failed to open browser: {exc}"
+    return f"opened browser at {url}"
+
+
 def launch_open_webui(cfg: StackConfig, interface_name: str = "open-webui", *, reload_backend: bool = False) -> ActionResult:
     interface = cfg.chat_interfaces.get(interface_name)
     if interface is None:
@@ -1327,10 +1390,36 @@ def launch_open_webui(cfg: StackConfig, interface_name: str = "open-webui", *, r
                 return ActionResult(False, f"failed to start Open WebUI backend profile {backend_profile}", details)
             cfg = open_webui_cfg
 
+    target = interface.get("backend_url", "http://127.0.0.1:4000/v1")
+    target_url = str(interface.get("url", "http://127.0.0.1:7070")).rstrip("/")
+    health_url = f"{target_url}/health"
+
     script = interface.get("windows_start_script", r"C:\open-webui\start-open-webui.ps1")
     ps_check = run(["bash", "-lc", "command -v powershell.exe >/dev/null 2>&1"], capture=True)
     if ps_check.returncode != 0:
-        return ActionResult(False, "powershell.exe is not available from WSL; run C:\\open-webui\\start-open-webui.ps1 from Windows PowerShell.")
+        service_path = Path.home() / ".config" / "systemd" / "user" / "open-webui-local.service"
+        if not service_path.exists():
+            return ActionResult(
+                False,
+                "powershell.exe is unavailable and native open-webui-local.service is not installed",
+                details,
+            )
+        cp = run(["systemctl", "--user", "start", "open-webui-local.service"], capture=True, timeout=15.0)
+        if cp.returncode != 0:
+            details.extend(item for item in [cp.stderr.strip(), cp.stdout.strip()] if item)
+            return ActionResult(False, "failed to start native Open WebUI service", details)
+        details.append("started native open-webui-local.service")
+        healthy, health_detail = wait_for_http_ok(health_url, timeout_seconds=30.0)
+        details.append(f"{health_url}: {health_detail}")
+        if not healthy:
+            return ActionResult(False, "native Open WebUI service did not become healthy", details)
+        details.append(open_url_detached(target_url))
+        if reload_backend and backend_profile:
+            return ActionResult(True, f"opened {interface_name} at {target_url}; backend target is {target} using profile {backend_profile}", details)
+        if backend_profile and any(detail.startswith("started textgen") or detail.startswith("textgen already") for detail in details):
+            return ActionResult(True, f"opened {interface_name} at {target_url}; backend target is {target} using profile {backend_profile}", details)
+        return ActionResult(True, f"opened {interface_name} at {target_url}; backend target is {target} using current profile {cfg.active_backend_profile}", details)
+
     ps_script_literal = "'" + str(script).replace("'", "''") + "'"
     arg_list = ["'-NoExit'", "'-ExecutionPolicy'", "'Bypass'", "'-File'", "$script"]
     backend_url = str(interface.get("backend_url", "")).strip()
@@ -1355,7 +1444,6 @@ def launch_open_webui(cfg: StackConfig, interface_name: str = "open-webui", *, r
     if cp.returncode != 0:
         details.extend(item for item in [cp.stderr.strip(), cp.stdout.strip()] if item)
         return ActionResult(False, "failed to open Open WebUI PowerShell launcher", details)
-    target = interface.get("backend_url", "http://127.0.0.1:4000/v1")
     if reload_backend and backend_profile:
         return ActionResult(True, f"opened {interface_name}; backend target is {target} using profile {backend_profile}", details)
     if backend_profile and any(detail.startswith("started textgen") or detail.startswith("textgen already") for detail in details):
@@ -1500,9 +1588,11 @@ def service_state_to_dict(cfg: StackConfig, state: ServiceRuntimeState) -> dict[
         "last_error": state.last_error,
         "port": service.port,
         "health_url": service.health_url,
+        "status_url": service.status_url,
         "models_url": service.models_url,
         "tmux_window": tmux_window_to_dict(state.tmux_window),
         "health": health_to_dict(state.health),
+        "status_health": health_to_dict(state.status_health) if state.status_health is not None else None,
         "model_summary": service_model_summary(cfg, state),
     }
 

@@ -4,9 +4,23 @@ Qwendex config lives in `config/qwendex/`.
 
 - `qwendex.schema.json`: stable schema
 - `qwendex.json`: repo-local default
-- `profiles.json`: seat registry
-- `model-catalog.json`: Qwen model metadata and guard markers
+- `profiles.json`: non-authoritative seat reference metadata
+- `model-catalog.json`: non-authoritative model/guard reference metadata
 - `qwendex.sample.json`: copy-safe sample with no credentials
+
+Runtime policy comes from `qwendex.json` plus the documented override layers.
+The two smaller catalog files are reference material only; editing them does
+not change routing or launcher behavior.
+
+Validate the two published configs against `qwendex.schema.json` with:
+
+```bash
+python3 scripts/validate_qwendex_config.py
+```
+
+The validator uses the exactly pinned `jsonschema` Draft 2020-12 implementation
+and also requires matching schema identifiers, SemVer product versions, and
+version parity between the default, sample, and current release heading.
 
 Precedence is:
 
@@ -22,13 +36,10 @@ Supported environment overrides:
 QWENDEX_DEFAULT_SEAT=qwen
 QWENDEX_RESULTS_ROOT=results/qwendex
 QWENDEX_STATE_DB=~/.local/state/qwendex/qwendex.sqlite
-QWENDEX_GUARD_PROFILE=max_safety
 QWENDEX_LEARNING_MODE=stage_only
 QWENDEX_ORCHESTRATION_MODE=auto
 QWENDEX_MANAGER_MODE=heavy
 QWENDEX_LOCAL_SUBAGENTS=on
-QWENDEX_ESTIMATOR_MODEL=gpt-5.5
-QWENDEX_ESTIMATOR_REASONING=medium
 QWENDEX_ROUTING_MODE=token_saver
 QWENDEX_PREFER_LOCAL_QWEN=1
 QWENDEX_LOCAL_QWEN_PROBE_URL=http://127.0.0.1:1234/v1/models
@@ -96,6 +107,10 @@ scripts/qwendex route --task-class exec --json
 `scripts/qwendex exec` defaults to `--seat auto`. Auto routing chooses `qwen`
 only when the local model alias is visible through the guarded Codex-facing
 endpoint; otherwise it falls back to the configured primary seat.
+`exec` infers its task class from the prompt before routing; security,
+architecture/protocol, release, and public-doc-claim prompts cannot be forced
+onto the local Qwen seat. Use the validated `--task-class` option when the
+prompt alone does not identify the lane.
 
 Local routing separates intent from availability. `QWENDEX_LOCAL_SUBAGENTS=on`
 or `Local: [Ready]` means Qwendex may consider local subagent lanes and the
@@ -105,6 +120,53 @@ operator intent to skip local lanes even when the endpoint is healthy. If local
 intent is on but the probe cannot confirm the alias, the state is
 `Local: [Unavailable]` and Qwendex falls back to `fallback_seat`.
 
+`fallback_seat` must be a GPT/Codex authority seat (`primary`, `audit`, or
+`release`). `--prefer-local` and an explicit `--seat qwen` do not override
+`primary_required_for_task_classes`, and Local-Off also prevents explicit local
+seat routing. These are release-blocking routing invariants, not cost hints.
+
+The global `sandbox.mode` applies to `exec` commands. The `audit` and isolated
+`sandbox` seats always use `read-only`, ignore user MCP/config surfaces, and do
+not inject the local artifact-queue MCP. Local-Qwen minimal exec also clears MCP
+configuration and passes the selected `read-only` or `workspace-write` mode
+through its launcher. Results from either local seat (`qwen` or `sandbox`)
+require GPT/Codex review.
+Seat guard profiles, wall/tool budgets, context/compaction limits, and tool
+output limits are carried into the child command/environment and recorded in
+the receipt execution policy. `max_output_tokens` is recorded as a declared,
+not-enforced value until the launcher/runtime consumes it; the receipt's
+`enforcement` map names this boundary.
+The published local seats and 32k backend profile use a `32768` context window
+and a `28672` auto-compact limit. Every seat must keep its effective compact
+limit below its context window; config validation rejects an inverted budget.
+
+`local_probe_url` must end in `/v1/models` without a query or fragment. Qwendex
+derives the launcher base by removing that suffix and passes both the derived
+`LOCAL_QWEN_BASE` and configured `LOCAL_QWEN_MODEL` to the child, so the
+endpoint/model that passed routing is the one execution uses. The launcher
+normalizes that base and exports `CODEX_OSS_BASE_URL=<base>/v1` for Codex. A
+conflicting inherited `CODEX_OSS_BASE_URL` blocks before execution instead of
+silently sending the run to an endpoint different from the one that passed
+preflight.
+
+`qdex --repo <project>` makes the selected repository the manager target,
+execution working directory, Codex add-dir, local-harness trusted root, and MCP
+trusted root. The generated isolated `CODEX_HOME` remains authoritative by
+default; preserving a caller's `CODEX_HOME` requires the explicit
+`QWENDEX_QDEX_PRESERVE_CODEX_HOME=1` opt-in. `qdex` defaults to
+`--dangerously-bypass-approvals-and-sandbox`; the repo binding is a
+Qwendex/MCP routing boundary, not OS-level filesystem confinement.
+For direct `exec --cwd`, the default artifact-queue MCP trusted write root is
+only that execution directory; adding any other root requires an explicit
+`QWENDEX_MCP_TRUSTED_ROOTS` override. Qwendex source is not included in those
+repo-bound MCP roots merely because its launcher is providing the command.
+
+The exact `QWENDEX_OK` probe executes normally by default. `--synthetic` is an
+explicit offline-only shortcut for that exact marker; its receipt says
+`synthetic_not_evidence` and cannot establish model, sandbox, tool, or endpoint
+availability. `scripts/qwendex seat <name>` likewise confirms only that a seat
+is configured; it does not probe availability.
+
 ## Orchestration
 
 `orchestration` controls manager defaults:
@@ -112,26 +174,49 @@ intent is on but the probe cannot confirm the alias, the state is
 - `mode`: `off`, `auto`, `lite`, `medium`, `heavy`, or `manager`
 - `manager_deploy_policy`: `auto` by default; Manager Mode requires active
   registered agent lanes unless this is set to `disabled`
-- `shortcut`: declared as `Alt+M`
-- `shortcut_command`: `scripts/qwendex manager mode --toggle --json`
-- `kaveman`: `Alt+K` toggle, persisted state, and terse-output directive
-- `local_subagents`: `Alt+L` toggle and default Local state
-- `mode_order`: `off`, `auto`, `lite`, `medium`, `heavy`, `manager`
-- `mode_profiles`: label, offload target, and max subagents per mode; Manager
-  Mode defaults to `max_subagents: 10`
-- `estimator`: model, reasoning, skill, and token caps for Auto
+- `kaveman`: persisted enabled state and the enforced terse-output directive
+- `local_subagents`: default Local enabled state
+- `mode_profiles`: status label and enforced agent capacity per mode; Manager
+  Mode has `max_subagents: 10`
 - `local_qwen_eligibility`: task classes and max risk for local lanes
 - `escalation_thresholds`: terms that move lanes to high or xhigh
 - `stale_session_thresholds_minutes`: cleanup windows per mode
-- `max_subagents`: default `4`; the Qwendex product ceiling is `10`
-- `stale_after_minutes`: default `30`
-- `close_stale_policy`: close completed agents after integration and idle
-  read-only agents after the stale window
+
+The canonical cycle order and patched-TUI hotkeys are code/keymap contracts,
+not mutable Qwendex configuration. `Alt+M`, `Alt+K`, and `Alt+L` may be rebound
+through the Codex TUI keymap. `manager estimate` is a deterministic CLI
+heuristic; it does not invoke a model or skill and has no model-budget config.
+The selected mode profile's `max_subagents` also supplies
+`AgentPolicy.max_threads`, so status, ledger capacity, and backend policy share
+one limit.
+
+`QWENDEX_MANAGER_MODE` and `QWENDEX_ORCHESTRATION_MODE` override the configured
+default mode for a fresh state DB. Once `scripts/qwendex manager mode ...` or
+`Alt+M` persists a selected mode, that local state is the active mode source
+until it is changed again.
+
+Agent-use selectors are session-level runtime policy inputs. When no explicit
+selector is set, the selected Agent Manager mode is the backend `AgentPolicy`
+source:
+
+```bash
+scripts/qwendex manager mode --set manager --json
+scripts/qwendex --agent-use Manager agent policy --json
+QWENDEX_AGENT_USE=Heavy scripts/qwendex agent status --json
+CODEX_AGENT_USE=Lite scripts/qwendex check --json
+```
+
+Precedence is CLI `--agent-use`, then `QWENDEX_AGENT_USE`, then
+`CODEX_AGENT_USE`, then the selected Agent Manager mode. If no mode has been
+persisted, `orchestration.mode` is the default. Invalid explicit values fall
+back to `Medium` with a warning unless `QWENDEX_AGENT_USE_STRICT=1` is set.
 
 The CLI exposes these settings with:
 
 ```bash
 scripts/qwendex manager --json
+scripts/qwendex agent policy --json
+scripts/qwendex agent status --json
 scripts/qwendex manager mode --set auto --json
 scripts/qwendex manager kaveman --toggle --json
 scripts/qwendex manager local --toggle --json

@@ -29,7 +29,7 @@ def test_ledger_indexes_receipt_metadata_without_transcript_text(tmp_path):
                 "run_id": "run-123",
                 "task_name": "duplicate-read-finalization",
                 "model_alias": "qwen-local",
-                "backend_profile": "qwopus-test",
+                "backend_profile": "local-test-profile",
                 "provider": "bridge",
                 "status": "failed",
                 "success": False,

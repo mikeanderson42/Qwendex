@@ -23,12 +23,41 @@ BOOTSTRAP_JSON="$META_ROOT/bootstrap.json"
 INSTALL_DEPS_JSON="$META_ROOT/install_deps.json"
 DEV_STATUS_JSON="$META_ROOT/dev_status.json"
 RELEASE_SUMMARY_JSON="$META_ROOT/release_validation_summary.json"
-MAIN_CODEX_BIN="${QWENDEX_MAIN_CODEX_BIN:-$(command -v codex || true)}"
 DEV_CODEX_DEFAULT="$WORK_ROOT/codex-build/bin/codex"
 CODEX_SOURCE_DIR="$WORK_ROOT/codex-source/codex"
 QWENDEX_CODEX_YOLO_FLAG="--dangerously-bypass-approvals-and-sandbox"
-QWENDEX_CODEX_SOURCE_REPO="${QWENDEX_CODEX_SOURCE_REPO:-https://github.com/openai/codex.git}"
-QWENDEX_CODEX_SOURCE_REF="${QWENDEX_CODEX_SOURCE_REF:-rust-v0.142.4}"
+QWENDEX_RELEASE_CODEX_SOURCE_REPO="https://github.com/openai/codex.git"
+QWENDEX_CODEX_SOURCE_REPO="${QWENDEX_CODEX_SOURCE_REPO:-$QWENDEX_RELEASE_CODEX_SOURCE_REPO}"
+QWENDEX_RELEASE_CODEX_VERSION="0.144.0"
+QWENDEX_RELEASE_CODEX_SOURCE_COMMIT="767822446c7a594caa19609ca435281a9ec67e0d"
+QWENDEX_RELEASE_CODEX_PATCH_SHA256="88c68b92a5dcf0e273bc05eb50a430d910ae1c46644eeba30dc1301105bcc7bb"
+QWENDEX_RELEASE_CODEX_CARGO_LOCK_SHA256="2a3f5a7bd2b571e94cf39e35180e88567989421893f2b600607026d7896ad9c6"
+QWENDEX_CODEX_SOURCE_REF="${QWENDEX_CODEX_SOURCE_REF:-rust-v$QWENDEX_RELEASE_CODEX_VERSION}"
+
+resolve_main_codex_bin() {
+  if [[ -n "${QWENDEX_MAIN_CODEX_BIN:-}" ]]; then
+    printf '%s\n' "$QWENDEX_MAIN_CODEX_BIN"
+    return
+  fi
+  local dev_wrapper=""
+  if [[ -d "$DEV_ROOT/bin" ]]; then
+    dev_wrapper="$(cd -P "$DEV_ROOT/bin" && pwd)/codex"
+  fi
+  local candidate
+  local candidate_dir
+  local candidate_path
+  while IFS= read -r candidate; do
+    [[ -n "$candidate" ]] || continue
+    candidate_dir="$(cd -P "$(dirname "$candidate")" && pwd)"
+    candidate_path="$candidate_dir/$(basename "$candidate")"
+    if [[ -z "$dev_wrapper" || "$candidate_path" != "$dev_wrapper" ]]; then
+      printf '%s\n' "$candidate_path"
+      return
+    fi
+  done < <(type -aP codex 2>/dev/null || true)
+}
+
+MAIN_CODEX_BIN="$(resolve_main_codex_bin)"
 MANAGED_RSYNC_EXCLUDES=(
   --exclude '.git'
   --exclude '.git/'
@@ -60,6 +89,19 @@ MANAGED_GIT_PATHS=(
 die() {
   printf 'error: %s\n' "$*" >&2
   exit 1
+}
+
+shell_quote() {
+  printf '%q' "$1"
+}
+
+toml_quote() {
+  python3 - "$1" <<'PY'
+import json
+import sys
+
+print(json.dumps(sys.argv[1], ensure_ascii=False))
+PY
 }
 
 guard_dev_root() {
@@ -99,32 +141,45 @@ utc_stamp() {
 }
 
 write_codex_config() {
+  local dev_root_toml
+  local source_root_toml
+  dev_root_toml="$(toml_quote "$DEV_ROOT")"
+  source_root_toml="$(toml_quote "$SOURCE_ROOT")"
   cat > "$CODEX_HOME_DIR/config.toml" <<EOF
 approval_policy = "never"
 sandbox_mode = "workspace-write"
-persistent_instructions = "Qwendex dev environment active. Act as the senior Qwendex product maintainer: keep changes scoped, verify before staging, use qwendex-dev doctor/verify/review/stage, protect public/private boundaries, and keep generated .qwendex-dev state out of public artifacts. QWENDEX_ROOT, QWENDEX_STATE_DB, QWENDEX_LEDGER_DB, QWENDEX_RESULTS_ROOT, QWENDEX_CODEX_STATUS_FILE, and QWENDEX_DEV_ROOT are set by the launcher. Use qwendex, qwendex-dev, and llmstack for harness controls. After context compaction, resume from the newest user request, re-run the Qwendex posture checks, and inspect existing diffs/state before editing; use qwendex-dev snapshot and scripts/qwendex context snapshot/reminder/compact-plan at phase boundaries or before manual compaction so the next session has objective, decisions, evidence, open files, blockers, and next actions. At the start of substantial tasks, check Agent Manager/Kaveman/Local state. When Agent Manager is in Manager Mode and there are independent non-blocking read, review, docs, or verification lanes, spawn bounded subagents early with short prompts, disjoint write scopes, and explicit stop conditions; keep critical-path implementation local, avoid duplicate/conflicting writes, treat subagent output as advisory until integrated and verified, and close spawned agents and matching Qwendex manager sessions after integration. If subagents are not useful, say why briefly. When QWENDEX_CODEX_STATUS_FILE reports kaveman_enabled true, keep output terse and direct."
+persistent_instructions = "Qwendex dev environment active. Act as the senior Qwendex product maintainer: keep changes scoped, verify before staging, use qwendex-dev doctor/verify/review/stage, protect public/private boundaries, and keep generated .qwendex-dev state out of public artifacts. QWENDEX_ROOT, QWENDEX_STATE_DB, QWENDEX_LEDGER_DB, QWENDEX_RESULTS_ROOT, QWENDEX_CODEX_STATUS_FILE, and QWENDEX_DEV_ROOT are set by the launcher. Use qwendex, qwendex-dev, and llmstack for harness controls. After context compaction, resume from the newest user request, re-run the Qwendex posture checks, and inspect existing diffs/state before editing; use qwendex-dev snapshot and scripts/qwendex context snapshot/reminder/compact-plan at phase boundaries or before manual compaction so the next session has objective, decisions, evidence, open files, blockers, and next actions. At the start of substantial tasks, check Agent Manager/Kaveman/Local state. When Agent Manager is in Manager Mode, use manager planning/preflight first. Spawn bounded subagents only when current tool policy, task shape, and write-surface separation make delegation safe; keep critical-path implementation local, avoid duplicate/conflicting writes, treat subagent output as advisory until integrated and verified, and close spawned agents and matching Qwendex manager sessions after integration. If subagents are not used, record or state the direct-work reason and validation path. When QWENDEX_CODEX_STATUS_FILE reports kaveman_enabled true, keep output terse and direct."
 
 [features]
 multi_agent = true
 
-[projects."$DEV_ROOT"]
-trust_level = "trusted"
-
-[projects."$SOURCE_ROOT"]
+[projects.$dev_root_toml]
 trust_level = "trusted"
 EOF
+
+  if [[ "$(cd -P "$SOURCE_ROOT" && pwd)" != "$(cd -P "$DEV_ROOT" && pwd)" ]]; then
+    cat >> "$CODEX_HOME_DIR/config.toml" <<EOF
+
+[projects.$source_root_toml]
+trust_level = "trusted"
+EOF
+  fi
 
   if [[ -x "$DEV_CODEX_DEFAULT" || -n "${QWENDEX_DEV_CODEX_BIN:-}" ]]; then
     cat >> "$CODEX_HOME_DIR/config.toml" <<'EOF'
 
 [tui]
 status_line = ["model-with-reasoning", "current-dir", "qwendex-manager"]
+EOF
+    if [[ "${QWENDEX_DEV_ENABLE_PATCHED_TUI_CONFIG:-0}" == "1" ]]; then
+      cat >> "$CODEX_HOME_DIR/config.toml" <<'EOF'
 
 [tui.keymap.global]
 qwendex_toggle_manager = "alt-m"
 qwendex_toggle_kaveman = "alt-k"
 qwendex_toggle_local = "alt-l"
 EOF
+    fi
   fi
 
   cat > "$CODEX_HOME_DIR/patched-tui.example.toml" <<'EOF'
@@ -141,40 +196,58 @@ EOF
 }
 
 write_wrappers() {
+  local dev_root_shell
+  local source_root_shell
+  local main_codex_shell
+  local dev_codex_default_shell
+  dev_root_shell="$(shell_quote "$DEV_ROOT")"
+  source_root_shell="$(shell_quote "$SOURCE_ROOT")"
+  main_codex_shell="$(shell_quote "$MAIN_CODEX_BIN")"
+  dev_codex_default_shell="$(shell_quote "$DEV_CODEX_DEFAULT")"
   cat > "$DEV_ROOT/bin/qwendex" <<EOF
 #!/usr/bin/env bash
-exec "$DEV_ROOT/scripts/qwendex" "\$@"
+dev_root=$dev_root_shell
+exec "\$dev_root/scripts/qwendex" "\$@"
 EOF
   cat > "$DEV_ROOT/bin/llmstack" <<EOF
 #!/usr/bin/env bash
-exec "$DEV_ROOT/llmstack" "\$@"
+dev_root=$dev_root_shell
+exec "\$dev_root/llmstack" "\$@"
 EOF
   cat > "$DEV_ROOT/bin/qwendex-dev" <<EOF
 #!/usr/bin/env bash
-export QWENDEX_DEV_SOURCE_ROOT="$SOURCE_ROOT"
-export QWENDEX_MAIN_CODEX_BIN="$MAIN_CODEX_BIN"
-exec "$DEV_ROOT/scripts/qwendex_dev_env" "\$@"
+dev_root=$dev_root_shell
+export QWENDEX_DEV_SOURCE_ROOT=$source_root_shell
+export QWENDEX_MAIN_CODEX_BIN=$main_codex_shell
+exec "\$dev_root/scripts/qwendex_dev_env" "\$@"
 EOF
   cat > "$DEV_ROOT/bin/codex-main" <<EOF
 #!/usr/bin/env bash
-if [[ ! -x "$MAIN_CODEX_BIN" ]]; then
-  echo "main Codex fallback is not executable: $MAIN_CODEX_BIN" >&2
+main_codex=$main_codex_shell
+if [[ ! -x "\$main_codex" ]]; then
+  printf 'main Codex fallback is not executable: %s\n' "\$main_codex" >&2
   exit 127
 fi
-exec "$MAIN_CODEX_BIN" "\$@"
+exec "\$main_codex" "\$@"
 EOF
   cat > "$DEV_ROOT/bin/codex" <<EOF
 #!/usr/bin/env bash
-dev_codex="\${QWENDEX_DEV_CODEX_BIN:-$DEV_CODEX_DEFAULT}"
+dev_codex_default=$dev_codex_default_shell
+main_codex=$main_codex_shell
+dev_codex="\${QWENDEX_DEV_CODEX_BIN:-\$dev_codex_default}"
 if [[ -x "\$dev_codex" ]]; then
   exec "\$dev_codex" "\$@"
 fi
-if [[ ! -x "$MAIN_CODEX_BIN" ]]; then
-  echo "no dev Codex binary found and main fallback is not executable: $MAIN_CODEX_BIN" >&2
+if [[ ! -x "\$main_codex" ]]; then
+  printf 'no dev Codex binary found and main fallback is not executable: %s\n' "\$main_codex" >&2
   exit 127
 fi
-exec "$MAIN_CODEX_BIN" "\$@"
+exec "\$main_codex" "\$@"
 EOF
+  if [[ -f "$DEV_ROOT/scripts/qdex" ]]; then
+    mkdir -p "$HOME/.local/bin"
+    install -m 0755 "$DEV_ROOT/scripts/qdex" "$HOME/.local/bin/qdex"
+  fi
   cat > "$DEV_ROOT/open.ps1" <<'EOF'
 [CmdletBinding()]
 param(
@@ -191,28 +264,29 @@ EOF
 
 write_env_files() {
   printf '%s\n' "$SOURCE_ROOT" > "$WORK_ROOT/source-root"
-  cat > "$WORK_ROOT/env.sh" <<EOF
-export QWENDEX_DEV_ROOT='$DEV_ROOT'
-export QWENDEX_DEV_SOURCE_ROOT='$SOURCE_ROOT'
-export QWENDEX_MAIN_CODEX_BIN='$MAIN_CODEX_BIN'
-export QWENDEX_ROOT='$DEV_ROOT'
-export QWENDEX_STATE_DB='$STATE_DB'
-export QWENDEX_LEDGER_DB='$LEDGER_DB'
-export QWENDEX_RESULTS_ROOT='$RESULTS_ROOT'
-export QWENDEX_META_ROOT='$META_ROOT'
-export QWENDEX_CODEX_STATUS_FILE='$STATUS_FILE'
-export QWENDEX_EXEC_CWD='$DEV_ROOT'
-export QWENDEX_MCP_TRUSTED_ROOTS='$DEV_ROOT:$SOURCE_ROOT'
-export CODEX_HOME='$CODEX_HOME_DIR'
-export LOCAL_QWEN_CODEX_CWD='$DEV_ROOT'
-export LOCAL_QWEN_CODEX_ADD_DIRS='$DEV_ROOT:$SOURCE_ROOT'
-export LOCAL_QWEN_CANONICAL_LAUNCHER='$DEV_ROOT/scripts/run_local_qwen_codex.sh'
-export LOCAL_QWEN_MODEL_CATALOG_JSON='$DEV_ROOT/config/local_llm_stack/qwen_local_model_catalog.json'
-export LOCAL_QWEN_LOCAL_HARNESS_MCP='$DEV_ROOT/scripts/artifact_queue_mcp.py'
-export LOCAL_QWEN_LOCAL_HARNESS_TRUSTED_ROOTS='$DEV_ROOT:$SOURCE_ROOT'
-export LOCAL_QWEN_HARNESS_LEDGER_DB='$LOCAL_HARNESS_LEDGER_DB'
-export PATH='$HOME/.local/bin':'$HOME/.cargo/bin':'$DEV_ROOT/bin':'$DEV_ROOT':'$DEV_ROOT/scripts':"\$PATH"
-EOF
+  {
+    printf 'export QWENDEX_DEV_ROOT=%q\n' "$DEV_ROOT"
+    printf 'export QWENDEX_DEV_SOURCE_ROOT=%q\n' "$SOURCE_ROOT"
+    printf 'export QWENDEX_MAIN_CODEX_BIN=%q\n' "$MAIN_CODEX_BIN"
+    printf 'export QWENDEX_ROOT=%q\n' "$DEV_ROOT"
+    printf 'export QWENDEX_STATE_DB=%q\n' "$STATE_DB"
+    printf 'export QWENDEX_LEDGER_DB=%q\n' "$LEDGER_DB"
+    printf 'export QWENDEX_RESULTS_ROOT=%q\n' "$RESULTS_ROOT"
+    printf 'export QWENDEX_META_ROOT=%q\n' "$META_ROOT"
+    printf 'export QWENDEX_CODEX_STATUS_FILE=%q\n' "$STATUS_FILE"
+    printf 'export QWENDEX_EXEC_CWD=%q\n' "$DEV_ROOT"
+    printf 'export QWENDEX_MCP_TRUSTED_ROOTS=%q\n' "$DEV_ROOT:$SOURCE_ROOT"
+    printf 'export CODEX_HOME=%q\n' "$CODEX_HOME_DIR"
+    printf 'export LOCAL_QWEN_CODEX_CWD=%q\n' "$DEV_ROOT"
+    printf 'export LOCAL_QWEN_CODEX_ADD_DIRS=%q\n' "$DEV_ROOT:$SOURCE_ROOT"
+    printf 'export LOCAL_QWEN_CANONICAL_LAUNCHER=%q\n' "$DEV_ROOT/scripts/run_local_qwen_codex.sh"
+    printf 'export LOCAL_QWEN_MODEL_CATALOG_JSON=%q\n' "$DEV_ROOT/config/local_llm_stack/qwen_local_model_catalog.json"
+    printf 'export LOCAL_QWEN_LOCAL_HARNESS_MCP=%q\n' "$DEV_ROOT/scripts/artifact_queue_mcp.py"
+    printf 'export LOCAL_QWEN_LOCAL_HARNESS_TRUSTED_ROOTS=%q\n' "$DEV_ROOT:$SOURCE_ROOT"
+    printf 'export LOCAL_QWEN_HARNESS_LEDGER_DB=%q\n' "$LOCAL_HARNESS_LEDGER_DB"
+    printf 'export PATH=%q:%q:%q:%q:%q:$PATH\n' \
+      "$HOME/.local/bin" "$HOME/.cargo/bin" "$DEV_ROOT/bin" "$DEV_ROOT" "$DEV_ROOT/scripts"
+  } > "$WORK_ROOT/env.sh"
   cat > "$WORK_ROOT/README.md" <<EOF
 # Qwendex Dev Environment
 
@@ -290,6 +364,336 @@ for raw in sys.argv[1:]:
         continue
     data = json.loads(path.read_text(encoding="utf-8"))
     print(f"{data.get('command', path.name)}: {data.get('status')} - {data.get('summary')}")
+PY
+}
+
+run_logged_gate() {
+  local receipt="$1"
+  local gate_name="$2"
+  local run_id="$3"
+  shift 3
+  local log_file="${receipt%.json}.log"
+  local started_at
+  started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  mkdir -p "$(dirname "$receipt")"
+  local rc=0
+  local restore_errexit=0
+  [[ "$-" == *e* ]] && restore_errexit=1
+  set +e
+  (
+    # Gate functions contain multi-command validation sequences. Re-enable
+    # fail-fast semantics inside an isolated subshell so an early failure
+    # cannot be hidden by a later successful command while the caller captures
+    # the pipeline status.
+    set -e
+    "$@"
+  ) 2>&1 | tee "$log_file"
+  rc="${PIPESTATUS[0]}"
+  if [[ "$restore_errexit" -eq 1 ]]; then
+    set -e
+  fi
+  python3 - "$receipt" "$gate_name" "$run_id" "$started_at" "$rc" "$log_file" "$@" <<'PY'
+import hashlib
+import json
+import sys
+from datetime import UTC, datetime
+from pathlib import Path
+
+receipt, gate_name, run_id, started_at, raw_rc, raw_log, *command = sys.argv[1:]
+log = Path(raw_log)
+log_bytes = log.read_bytes() if log.is_file() else b""
+returncode = int(raw_rc)
+data = {
+    "schema_version": "qwendex.dev.gate.v1",
+    "generated_at": datetime.now(UTC).isoformat(),
+    "started_at": started_at,
+    "run_id": run_id,
+    "gate": gate_name,
+    "status": "pass" if returncode == 0 else "fail",
+    "success": returncode == 0,
+    "returncode": returncode,
+    "command": command,
+    "log": log.name,
+    "log_bytes": len(log_bytes),
+    "log_sha256": hashlib.sha256(log_bytes).hexdigest(),
+}
+Path(receipt).write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+  return "$rc"
+}
+
+require_json_pass() {
+  local path="$1"
+  python3 - "$path" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+payload = json.loads(path.read_text(encoding="utf-8"))
+passed = payload.get("status") == "pass" or payload.get("success") is True
+if not passed:
+    raise SystemExit(f"required receipt did not pass: {path}")
+PY
+}
+
+bind_release_receipt() {
+  local path="$1"
+  local run_id="$2"
+  local gate_name="$3"
+  local command_id="$4"
+  local source_commit="$5"
+  local source_tree="$6"
+  local health_mode="${7:-}"
+  python3 - "$path" "$run_id" "$gate_name" "$command_id" "$source_commit" "$source_tree" "$health_mode" <<'PY'
+import hashlib
+import json
+import sys
+from datetime import UTC, datetime
+from pathlib import Path
+
+path = Path(sys.argv[1])
+run_id, gate, command_id, source_commit, source_tree, health_mode = sys.argv[2:8]
+payload = json.loads(path.read_text(encoding="utf-8"))
+if not isinstance(payload, dict):
+    raise SystemExit(f"release receipt must be a JSON object: {path}")
+unbound = dict(payload)
+unbound.pop("release_binding", None)
+payload_sha256 = hashlib.sha256(
+    json.dumps(unbound, sort_keys=True, separators=(",", ":")).encode("utf-8")
+).hexdigest()
+binding = {
+    "schema_version": "qwendex.dev.receipt_binding.v1",
+    "generated_at": datetime.now(UTC).isoformat(),
+    "run_id": run_id,
+    "gate": gate,
+    "command_id": command_id,
+    "source": {
+        "commit": source_commit,
+        "tree": source_tree,
+    },
+    "payload_sha256": payload_sha256,
+}
+if health_mode:
+    binding["health_mode"] = health_mode
+payload["release_binding"] = binding
+path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+}
+
+refresh_ci_attestation() {
+  local commit="$1"
+  local output="$2"
+  local default_branch="$3"
+  [[ -n "$default_branch" ]] || die "strict release verification requires a non-empty default branch"
+  command -v gh >/dev/null 2>&1 || die "strict release verification requires gh to fetch CI attestation"
+  local runs_json
+  runs_json="$(gh run list \
+    --commit "$commit" \
+    --branch "$default_branch" \
+    --event push \
+    --workflow .github/workflows/ci.yml \
+    --limit 20 \
+    --json databaseId,conclusion,event,headBranch,headSha,status,workflowName)"
+  local remote_run_id
+  remote_run_id="$(python3 -c '
+import json, sys
+runs = json.load(sys.stdin)
+for run in runs:
+    if (
+        run.get("headSha") == sys.argv[1]
+        and run.get("headBranch") == sys.argv[2]
+        and run.get("workflowName") == "CI"
+        and run.get("event") == "push"
+        and run.get("status") == "completed"
+        and run.get("conclusion") == "success"
+    ):
+        print(run["databaseId"])
+        break
+' "$commit" "$default_branch" <<<"$runs_json")"
+  [[ -n "$remote_run_id" ]] || die "no successful CI push run found for $commit"
+  local download_root
+  download_root="$(mktemp -d "$WORK_ROOT/ci-attestation.XXXXXX")"
+  if ! gh run download \
+    "$remote_run_id" \
+    --name "qwendex-ci-attestation-$commit" \
+    --dir "$download_root"; then
+    rm -rf "$download_root"
+    die "failed to download CI attestation artifact for $commit"
+  fi
+  local downloaded="$download_root/qwendex-ci-attestation.json"
+  if [[ ! -f "$downloaded" ]]; then
+    rm -rf "$download_root"
+    die "CI artifact did not contain qwendex-ci-attestation.json"
+  fi
+  mkdir -p "$(dirname "$output")"
+  install -m 0600 "$downloaded" "$output"
+  rm -rf "$download_root"
+}
+
+cmd_validate_config_json() {
+  local count=0
+  while IFS= read -r -d '' json_path; do
+    python3 -m json.tool "$json_path" >/dev/null
+    count=$((count + 1))
+  done < <(python3 - <<'PY'
+import os
+import sys
+from pathlib import Path
+
+for path in sorted(Path("config").rglob("*.json")):
+    if not path.name.endswith(".local.json"):
+        sys.stdout.buffer.write(os.fsencode(path) + b"\0")
+PY
+)
+  python3 "$DEV_ROOT/scripts/validate_qwendex_config.py" --repo-root "$DEV_ROOT"
+  printf 'validated %s public JSON configuration files\n' "$count"
+}
+
+write_validated_codex_build_receipt() {
+  local source_receipt="$META_ROOT/codex_build.json"
+  local output="$1"
+  local run_id="$2"
+  [[ -f "$source_receipt" ]] || die "missing Codex build receipt: run qwendex-dev codex-source build"
+  python3 - "$source_receipt" "$output" "$CODEX_SOURCE_DIR" "${QWENDEX_DEV_CODEX_BIN:-$DEV_CODEX_DEFAULT}" "$META_ROOT/codex_build_inputs.json" "$META_ROOT/codex_source_preflight.json" "$run_id" <<'PY'
+import hashlib
+import json
+import subprocess
+import sys
+from datetime import UTC, datetime
+from pathlib import Path
+
+source_receipt, output, source_root, binary, build_inputs_path, preflight_path = map(Path, sys.argv[1:7])
+run_id = sys.argv[7]
+receipt = json.loads(source_receipt.read_text(encoding="utf-8"))
+build_inputs = json.loads(build_inputs_path.read_text(encoding="utf-8"))
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+if receipt.get("status") != "pass":
+    raise SystemExit("Codex build receipt is not passing")
+if not binary.is_file():
+    raise SystemExit(f"built Codex binary is missing: {binary}")
+if binary.is_symlink():
+    raise SystemExit(f"built Codex binary must not be a symlink: {binary}")
+head = subprocess.run(
+    ["git", "-C", str(source_root), "rev-parse", "HEAD"],
+    text=True,
+    capture_output=True,
+    check=True,
+    timeout=30,
+).stdout.strip()
+diff = subprocess.run(
+    ["git", "-C", str(source_root), "diff", "HEAD", "--binary", "--no-ext-diff"],
+    capture_output=True,
+    check=True,
+    timeout=30,
+).stdout
+patch_sha = hashlib.sha256(diff).hexdigest()
+binary_sha = sha256_file(binary)
+tree_manifest = subprocess.run(
+    ["git", "-C", str(source_root), "ls-tree", "-r", "--full-tree", "HEAD"],
+    capture_output=True,
+    check=True,
+    timeout=30,
+).stdout
+changed_paths = subprocess.run(
+    ["git", "-C", str(source_root), "diff", "HEAD", "--name-only", "--no-ext-diff"],
+    text=True,
+    capture_output=True,
+    check=True,
+    timeout=30,
+).stdout.splitlines()
+lock_sha = sha256_file(source_root / "codex-rs" / "Cargo.lock")
+cargo_version = subprocess.run(
+    ["cargo", "--version", "--verbose"],
+    cwd=source_root / "codex-rs",
+    text=True,
+    capture_output=True,
+    check=True,
+    timeout=30,
+).stdout.strip()
+rustc_version = subprocess.run(
+    ["rustc", "-Vv"],
+    cwd=source_root / "codex-rs",
+    text=True,
+    capture_output=True,
+    check=True,
+    timeout=30,
+).stdout.strip()
+source_ref = str(receipt.get("source_ref") or "")
+ref_target = subprocess.run(
+    ["git", "-C", str(source_root), "rev-parse", f"{source_ref}^{{commit}}"],
+    text=True,
+    capture_output=True,
+    check=True,
+    timeout=30,
+).stdout.strip()
+binary_version = subprocess.run(
+    [str(binary), "--version"], text=True, capture_output=True, check=True, timeout=30
+).stdout.strip()
+if receipt.get("source_head") != head:
+    raise SystemExit("Codex build source HEAD no longer matches the build receipt")
+if ref_target != head or build_inputs.get("source_ref_target") != head:
+    raise SystemExit("Codex build source ref no longer resolves to source HEAD")
+if receipt.get("source_patch_sha256") != patch_sha:
+    raise SystemExit("Codex build patch digest no longer matches the build receipt")
+if receipt.get("source_tree_manifest_sha256") != hashlib.sha256(tree_manifest).hexdigest():
+    raise SystemExit("Codex build source tree manifest no longer matches the build receipt")
+if receipt.get("source_patch_paths") != sorted(path for path in changed_paths if path):
+    raise SystemExit("Codex build patch path set no longer matches the build receipt")
+if receipt.get("cargo_lock_sha256") != lock_sha:
+    raise SystemExit("Codex Cargo.lock no longer matches the build receipt")
+if receipt.get("cargo_version") != cargo_version or receipt.get("rustc_version") != rustc_version:
+    raise SystemExit("Codex build toolchain no longer matches the build receipt")
+if receipt.get("build_inputs_sha256") != sha256_file(build_inputs_path):
+    raise SystemExit("Codex build input manifest digest does not match the build receipt")
+if build_inputs.get("status") != "pass" or build_inputs.get("blockers"):
+    raise SystemExit("Codex build input manifest is not passing")
+for field in (
+    "source_head",
+    "source_patch_sha256",
+    "expected_source_patch_sha256",
+    "source_tree_manifest_sha256",
+    "cargo_lock_sha256",
+    "expected_cargo_lock_sha256",
+    "cargo_version",
+    "rustc_version",
+    "build_isolation",
+    "cargo_home_policy",
+    "cargo_home_config_files",
+    "project_cargo_config",
+    "dependency_fetch_policy",
+):
+    if receipt.get(field) != build_inputs.get(field):
+        raise SystemExit(f"Codex build receipt field does not match input manifest: {field}")
+if receipt.get("preflight", {}).get("sha256") != sha256_file(preflight_path):
+    raise SystemExit("Codex source preflight no longer matches the build receipt")
+if receipt.get("binary_sha256") != binary_sha:
+    raise SystemExit("Codex dev binary digest no longer matches the build receipt")
+if receipt.get("binary") != str(binary) or receipt.get("binary_bytes") != binary.stat().st_size:
+    raise SystemExit("Codex dev binary path/size no longer matches the build receipt")
+if receipt.get("binary_version") != binary_version:
+    raise SystemExit("Codex dev binary version no longer matches the build receipt")
+validated = dict(receipt)
+validated.update(
+    {
+        "generated_at": datetime.now(UTC).isoformat(),
+        "validated_at": datetime.now(UTC).isoformat(),
+        "run_id": run_id,
+        "status": "pass",
+        "build_inputs": build_inputs,
+        "source_receipt_sha256": sha256_file(source_receipt),
+    }
+)
+Path(output).write_text(json.dumps(validated, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY
 }
 
@@ -485,85 +889,6 @@ print(f"status-json: {data['status']} - {out}")
 PY
 }
 
-write_release_summary_json() {
-  local tier="${1:-release}"
-  python3 - "$RELEASE_SUMMARY_JSON" "$tier" "$DEV_STATUS_JSON" "$META_ROOT" "$RESULTS_ROOT" <<'PY'
-import json
-import re
-import sys
-from collections import Counter
-from datetime import UTC, datetime
-from pathlib import Path
-
-out = Path(sys.argv[1])
-tier = sys.argv[2]
-status_path = Path(sys.argv[3])
-meta_root = Path(sys.argv[4])
-results_root = Path(sys.argv[5])
-markers = (
-    "LOCAL_MODEL_TOOL_CALL_TOO_LARGE",
-    "LOCAL_MODEL_TOOL_CALL_TRUNCATED",
-    "LOCAL_MODEL_TOOL_MARKUP_SUPPRESSED",
-    "LOCAL_MODEL_LOOP_DETECTED",
-    "QWENDEX_TIMEOUT",
-)
-counts = Counter()
-contract_counts = Counter()
-expected_counts = Counter()
-unexpected_counts = Counter()
-expected_marker_cases = {
-    "failed_validator_recovery",
-    "malformed_tool_envelope_suppression",
-    "oversized_generated_command_recovery",
-    "local_model_unavailable_fallback",
-    "fresh_home_ab_probe",
-}
-contract_marker_files = {
-    "llmstack_check.json",
-}
-for root in (meta_root, results_root):
-    if root.exists():
-        for path in root.rglob("*"):
-            if path.resolve() == out.resolve():
-                continue
-            if path.is_file() and path.stat().st_size <= 5_000_000:
-                text = path.read_text(encoding="utf-8", errors="replace")
-                expected = any(case in path.name or case in str(path.parent) for case in expected_marker_cases)
-                contract = path.name in contract_marker_files
-                for marker in markers:
-                    hits = len(re.findall(re.escape(marker), text))
-                    counts[marker] += hits
-                    if hits and contract:
-                        contract_counts[marker] += hits
-                    elif hits and expected:
-                        expected_counts[marker] += hits
-                    elif hits:
-                        unexpected_counts[marker] += hits
-status = json.loads(status_path.read_text(encoding="utf-8")) if status_path.exists() else {}
-blockers = list(status.get("blockers") or [])
-if any(unexpected_counts[m] for m in markers[:4]):
-    blockers.append("release marker scan found unexpected local-model guard markers")
-data = {
-    "schema_version": "qwendex.dev.release_summary.v1",
-    "generated_at": datetime.now(UTC).isoformat(),
-    "tier": tier,
-    "status": "pass" if not blockers else "blocked",
-    "recommendation": "publish-ready" if not blockers else "blocked",
-    "blockers": blockers,
-    "marker_counts": dict(counts),
-    "contract_marker_counts": dict(contract_counts),
-    "expected_marker_counts": dict(expected_counts),
-    "unexpected_marker_counts": dict(unexpected_counts),
-    "dev_status_path": str(status_path),
-    "meta_root": str(meta_root),
-    "results_root": str(results_root),
-}
-out.parent.mkdir(parents=True, exist_ok=True)
-out.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-print(f"release-summary: {data['status']} - {out}")
-PY
-}
-
 cmd_env() {
   prepare
   cat "$WORK_ROOT/env.sh"
@@ -574,6 +899,11 @@ cmd_sync() {
     sync_project
   fi
   prepare
+  # Keep the first status/state write on the generated isolated runtime. A
+  # fresh shell has not loaded env.sh yet, so calling qwendex directly here
+  # would otherwise fall back to ~/.local/state/qwendex.
+  # shellcheck disable=SC1090
+  source "$WORK_ROOT/env.sh"
   "$DEV_ROOT/scripts/qwendex" codex-status --write "$STATUS_FILE" --json > "$META_ROOT/codex_status_write.json"
   write_dev_status_json sync >/dev/null
   printf 'Qwendex dev root ready: %s\n' "$DEV_ROOT"
@@ -659,10 +989,26 @@ cmd_preflight() {
 }
 
 write_codex_patch_preflight_json() {
+  local output="${1:-$META_ROOT/codex_patch_preflight.json}"
+  local require_dev="${2:-0}"
+  local codex_bin="${QWENDEX_DEV_CODEX_BIN:-$DEV_CODEX_DEFAULT}"
+  if [[ ! -x "$codex_bin" ]]; then
+    if [[ "$require_dev" -eq 1 ]]; then
+      die "release verification requires a built dev Codex binary: $codex_bin"
+    fi
+    codex_bin="$MAIN_CODEX_BIN"
+  fi
+  [[ -x "$codex_bin" ]] || die "Codex binary is not executable: $codex_bin"
   if [[ -d "$CODEX_SOURCE_DIR" ]]; then
-    "$DEV_ROOT/scripts/qwendex" codex-patch preflight --source "$CODEX_SOURCE_DIR" --require-applied --json > "$META_ROOT/codex_patch_preflight.json"
+    "$DEV_ROOT/scripts/qwendex" codex-patch preflight \
+      --codex-bin "$codex_bin" \
+      --source "$CODEX_SOURCE_DIR" \
+      --require-applied \
+      --json > "$output"
   else
-    "$DEV_ROOT/scripts/qwendex" codex-patch preflight --json > "$META_ROOT/codex_patch_preflight.json"
+    "$DEV_ROOT/scripts/qwendex" codex-patch preflight \
+      --codex-bin "$codex_bin" \
+      --json > "$output"
   fi
 }
 
@@ -698,14 +1044,313 @@ cmd_codex_source() {
       ;;
     build)
       [[ -d "$CODEX_SOURCE_DIR/codex-rs" ]] || die "missing Codex Rust source: run qwendex-dev codex-source sync"
-      (cd "$CODEX_SOURCE_DIR/codex-rs" && cargo build --release -p codex-cli --bin codex)
+      local source_head
+      local source_ref_target
+      source_head="$(git -C "$CODEX_SOURCE_DIR" rev-parse HEAD)"
+      source_ref_target="$(git -C "$CODEX_SOURCE_DIR" rev-parse "$QWENDEX_CODEX_SOURCE_REF^{commit}")"
+      [[ "$source_head" == "$source_ref_target" ]] || die "Codex source HEAD does not match $QWENDEX_CODEX_SOURCE_REF"
+      [[ "$source_head" == "$QWENDEX_RELEASE_CODEX_SOURCE_COMMIT" ]] || die "Codex source HEAD does not match the canonical $QWENDEX_CODEX_SOURCE_REF commit"
+      [[ "$(git -C "$CODEX_SOURCE_DIR" remote get-url origin)" == "$QWENDEX_RELEASE_CODEX_SOURCE_REPO" ]] || die "Codex source origin is not the canonical OpenAI repository"
+      local prebuild_codex="$MAIN_CODEX_BIN"
+      [[ -x "$prebuild_codex" ]] || prebuild_codex="$(command -v codex || true)"
+      [[ -x "$prebuild_codex" ]] || die "missing Codex binary for source-version preflight"
+      "$DEV_ROOT/scripts/qwendex" codex-patch preflight \
+        --codex-bin "$prebuild_codex" \
+        --source "$CODEX_SOURCE_DIR" \
+        --require-applied \
+        --json > "$META_ROOT/codex_source_preflight.json"
+      local isolated_build_root
+      local isolated_cargo_home
+      isolated_build_root="$(mktemp -d "$WORK_ROOT/codex-build/source.XXXXXX")"
+      isolated_cargo_home="$isolated_build_root/cargo-home"
+      trap '[[ -z "${isolated_build_root:-}" ]] || rm -rf "$isolated_build_root"' EXIT
+      mkdir -p "$isolated_cargo_home"
+      # Release tags carry source-build lockfile versions. Normalize the lock
+      # explicitly before freezing the isolated build input. Both metadata and
+      # compilation use an initially empty, ephemeral CARGO_HOME so user/global
+      # Cargo config cannot alter the release build.
+      (
+        cd "$CODEX_SOURCE_DIR/codex-rs"
+        env \
+          -u CARGO_BUILD_RUSTFLAGS \
+          -u CARGO_BUILD_TARGET \
+          -u CARGO_ENCODED_RUSTFLAGS \
+          -u RUSTC \
+          -u RUSTC_WORKSPACE_WRAPPER \
+          -u RUSTC_WRAPPER \
+          -u RUSTDOC \
+          -u RUSTDOCFLAGS \
+          -u RUSTFLAGS \
+          -u RUSTUP_TOOLCHAIN \
+          CARGO_HOME="$isolated_cargo_home" \
+          cargo metadata --no-deps --format-version 1 >/dev/null
+      )
+      CARGO_HOME="$isolated_cargo_home" python3 - \
+        "$META_ROOT/codex_build_inputs.json" \
+        "$CODEX_SOURCE_DIR" \
+        "$QWENDEX_CODEX_SOURCE_REF" \
+        "$QWENDEX_RELEASE_CODEX_SOURCE_COMMIT" \
+        "$QWENDEX_RELEASE_CODEX_SOURCE_REPO" \
+        "$QWENDEX_RELEASE_CODEX_PATCH_SHA256" \
+        "$QWENDEX_RELEASE_CODEX_CARGO_LOCK_SHA256" <<'PY'
+import hashlib
+import json
+import os
+import subprocess
+import sys
+from datetime import UTC, datetime
+from pathlib import Path
+
+(
+    out,
+    source,
+    source_ref,
+    expected_source_commit,
+    expected_source_origin,
+    expected_patch_sha256,
+    expected_lock_sha256,
+) = sys.argv[1:8]
+source_path = Path(source)
+allowed_changes = {
+    "codex-rs/Cargo.lock",
+    "codex-rs/config/src/tui_keymap.rs",
+    "codex-rs/tui/src/app/input.rs",
+    "codex-rs/tui/src/bottom_pane/status_line_setup.rs",
+    "codex-rs/tui/src/bottom_pane/status_line_style.rs",
+    "codex-rs/tui/src/bottom_pane/status_surface_preview.rs",
+    "codex-rs/tui/src/chatwidget/status_surfaces.rs",
+    "codex-rs/tui/src/keymap.rs",
+    "codex-rs/tui/src/terminal_visualization_instructions.rs",
+}
+
+
+def run(*args: str, binary: bool = False, cwd: Path | None = None) -> str | bytes:
+    result = subprocess.run(
+        args,
+        cwd=cwd,
+        capture_output=True,
+        text=not binary,
+        check=True,
+        timeout=60,
+    )
+    return result.stdout if binary else result.stdout.strip()
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+head = str(run("git", "-C", str(source_path), "rev-parse", "HEAD"))
+ref_target = str(run("git", "-C", str(source_path), "rev-parse", f"{source_ref}^{{commit}}"))
+source_origin = str(run("git", "-C", str(source_path), "remote", "get-url", "origin"))
+status_lines = str(
+    run("git", "-C", str(source_path), "status", "--porcelain=v1", "--untracked-files=all")
+).splitlines()
+untracked = [line[3:] for line in status_lines if line.startswith("?? ")]
+unmerged = [line for line in status_lines if line[:2] in {"DD", "AU", "UD", "UA", "DU", "AA", "UU"}]
+changed_paths = sorted(
+    path
+    for path in str(
+        run("git", "-C", str(source_path), "diff", "HEAD", "--name-only", "--no-ext-diff")
+    ).splitlines()
+    if path
+)
+unexpected_changes = sorted(set(changed_paths) - allowed_changes)
+missing_patch_paths = sorted((allowed_changes - {"codex-rs/Cargo.lock"}) - set(changed_paths))
+source_diff = run(
+    "git", "-C", str(source_path), "diff", "HEAD", "--binary", "--no-ext-diff", binary=True
+)
+tree_manifest = run("git", "-C", str(source_path), "ls-tree", "-r", "--full-tree", "HEAD", binary=True)
+lock_path = source_path / "codex-rs" / "Cargo.lock"
+source_patch_sha256 = hashlib.sha256(source_diff).hexdigest()
+cargo_lock_sha256 = sha256_file(lock_path)
+cargo_home = Path(os.environ["CARGO_HOME"])
+cargo_home_configs = [
+    path.relative_to(cargo_home).as_posix()
+    for path in (cargo_home / "config", cargo_home / "config.toml")
+    if path.exists()
+]
+project_cargo_config = source_path / "codex-rs" / ".cargo" / "config.toml"
+blockers = []
+if head != ref_target:
+    blockers.append("source HEAD does not match the configured Codex source ref")
+if head != expected_source_commit:
+    blockers.append("source HEAD does not match the canonical Codex source commit")
+if source_origin != expected_source_origin:
+    blockers.append("source origin is not the canonical OpenAI Codex repository")
+if untracked:
+    blockers.append("Codex source has untracked files; isolated build input is ambiguous")
+if unmerged:
+    blockers.append("Codex source has unmerged paths")
+if unexpected_changes:
+    blockers.append("Codex source has changes outside the Qwendex patch allowlist")
+if missing_patch_paths:
+    blockers.append("Codex source is missing required Qwendex patch changes")
+if cargo_home_configs:
+    blockers.append("ephemeral Cargo home unexpectedly contains configuration")
+if source_patch_sha256 != expected_patch_sha256:
+    blockers.append("Codex source patch does not match the canonical Qwendex patch digest")
+if cargo_lock_sha256 != expected_lock_sha256:
+    blockers.append("Codex Cargo.lock does not match the canonical release digest")
+data = {
+    "schema_version": "qwendex.dev.codex_build_inputs.v1",
+    "generated_at": datetime.now(UTC).isoformat(),
+    "status": "pass" if not blockers else "blocked",
+    "source_ref": source_ref,
+    "source_head": head,
+    "source_ref_target": ref_target,
+    "expected_source_commit": expected_source_commit,
+    "source_origin": source_origin,
+    "expected_source_origin": expected_source_origin,
+    "source_tree_manifest_sha256": hashlib.sha256(tree_manifest).hexdigest(),
+    "source_patch_sha256": source_patch_sha256,
+    "expected_source_patch_sha256": expected_patch_sha256,
+    "source_patch_bytes": len(source_diff),
+    "changed_paths": changed_paths,
+    "unexpected_changes": unexpected_changes,
+    "missing_patch_paths": missing_patch_paths,
+    "untracked_paths": untracked,
+    "unmerged_entries": unmerged,
+    "cargo_lock_sha256": cargo_lock_sha256,
+    "expected_cargo_lock_sha256": expected_lock_sha256,
+    "cargo_version": str(run("cargo", "--version", "--verbose", cwd=source_path / "codex-rs")),
+    "rustc_version": str(run("rustc", "-Vv", cwd=source_path / "codex-rs")),
+    "build_isolation": "git-archive-plus-allowlisted-tracked-diff+ephemeral-cargo-home",
+    "cargo_home_policy": "ephemeral-empty-no-user-config",
+    "cargo_home_config_files": cargo_home_configs,
+    "project_cargo_config": {
+        "path": "codex-rs/.cargo/config.toml",
+        "exists": project_cargo_config.is_file(),
+        "sha256": sha256_file(project_cargo_config) if project_cargo_config.is_file() else "",
+    },
+    "dependency_fetch_policy": "locked-network-fetch-with-registry-checksums",
+    "blockers": blockers,
+}
+Path(out).write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+      require_json_pass "$META_ROOT/codex_build_inputs.json"
+      mkdir -p "$isolated_build_root/source"
+      git -C "$CODEX_SOURCE_DIR" archive --format=tar HEAD | tar -xf - -C "$isolated_build_root/source"
+      git -C "$CODEX_SOURCE_DIR" diff HEAD --binary --no-ext-diff > "$isolated_build_root/qwendex.patch"
+      # The temp tree lives below the outer Qwendex worktree. Give it its own
+      # Git boundary so `git apply` cannot discover and target the parent repo.
+      git -C "$isolated_build_root/source" init --quiet
+      if [[ -s "$isolated_build_root/qwendex.patch" ]]; then
+        git -C "$isolated_build_root/source" apply --binary "$isolated_build_root/qwendex.patch"
+      fi
+      (
+        cd "$isolated_build_root/source/codex-rs"
+        env \
+          -u CARGO_BUILD_RUSTFLAGS \
+          -u CARGO_BUILD_TARGET \
+          -u CARGO_ENCODED_RUSTFLAGS \
+          -u RUSTC \
+          -u RUSTC_WORKSPACE_WRAPPER \
+          -u RUSTC_WRAPPER \
+          -u RUSTDOC \
+          -u RUSTDOCFLAGS \
+          -u RUSTFLAGS \
+          -u RUSTUP_TOOLCHAIN \
+          CARGO_HOME="$isolated_cargo_home" \
+          CARGO_TARGET_DIR="$isolated_build_root/target" \
+          cargo build \
+            --locked \
+            --release \
+            -p codex-cli \
+            --bin codex
+      )
       mkdir -p "$(dirname "$DEV_CODEX_DEFAULT")"
       local tmp_codex
       tmp_codex="$(mktemp "$(dirname "$DEV_CODEX_DEFAULT")/.codex.XXXXXX")"
-      cp "$CODEX_SOURCE_DIR/codex-rs/target/release/codex" "$tmp_codex"
+      cp "$isolated_build_root/target/release/codex" "$tmp_codex"
       chmod +x "$tmp_codex"
       mv -f "$tmp_codex" "$DEV_CODEX_DEFAULT"
-      "$DEV_CODEX_DEFAULT" --version
+      rm -rf "$isolated_build_root"
+      isolated_build_root=""
+      trap - EXIT
+      "$DEV_ROOT/scripts/qwendex" codex-patch preflight \
+        --codex-bin "$DEV_CODEX_DEFAULT" \
+        --source "$CODEX_SOURCE_DIR" \
+        --require-applied \
+        --json > "$META_ROOT/codex_source_preflight.json"
+      python3 - "$META_ROOT/codex_build.json" "$CODEX_SOURCE_DIR" "$QWENDEX_CODEX_SOURCE_REF" "$DEV_CODEX_DEFAULT" "$META_ROOT/codex_source_preflight.json" "$META_ROOT/codex_build_inputs.json" <<'PY'
+import hashlib
+import json
+import subprocess
+import sys
+from datetime import UTC, datetime
+from pathlib import Path
+
+out, source, source_ref, binary, preflight, build_inputs = sys.argv[1:7]
+source_path = Path(source)
+binary_path = Path(binary)
+preflight_path = Path(preflight)
+build_inputs_path = Path(build_inputs)
+
+
+def run(*args: str) -> str:
+    result = subprocess.run(args, text=True, capture_output=True, check=True, timeout=30)
+    return result.stdout.strip()
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+source_diff = subprocess.run(
+    ["git", "-C", str(source_path), "diff", "HEAD", "--binary", "--no-ext-diff"],
+    capture_output=True,
+    check=True,
+    timeout=30,
+).stdout
+preflight_payload = json.loads(preflight_path.read_text(encoding="utf-8"))
+build_inputs_payload = json.loads(build_inputs_path.read_text(encoding="utf-8"))
+data = {
+    "schema_version": "qwendex.dev.codex_build.v1",
+    "generated_at": datetime.now(UTC).isoformat(),
+    "status": "pass",
+    "source_ref": source_ref,
+    "source_head": run("git", "-C", str(source_path), "rev-parse", "HEAD"),
+    "source_ref_target": build_inputs_payload.get("source_ref_target"),
+    "expected_source_commit": build_inputs_payload.get("expected_source_commit"),
+    "source_origin": build_inputs_payload.get("source_origin"),
+    "expected_source_origin": build_inputs_payload.get("expected_source_origin"),
+    "source_patch_sha256": hashlib.sha256(source_diff).hexdigest(),
+    "expected_source_patch_sha256": build_inputs_payload.get("expected_source_patch_sha256"),
+    "source_tree_manifest_sha256": build_inputs_payload.get("source_tree_manifest_sha256"),
+    "source_patch_paths": build_inputs_payload.get("changed_paths", []),
+    "cargo_lock_sha256": build_inputs_payload.get("cargo_lock_sha256"),
+    "expected_cargo_lock_sha256": build_inputs_payload.get("expected_cargo_lock_sha256"),
+    "cargo_version": build_inputs_payload.get("cargo_version"),
+    "rustc_version": build_inputs_payload.get("rustc_version"),
+    "build_isolation": build_inputs_payload.get("build_isolation"),
+    "cargo_home_policy": build_inputs_payload.get("cargo_home_policy"),
+    "cargo_home_config_files": build_inputs_payload.get("cargo_home_config_files"),
+    "project_cargo_config": build_inputs_payload.get("project_cargo_config"),
+    "dependency_fetch_policy": build_inputs_payload.get("dependency_fetch_policy"),
+    "build_inputs_sha256": sha256_file(build_inputs_path),
+    "binary": str(binary_path),
+    "binary_bytes": binary_path.stat().st_size,
+    "binary_sha256": sha256_file(binary_path),
+    "binary_version": run(str(binary_path), "--version"),
+    "preflight": {
+        "path": str(preflight_path),
+        "sha256": sha256_file(preflight_path),
+        "status": preflight_payload.get("status"),
+        "summary": preflight_payload.get("summary"),
+    },
+}
+Path(out).write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+print(f"codex-build: pass - {out}")
+PY
       ;;
     *)
       die "unknown codex-source action: $action (expected sync|patch|build|preflight)"
@@ -834,31 +1479,61 @@ cmd_lint() {
   # shellcheck disable=SC1090
   source "$WORK_ROOT/env.sh"
   cd "$DEV_ROOT"
-  python3 -m py_compile scripts/qwendex_cli.py tests/smoke/test_qwendex_cli.py scripts/local_qwen_bridge/*.py
-  bash -n scripts/qwendex_dev_env scripts/qwendex_testbench scripts/run_local_qwen_codex.sh
+  python3 -m py_compile scripts/*.py scripts/local_qwen_bridge/*.py
+  bash -n \
+    scripts/qdex \
+    scripts/qwendex \
+    scripts/qwendex_dev_env \
+    scripts/qwendex_install_deps \
+    scripts/qwendex_testbench \
+    scripts/llm \
+    scripts/*.sh
   if python3 -m ruff --version >/dev/null 2>&1; then
-    python3 -m ruff check scripts/qwendex_cli.py tests/smoke/test_qwendex_cli.py --ignore E501
+    python3 -m ruff check scripts tests --ignore E501
   else
     printf 'ruff unavailable; skipped ruff check.\n'
   fi
 }
 
 cmd_test() {
+  local scope="all"
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --quick|quick)
+        scope="quick"
+        ;;
+      --all|all)
+        scope="all"
+        ;;
+      *)
+        die "unknown test scope: $1 (expected quick|all)"
+        ;;
+    esac
+    shift
+  done
   prepare
   # shellcheck disable=SC1090
   source "$WORK_ROOT/env.sh"
   cd "$DEV_ROOT"
-  python3 -m pytest -q tests/smoke/test_qwendex_cli.py
+  if [[ "$scope" == "quick" ]]; then
+    python3 -m pytest -q tests/smoke/test_qwendex_cli.py
+  else
+    python3 -m pytest -q tests/smoke
+  fi
 }
 
 cmd_verify() {
   prepare
   local tier="quick"
+  local candidate=0
   while [[ "$#" -gt 0 ]]; do
     case "$1" in
       --tier)
         tier="${2:-}"
         shift
+        ;;
+      --candidate)
+        candidate=1
         ;;
       quick|full|live|release)
         tier="$1"
@@ -873,42 +1548,243 @@ cmd_verify() {
     quick|full|live|release) ;;
     *) die "unknown verify tier: $tier" ;;
   esac
+  if [[ "$candidate" -eq 1 && "$tier" != "release" ]]; then
+    die "--candidate is valid only with --tier release"
+  fi
 
-  cmd_lint
-  cmd_test
+  local run_started_at
+  local run_id
+  local run_meta_root
+  local run_results_root
+  run_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  run_id="verify-${tier}-$(date -u +%Y%m%dT%H%M%SZ)-$$-${RANDOM}"
+  run_meta_root="$META_ROOT/verify/$run_id"
+  run_results_root="$RESULTS_ROOT/verify/$run_id"
+  mkdir -p "$run_meta_root" "$run_results_root"
+  local release_source_commit=""
+  local release_source_tree=""
+  if [[ "$tier" == "release" ]]; then
+    release_source_commit="$(git -C "$DEV_ROOT" rev-parse HEAD)"
+    release_source_tree="$(git -C "$DEV_ROOT" rev-parse 'HEAD^{tree}')"
+  fi
+
+  if [[ "$tier" == "release" ]]; then
+    rm -f "$RELEASE_SUMMARY_JSON"
+    run_logged_gate \
+      "$run_meta_root/bootstrap_command.json" \
+      bootstrap_command \
+      "$run_id" \
+      cmd_bootstrap --check --no-system
+    require_json_pass "$BOOTSTRAP_JSON"
+    cp "$BOOTSTRAP_JSON" "$run_meta_root/bootstrap.json"
+    write_validated_codex_build_receipt "$run_meta_root/codex_build.json" "$run_id"
+    bind_release_receipt \
+      "$run_meta_root/bootstrap.json" "$run_id" bootstrap qwendex.bootstrap.check \
+      "$release_source_commit" "$release_source_tree"
+    bind_release_receipt \
+      "$run_meta_root/codex_build.json" "$run_id" codex_build qwendex.codex.build.validate \
+      "$release_source_commit" "$release_source_tree"
+  fi
+
+  run_logged_gate "$run_meta_root/static_gate.json" static "$run_id" cmd_lint
+  if [[ "$tier" == "quick" ]]; then
+    run_logged_gate "$run_meta_root/test_gate.json" tests_quick "$run_id" cmd_test --quick
+  else
+    run_logged_gate "$run_meta_root/test_gate.json" tests_full "$run_id" cmd_test --all
+  fi
+  if [[ "$tier" == "release" ]]; then
+    bind_release_receipt \
+      "$run_meta_root/static_gate.json" "$run_id" static_gate qwendex.static.full \
+      "$release_source_commit" "$release_source_tree"
+    bind_release_receipt \
+      "$run_meta_root/test_gate.json" "$run_id" test_gate qwendex.tests.full \
+      "$release_source_commit" "$release_source_tree"
+  fi
   # shellcheck disable=SC1090
   source "$WORK_ROOT/env.sh"
   cd "$DEV_ROOT"
   local health_mode="advisory"
   if [[ "$tier" == "release" ]]; then
     health_mode="strict"
+    local release_state_db="$WORK_ROOT/state/release_verify_qwendex.sqlite"
+    rm -f "$release_state_db" "$release_state_db-shm" "$release_state_db-wal"
+    export QWENDEX_STATE_DB="$release_state_db"
   fi
-  scripts/qwendex check --health-mode "$health_mode" --json > "$META_ROOT/qwendex_check.json"
-  scripts/qwendex doctor --health-mode "$health_mode" --json > "$META_ROOT/qwendex_doctor.json"
-  scripts/qwendex codex-status --write "$STATUS_FILE" --json > "$META_ROOT/codex_status_write.json"
-  scripts/qwendex codex-patch preflight --json > "$META_ROOT/codex_patch_preflight.json"
+  scripts/qwendex check --health-mode "$health_mode" --json > "$run_meta_root/qwendex_check.json"
+  scripts/qwendex doctor --health-mode "$health_mode" --json > "$run_meta_root/qwendex_doctor.json"
+  scripts/qwendex codex-status --write "$STATUS_FILE" --json > "$run_meta_root/codex_status_write.json"
+  local require_dev_codex=0
+  if [[ "$tier" == "release" ]]; then
+    require_dev_codex=1
+  fi
+  write_codex_patch_preflight_json "$run_meta_root/codex_patch_preflight.json" "$require_dev_codex"
+  if [[ "$tier" == "release" ]]; then
+    bind_release_receipt \
+      "$run_meta_root/qwendex_check.json" "$run_id" qwendex_check qwendex.check.strict \
+      "$release_source_commit" "$release_source_tree" strict
+    bind_release_receipt \
+      "$run_meta_root/qwendex_doctor.json" "$run_id" qwendex_doctor qwendex.doctor.strict \
+      "$release_source_commit" "$release_source_tree" strict
+    bind_release_receipt \
+      "$run_meta_root/codex_status_write.json" "$run_id" codex_status qwendex.codex-status.write \
+      "$release_source_commit" "$release_source_tree"
+    bind_release_receipt \
+      "$run_meta_root/codex_patch_preflight.json" "$run_id" codex_patch qwendex.codex-patch.preflight \
+      "$release_source_commit" "$release_source_tree"
+  fi
   if [[ "$tier" == "full" || "$tier" == "live" || "$tier" == "release" ]]; then
-    python3 -m json.tool config/qwendex/qwendex.json >/dev/null
-    python3 -m json.tool config/qwendex/model-catalog.json >/dev/null
-    python3 -m json.tool config/qwendex/profiles.json >/dev/null
-    local stamp
-    stamp="$(utc_stamp)"
-    scripts/qwendex eval --all --results-root "$RESULTS_ROOT/qwendex_eval_$stamp" --json > "$META_ROOT/qwendex_eval_all.json"
-    scripts/llm harness-gate --json > "$META_ROOT/llm_harness_gate.json" || true
-    python3 scripts/local_qwen_harness_eval.py --all --results-root "$RESULTS_ROOT/llm_harness_eval_$stamp" --ledger-db "$LOCAL_HARNESS_LEDGER_DB" --json > "$META_ROOT/llm_harness_eval_all.json"
+    run_logged_gate "$run_meta_root/config_gate.json" config_json "$run_id" cmd_validate_config_json
+    scripts/qwendex eval --all --results-root "$run_results_root/qwendex_eval" --json > "$run_meta_root/qwendex_eval_all.json"
+    scripts/llm harness-gate --json > "$run_meta_root/llm_harness_gate.json"
+    python3 scripts/local_qwen_harness_eval.py \
+      --all \
+      --results-root "$run_results_root/llm_harness_eval" \
+      --ledger-db "$LOCAL_HARNESS_LEDGER_DB" \
+      --json > "$run_meta_root/llm_harness_eval_all.json"
+    if [[ "$tier" == "release" ]]; then
+      bind_release_receipt \
+        "$run_meta_root/config_gate.json" "$run_id" config_gate qwendex.config.validate \
+        "$release_source_commit" "$release_source_tree"
+      bind_release_receipt \
+        "$run_meta_root/qwendex_eval_all.json" "$run_id" qwendex_eval qwendex.eval.all \
+        "$release_source_commit" "$release_source_tree"
+      bind_release_receipt \
+        "$run_meta_root/llm_harness_gate.json" "$run_id" harness_gate qwendex.harness.gate \
+        "$release_source_commit" "$release_source_tree"
+      bind_release_receipt \
+        "$run_meta_root/llm_harness_eval_all.json" "$run_id" harness_eval qwendex.harness.eval.all \
+        "$release_source_commit" "$release_source_tree"
+    fi
   fi
-  if [[ "$tier" == "live" || "$tier" == "release" ]]; then
-    scripts/run_local_qwen_codex.sh --check > "$META_ROOT/local_qwen_launcher_check.txt"
+  local release_require_live="${QWENDEX_RELEASE_REQUIRE_LIVE:-0}"
+  if [[ "$tier" == "live" || ( "$tier" == "release" && "$release_require_live" =~ ^(1|true|yes|on)$ ) ]]; then
+    run_logged_gate \
+      "$run_meta_root/local_qwen_launcher_check.json" \
+      live_launcher \
+      "$run_id" \
+      scripts/run_local_qwen_codex.sh --check
+    python3 scripts/validate_local_qwen_reliability.py \
+      --require-live-bridge \
+      --json > "$run_meta_root/local_qwen_reliability.json"
+    require_json_pass "$run_meta_root/local_qwen_reliability.json"
+    local live_codex_bin="${QWENDEX_DEV_CODEX_BIN:-$DEV_CODEX_DEFAULT}"
+    if [[ ! -x "$live_codex_bin" ]]; then
+      live_codex_bin="$MAIN_CODEX_BIN"
+    fi
+    [[ -x "$live_codex_bin" ]] || die "live verification requires an executable Codex binary"
+    python3 scripts/validate_local_qwen_codex_acceptance.py \
+      --launcher "$DEV_ROOT/scripts/run_local_qwen_codex.sh" \
+      --codex-bin "$live_codex_bin" \
+      --workdir "$DEV_ROOT" \
+      --fresh-home "$run_results_root/live/fresh-codex-home" \
+      --normal-home "$run_results_root/live/normal-home-decoy" \
+      --final-output "$run_results_root/live/final-message.txt" \
+      --json > "$run_meta_root/local_qwen_codex_acceptance.json"
+    require_json_pass "$run_meta_root/local_qwen_codex_acceptance.json"
+    if [[ "$tier" == "release" ]]; then
+      bind_release_receipt \
+        "$run_meta_root/local_qwen_launcher_check.json" "$run_id" live_launcher qwendex.local-launcher.check \
+        "$release_source_commit" "$release_source_tree"
+      bind_release_receipt \
+        "$run_meta_root/local_qwen_reliability.json" "$run_id" live_reliability qwendex.local-reliability.live \
+        "$release_source_commit" "$release_source_tree"
+      bind_release_receipt \
+        "$run_meta_root/local_qwen_codex_acceptance.json" "$run_id" live_codex_acceptance qwendex.local-codex.fresh-home \
+        "$release_source_commit" "$release_source_tree"
+    fi
   fi
   write_dev_status_json "verify-$tier" >/dev/null
+  cp "$DEV_STATUS_JSON" "$run_meta_root/dev_status.json"
   if [[ "$tier" == "release" ]]; then
-    write_release_summary_json "$tier"
+    bind_release_receipt \
+      "$run_meta_root/dev_status.json" "$run_id" dev_status qwendex.dev-status.release \
+      "$release_source_commit" "$release_source_tree"
+  fi
+
+  local latest_name
+  for latest_name in \
+    qwendex_check.json \
+    qwendex_doctor.json \
+    codex_status_write.json \
+    codex_patch_preflight.json \
+    qwendex_eval_all.json \
+    llm_harness_gate.json \
+    llm_harness_eval_all.json; do
+    if [[ -f "$run_meta_root/$latest_name" ]]; then
+      cp "$run_meta_root/$latest_name" "$META_ROOT/$latest_name"
+    fi
+  done
+  if [[ -f "$run_meta_root/local_qwen_launcher_check.log" ]]; then
+    cp "$run_meta_root/local_qwen_launcher_check.log" "$META_ROOT/local_qwen_launcher_check.txt"
+  fi
+
+  local release_gate_rc=0
+  if [[ "$tier" == "release" ]]; then
+    local version
+    version="$(python3 -c 'import json; print(json.load(open("config/qwendex/qwendex.json", encoding="utf-8"))["version"])')"
+    local release_default_branch="${QWENDEX_RELEASE_DEFAULT_BRANCH:-main}"
+    [[ -n "$release_default_branch" ]] || die "QWENDEX_RELEASE_DEFAULT_BRANCH must not be empty"
+    local ci_attestation
+    if [[ "$candidate" -eq 0 ]]; then
+      # Publish-ready evidence is always fetched from the matching GitHub run.
+      # A caller-supplied local JSON file is not an authority source.
+      ci_attestation="$META_ROOT/qwendex-ci-attestation.json"
+      refresh_ci_attestation "$release_source_commit" "$ci_attestation" "$release_default_branch"
+      install -m 0600 \
+        "$ci_attestation" \
+        "$run_meta_root/qwendex-ci-attestation.json"
+      ci_attestation="$run_meta_root/qwendex-ci-attestation.json"
+    else
+      ci_attestation="${QWENDEX_CI_ATTESTATION:-$META_ROOT/qwendex-ci-attestation.json}"
+    fi
+    local release_args=(
+      --repo-root "$DEV_ROOT"
+      --meta-root "$run_meta_root"
+      --results-root "$run_results_root"
+      --dev-status "$run_meta_root/dev_status.json"
+      --output "$run_meta_root/release_validation_summary.json"
+      --tier release
+      --expected-version "$version"
+      --expected-tag "v$version"
+      --expected-codex-version "$QWENDEX_RELEASE_CODEX_VERSION"
+      --run-id "$run_id"
+      --run-started-at "$run_started_at"
+      --default-branch "$release_default_branch"
+    )
+    if [[ -f "$ci_attestation" ]]; then
+      release_args+=(--ci-attestation "$ci_attestation")
+    fi
+    if [[ -n "${QWENDEX_RELEASE_TRUSTED_ORIGIN:-}" ]]; then
+      release_args+=(--trusted-origin "$QWENDEX_RELEASE_TRUSTED_ORIGIN")
+    fi
+    if [[ "$release_require_live" =~ ^(1|true|yes|on)$ ]]; then
+      release_args+=(--require-live)
+    fi
+    if [[ "$candidate" -eq 1 ]]; then
+      release_args+=(--candidate)
+    fi
+    python3 scripts/qwendex_release_gate.py "${release_args[@]}" || release_gate_rc=$?
+    if [[ "$release_gate_rc" -eq 0 ]]; then
+      local verify_summary_args=(
+        verify-summary
+        --summary "$run_meta_root/release_validation_summary.json"
+        --repo-root "$DEV_ROOT"
+      )
+      if [[ "$candidate" -eq 0 ]]; then
+        verify_summary_args+=(--require-publish-ready)
+      fi
+      python3 scripts/qwendex_release_gate.py "${verify_summary_args[@]}"
+      cp "$run_meta_root/release_validation_summary.json" "$RELEASE_SUMMARY_JSON"
+    fi
   fi
   summary_json \
-    "$META_ROOT/qwendex_check.json" \
-    "$META_ROOT/qwendex_doctor.json" \
-    "$META_ROOT/codex_status_write.json" \
-    "$META_ROOT/codex_patch_preflight.json"
+    "$run_meta_root/qwendex_check.json" \
+    "$run_meta_root/qwendex_doctor.json" \
+    "$run_meta_root/codex_status_write.json" \
+    "$run_meta_root/codex_patch_preflight.json"
+  if [[ "$release_gate_rc" -ne 0 ]]; then
+    return "$release_gate_rc"
+  fi
 }
 
 cmd_snapshot() {
@@ -1003,8 +1879,8 @@ Commands:
   scripts/qwendex_dev_env repair-copy --force
   scripts/qwendex_dev_env stage [--dry-run] [--skip-verify]
   scripts/qwendex_dev_env lint
-  scripts/qwendex_dev_env test
-  scripts/qwendex_dev_env verify --tier quick|full|live|release
+  scripts/qwendex_dev_env test [quick|all]
+  scripts/qwendex_dev_env verify --tier quick|full|live|release [--candidate]
   scripts/qwendex_dev_env snapshot
   scripts/qwendex_dev_env clean
   scripts/qwendex_dev_env preflight
@@ -1035,7 +1911,8 @@ case "$1" in
     cmd_sync
     ;;
   bootstrap)
-    cmd_bootstrap
+    shift
+    cmd_bootstrap "$@"
     ;;
   env)
     cmd_env
@@ -1075,7 +1952,8 @@ case "$1" in
     cmd_lint
     ;;
   test)
-    cmd_test
+    shift
+    cmd_test "$@"
     ;;
   verify)
     shift

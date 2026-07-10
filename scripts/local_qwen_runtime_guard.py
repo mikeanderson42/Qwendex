@@ -901,14 +901,16 @@ def interface_marker_counts_after_latest_user(raw_items: list[Any]) -> dict[str,
 
 
 def duplicate_read_recovery_seen_after_latest_user(raw_items: list[Any]) -> bool:
+    seen = False
     for item in raw_items:
         if not isinstance(item, dict):
             continue
         if reset_on_user_message(item):
+            seen = False
             continue
         if item_type(item) == "function_call_output" and "DUPLICATE_READ_ALREADY_DONE" in extract_output_text(item):
-            return True
-    return False
+            seen = True
+    return seen
 
 
 TERMINAL_NO_NEXT_OUTPUT_RE = re.compile(

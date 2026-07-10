@@ -12,12 +12,14 @@ for a scoped change.
 | Network tools | Search and inspect are read-only by default |
 | Receipt leakage | Receipt reads verify schema and digest; receipts may still contain redacted output snippets, so do not publish without review |
 | Model-output injection | Guard markers detect malformed tool markup and loop patterns before acceptance |
-| Learned-skill poisoning | Learn adoption is staged, denied for sensitive paths, and review-gated |
+| Learned-skill poisoning | Qwendex never auto-applies proposals; its adopt command only performs a denied-path allowlist preflight |
 | Public-doc overclaiming | Public docs are naming-audited and release-reviewed |
+| Release artifact leakage | The release gate scans every tracked blob, path, and symlink for runtime/private material and binds the result to the tagged tree |
 | Adapter drift | Launcher checks verify model alias, context, guard profile, and status contract |
 | Stale delegation state | Manager sessions record heartbeat, stop condition, stop reason, and close metadata in local state |
+| Unsafe agent tool use | Agent pre-tool gates deny recursive child spawn, fail closed on non-allowlisted read-only shell events, reject conflicting write locks, and require approval for release/publish commands |
 
-## Denied Auto-Adopt Paths
+## Learning Preflight Denials
 
 - Hooks and hook config
 - MCP config
@@ -27,7 +29,10 @@ for a scoped change.
 - Public release claims
 - `state/*`
 
-Security-sensitive changes require GPT/Codex review and a receipt.
+Passing `learn adopt --approve` means only that declared paths passed this
+allowlist preflight. It never writes or applies proposal content.
+Security-sensitive changes still require GPT/Codex review and normal verified
+development changes.
 
 ## Current Limits
 
@@ -38,5 +43,33 @@ known secret-shaped strings, but receipts can still contain non-secret private
 context in output snippets.
 
 Tool capability manifests with per-tool network/write scopes are planned but not
-yet enforced by the public CLI. Until then, public docs describe bounded tool
-policy and eval-covered delegates, not a general permission engine.
+yet enforced as a general permission engine. The public CLI does enforce the
+Agent Management pre-tool gate for its managed events, including the
+single-writer file-lock strategy; stock Codex tool-registry filtering remains a
+separate patched-runtime integration boundary.
+
+The release-command gate recognizes direct and path-qualified release commands,
+common `command`/`env` wrappers, shell `-c` and `eval` payloads, command
+substitutions, pipelines, and newline-separated commands. It is not a general
+shell sandbox: an arbitrary interpreter such as Python or `xargs` can construct
+commands the static recognizer cannot prove. Publication credentials, network
+egress controls, and the external execution sandbox therefore remain the final
+authority boundary. Only approval inherited by the managed hook process is
+trusted; command text and event JSON are untrusted inputs. Direct `gh api`
+POST, PUT, PATCH, and DELETE forms, plus body/field forms that imply POST, are
+approval-gated for every REST or GraphQL endpoint. An explicit GET remains a
+read-only request even when fields are supplied as query parameters.
+
+The managed read-only shell gate allows only the bare inspection commands and
+safe Git subcommands documented in [Agent Management](agent-management.md#write-safety).
+It parses quoted command lists and pipelines, then rejects unknown programs,
+interpreters, wrappers, shell expansion, redirection, external-output options,
+and unparseable input. This fail-closed classifier is effective only when the
+managed `PreToolUse` hook is installed and verified; OS sandboxing and command
+side effects outside that syntax-level contract remain separate controls.
+
+For writer profiles, the same classifier treats every non-allowlisted managed
+shell event as write-capable. The event must declare its `agent_id` and explicit
+target paths so the existing single-writer lock gate can run; arbitrary shell
+commands never bypass ownership merely because their side effects are difficult
+to infer.

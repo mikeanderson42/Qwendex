@@ -32,6 +32,7 @@ DEFAULT_RUFF_TARGETS = (
     "scripts/local_qwen_skillopt_wrapper.py",
     "scripts/qwendex_cli.py",
     "scripts/local_llm_stack.py",
+    "scripts/qwendex_responses_bridge.py",
     "scripts/tabbyapi_responses_proxy.py",
 )
 
@@ -60,6 +61,7 @@ def classify_path(path: Path) -> str:
         for marker in (
             "local_qwen",
             "tabbyapi_responses_proxy",
+            "qwendex_responses_bridge",
             "local_llm",
             "artifact_queue_mcp",
             "harness_eval",
@@ -80,12 +82,13 @@ def classify_path(path: Path) -> str:
             "local_qwen",
             "local_llm",
             "tabbyapi_responses_proxy",
+            "qwendex_responses_bridge",
             "run_local_qwen",
             "run_codex_textgen_bridge",
             "run_koboldcpp_gguf",
-            "run_llamacpp_qwopucode_gguf",
+            "run_llamacpp_qwen_gguf",
             "run_textgen_safe_no_model",
-            "run_vllm_qwopucode_gguf",
+            "run_vllm_qwen_gguf",
             "validate_local_qwen",
             "artifact_queue_mcp",
             "qwendex",
@@ -194,7 +197,7 @@ def bridge_status_contract_check(repo_root: Path = ROOT) -> dict[str, Any]:
         "-c",
         (
             "import importlib.util, pathlib; "
-            f"p=pathlib.Path({str(repo_root / 'scripts/tabbyapi_responses_proxy.py')!r}); "
+            f"p=pathlib.Path({str(repo_root / 'scripts/qwendex_responses_bridge.py')!r}); "
             "s=importlib.util.spec_from_file_location('bridge', p); "
             "m=importlib.util.module_from_spec(s); s.loader.exec_module(m); "
             "payload=m.runtime_guard_status_payload(); "

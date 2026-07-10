@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 # ruff: noqa: E402,F401,F403,I001
-"""Compatibility entrypoint for the local-Qwen Codex Responses bridge.
+"""Legacy compatibility entrypoint for the local-Qwen Codex Responses bridge.
 
-The bridge implementation lives in `local_qwen_bridge.server`; this file stays
-small so launchers, validators, and old smoke tests can continue importing the
-historical script path while the implementation follows the V2 package layout.
+New integrations should use ``scripts/qwendex_responses_bridge.py``. This file
+retains the historical import surface for existing local wrappers.
 """
 
 from __future__ import annotations
@@ -18,7 +17,7 @@ SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-BRIDGE_VERSION = "tabby-responses-proxy-2026-06-30-qwen-self-analysis-preflight-64k"
+BRIDGE_VERSION = "qwendex-local-qwen-responses-v2"
 
 from local_qwen_bridge import server as _server  # noqa: E402
 _server = importlib.reload(_server)

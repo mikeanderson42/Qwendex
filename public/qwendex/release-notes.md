@@ -1,5 +1,162 @@
 # Release Notes
 
+## Unreleased
+
+## 0.5.0
+
+- Replaced the downstream-specific local-Qwen bridge monolith with a generic
+  Responses-compatible v2 bridge, including bounded request parsing, correct
+  JSON/SSE behavior, runtime-guard recovery, a versioned canonical `/status`
+  readiness contract, and fresh-home Codex probes.
+- Bound Codex execution to the exact preflighted bridge base, blocked conflicting
+  inherited endpoint overrides, and scoped qdex working/add-dir/MCP trust to
+  the selected target repository.
+- Made Manager decisions repository- and turn-scoped, enforced local-off/GPT
+  authority rules, bounded active agents, protected legacy locks, and required
+  fresh verifier evidence for every edited turn.
+- Added digest-verified manager receipts, atomic shared-state writes, honest
+  full-ledger aggregates, and explicit migration boundaries for legacy state.
+- Added an isolated, allowlisted Codex `0.144.0` source build with bound binary,
+  source-patch, lockfile, toolchain, and preflight provenance.
+- Added a fail-closed release-summary v2 contract, GitHub CI, same-root install
+  acceptance, full tracked-artifact/privacy scanning, and version/tag/default-
+  branch/remote evidence binding.
+- Made the clean-install learning mock an explicit non-mutating contract check;
+  external SkillOpt remains required for status, harvest, and run, while
+  `adopt --approve` performs allowlist preflight only and never applies files.
+- Aligned the public 32k backend, local seats, launcher fallback, and sample
+  environment on a 32768/28672 context/compaction budget with cross-field
+  validation.
+- Removed machine-local launchers, downstream workflow templates, private
+  inventory, and raw validation transcripts from the public source artifact.
+
+## 0.4.0
+
+- Added Codex CLI `0.144.0` / `rust-v0.144.0` to the supported TUI patch
+  manifest.
+- Updated the Qwendex dev source sync default so patched Codex rebuilds target
+  the installed `0.144.0` CLI.
+- Published release metadata as `0.4.0`.
+
+## 0.3.2
+
+- Promoted Kaveman into `AgentPolicy.output_policy`, including policy-hash
+  participation and `QWENDEX_OUTPUT_POLICY` / `QWENDEX_KAVEMAN_*` exports.
+- Threaded the same output policy through managed prompt hooks, subagent-start
+  hooks, agent plans, manager preflight receipts, manager status, and
+  `codex-status`.
+- Updated release metadata to `0.3.2`.
+- Added an optional native `open-webui-local.service` fallback for the local
+  stack Open WebUI launcher when `powershell.exe` is unavailable.
+
+## 0.3.1
+
+- Kept explicit `--mode manager` preflight selection authoritative and exposed
+  Qwendex model/reasoning assignments in spawn instructions and hook context.
+- Injected model policy plus the Kaveman directive into managed hooks while
+  keeping local token-saver context aligned with Local off/on.
+- Hardened release guards for `gh release` option forms, `delete-asset`, `new`,
+  and protected branch refspecs, while avoiding read-only search false
+  positives in write detection.
+- Kept dev Codex patched keymaps opt-in through
+  `QWENDEX_DEV_ENABLE_PATCHED_TUI_CONFIG=1`.
+
+## 0.3.0
+
+- Published exact Qwendex release metadata for `0.3.0` and tag `v0.3.0`.
+- Captured Manager Mode and agent orchestration verification as release-facing
+  state, including manager status, active agent ledger posture, and final-report
+  gating for the release lane.
+- Preserved forced-local smoke test isolation by keeping local-Qwen availability
+  tests on per-test `QWENDEX_STATE_DB` and `QWENDEX_RESULTS_ROOT` paths.
+
+## 0.0.2-rc4
+
+- Made Manager Stop hooks tolerant of qdex export loss by attaching to the
+  latest compatible preflight ledger and treating repeated Stop hooks as
+  idempotent after finalization.
+- Added embedded runtime env to managed hook commands and resolved
+  Codex-home path digests so Stop hooks still reach the intended Qwendex
+  manager ledger when Codex drops state env vars or uses a symlinked dev path.
+- Kept installed Codex hook output on the raw hook schema while preserving the
+  diagnostic JSON envelope for manual Qwendex CLI inspection.
+- Reworked PreToolUse write detection to distinguish shell comparisons from
+  real redirects, keeping file-lock enforcement for actual writes.
+- Updated the release metadata to `0.0.2-rc4`.
+
+## 0.0.2-rc3
+
+- Fixed managed Codex hook stdout for `UserPromptSubmit` and related lifecycle
+  hooks. Installed hook commands now use `--codex-hook-output` so Codex sees the
+  raw event schema, while manual `agent hook ... --json` keeps the diagnostic
+  Qwendex envelope.
+- Tightened hook verification so stale full `--json` hook configs are not
+  accepted as Manager-ready.
+- Updated the release metadata to `0.0.2-rc3`.
+
+## 0.0.2-rc2
+
+- Added `qdex` as the dev-worktree launch wrapper for selected repositories,
+  including Manager preflight before Codex starts and exported manager ledger
+  IDs only after a ready preflight.
+- Added the Manager decision ledger and receipts for hook posture, prompt
+  digest or interactive-prompt unknown state, routing reason, verifier
+  requirement, validation plan, and STOP status.
+- Hardened Manager launch and finalization gates so missing or partial hooks
+  block by default, selected Manager Mode cannot be bypassed by env agent-use
+  selectors, stale unhooked overrides are ignored when hooks verify, and
+  `Validation: not run` does not close direct edit work.
+- Added managed hook install/verify commands, qdex durability checks, Manager
+  preflight smoke coverage, direct-work validation coverage, and public docs
+  for the supported workflow.
+
+## 0.0.2-rc1
+
+- Fixed Agent Manager mode consistency so the selected `Alt+M` mode is the
+  default backend `AgentPolicy` source for `agent`, `manager`, `check`,
+  `doctor`, `codex-status`, and native `agent hook` gates.
+- Added backend policy support for `Off` and `Auto`, including Off-mode
+  automatic subagent spawn rejection.
+- Added smoke coverage proving selected Manager Mode blocks finalization while
+  required lanes are active, and selected Off mode blocks automatic subagent
+  spawning.
+
+## 0.1.0-rc.5
+
+- Added Codex CLI `0.143.0` to the Qwendex TUI patch manifest.
+- Updated the dev launcher default source ref to `rust-v0.143.0` so
+  `qwendex-dev codex-source sync`, `patch`, and `build` target the new Codex
+  update by default.
+- Verified the dev launcher patch/build workflow against the 0.143.0 runtime.
+
+## 0.1.0-rc.4
+
+- Added first-class AgentPolicy diagnostics for `--agent-use`,
+  `QWENDEX_AGENT_USE`, and `CODEX_AGENT_USE`, including policy hashes and
+  subprocess env exports.
+- Added `scripts/qwendex agent ...` aliases for policy, status, list, inspect,
+  logs, wait, close, tombstone, profiles, and team inspection over the existing
+  manager ledger.
+- Added `scripts/qwendex agent plan --prompt ...` to turn the effective
+  AgentPolicy and built-in team roster into direct-work exceptions or concrete
+  `manager assign` commands.
+- Added `scripts/qwendex agent metrics --json` for ledger counts,
+  final-contract compliance, raw-output artifact counts, active writer counts,
+  and managed hook/profile observability.
+- Added native `scripts/qwendex agent hook ...` gate evaluation for prompt
+  context, subagent final-report contracts, Manager stop gates, read-only write
+  denial, child recursive-spawn denial, and release/publish command approval.
+- Added SQLite-backed agent file locks with `scripts/qwendex agent locks --json`
+  and first-release single-writer enforcement for base-worktree writes.
+- Added Manager Mode raw-output preservation under ignored `.qwendex/runs/`
+  artifacts, plus compact agent outcomes in `agent logs`, `manager status`,
+  `context compact-plan`, and `context pack`.
+- Added `scripts/qwendex agent hook-config` to render or approval-write
+  managed hook wiring that invokes the native Qwendex agent gate evaluator.
+- Documented the current CLI enforcement boundary for Agent Management while
+  keeping native Codex tool-registry filtering and automatic/global hook
+  installation labeled as future patched-runtime integration work.
+
 ## 0.1.0-rc.3
 
 - Fixed route receipts so `local_subagents.local_state`, availability,
@@ -76,4 +233,5 @@ Known limitations:
 - Auto routing falls back to the configured primary seat when local Qwen is not
   visible; it does not make Qwen release authority.
 - Qwen is not release authority.
-- SkillOpt adoption remains staged and review-gated.
+- Qwendex does not adopt SkillOpt proposals; its approved adopt action is a
+  path-allowlist preflight only.

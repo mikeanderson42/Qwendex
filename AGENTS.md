@@ -30,6 +30,15 @@ work. Runtime state, receipts, Codex home, snapshots, Codex source checkouts,
 and build outputs belong under `~/qwendex-dev/.qwendex-dev/` and must remain
 untracked.
 
+### Workspace Boundary
+
+Use this worktree only for reusable Qwendex product and package work. Local PC
+recovery, downstream assistant behavior, private project prompts, backup
+procedures, machine layout, and host-specific service configuration belong in
+the owning downstream repository or an ignored operator-local overlay. Do not
+encode those details, their absolute paths, or personal history in tracked
+Qwendex files.
+
 At the start of a fresh dev session, establish posture before editing:
 
 ```bash
@@ -46,6 +55,21 @@ Before staging product changes from the dev worktree, run:
 qwendex-dev doctor
 qwendex-dev verify --tier quick
 ```
+
+For durable package/product work, use a named task branch, track new source,
+tests, docs, configs, and scripts intentionally, keep generated/private
+artifacts ignored, split commits by lane, and do not push unless explicitly
+requested.
+
+When generating Qwendex goals from this workspace, use the repo-local
+`.codex/skills/operator-goal-compiler/` skill. If the operator says "the goal
+skill", treat it as this Qwendex goal compiler workflow.
+Support both fresh-intent compilation and `next_goal_from_result` compilation:
+when the operator pastes a prior Codex closeout, extract verified state, branch/commit,
+dirty paths, validation results, STOP status, blockers, and the next frontier.
+Choose an effort budget (`micro`, `focused`, `standard`, `heavy`, or `max`),
+include an artifact contract, prevent repeated report-only or harness-rebuild
+loops, and recommend the next goal in the handoff.
 
 For release-adjacent changes, run `qwendex-dev verify --tier full`; use
 `qwendex-dev verify --tier release` before making release-readiness claims.

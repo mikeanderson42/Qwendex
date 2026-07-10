@@ -25,6 +25,7 @@ TOKENIZER="$(windows_to_wsl_path "${VLLM_TOKENIZER:-$HOME/models/qwen-coder/toke
 MAX_MODEL_LEN="${VLLM_MAX_MODEL_LEN:-32768}"
 GPU_MEMORY_UTILIZATION="${VLLM_GPU_MEMORY_UTILIZATION:-0.90}"
 DTYPE="${VLLM_DTYPE:-auto}"
+TRUST_REMOTE_CODE="${VLLM_TRUST_REMOTE_CODE:-0}"
 CHAT_TEMPLATE="${VLLM_CHAT_TEMPLATE:-$ROOT/config/local_llm_stack/qwen3_codex_tool_plain.jinja}"
 EXTRA_ARGS="${VLLM_EXTRA_ARGS:-}"
 
@@ -68,8 +69,13 @@ cmd=(
   --gpu-memory-utilization "$GPU_MEMORY_UTILIZATION"
   --dtype "$DTYPE"
   --generation-config vllm
-  --trust-remote-code
 )
+
+case "${TRUST_REMOTE_CODE,,}" in
+  1|true|yes|on) cmd+=(--trust-remote-code) ;;
+  0|false|no|off) ;;
+  *) echo "Invalid VLLM_TRUST_REMOTE_CODE=$TRUST_REMOTE_CODE" >&2; exit 1 ;;
+esac
 
 if [[ -n "$CHAT_TEMPLATE" && "$CHAT_TEMPLATE" != "auto" && "$CHAT_TEMPLATE" != "none" ]]; then
   cmd+=(--chat-template "$CHAT_TEMPLATE")

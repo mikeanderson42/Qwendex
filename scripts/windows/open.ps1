@@ -16,7 +16,7 @@ function ConvertTo-BashSingleQuoted {
 if ($RepoDir) {
     $repoExpr = ConvertTo-BashSingleQuoted $RepoDir
 } else {
-    $repoExpr = '${QWENDEX_WSL_REPO:-$HOME/Qwendex}'
+    $repoExpr = '${QWENDEX_WSL_REPO:-$HOME/qwendex-dev}'
 }
 
 $llmArgString = ($LlmArgs | ForEach-Object { ConvertTo-BashSingleQuoted $_ }) -join " "

@@ -79,7 +79,7 @@ def collapse_repeated_numbered_heading_loop(lines: list[str]) -> str:
 def response_payload_with_message(text: str, model: str = "") -> dict[str, Any]:
     text = collapse_repeated_final_text(text)
     return {
-        "id": "resp_tabby_local_recovery",
+        "id": "resp_qwendex_local_recovery",
         "object": "response",
         "created": 0,
         "model": model,
@@ -101,7 +101,7 @@ def response_payload_with_message(text: str, model: str = "") -> dict[str, Any]:
 
 def response_payload_with_function_call(call: dict[str, Any], model: str = "") -> dict[str, Any]:
     return {
-        "id": "resp_tabby_local_recovery",
+        "id": "resp_qwendex_local_recovery",
         "object": "response",
         "created": 0,
         "model": model,

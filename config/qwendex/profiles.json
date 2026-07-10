@@ -1,5 +1,6 @@
 {
   "schema_version": "qwendex.profiles.v1",
+  "runtime_authority": false,
   "profiles": {
     "primary": {
       "seat": "primary",

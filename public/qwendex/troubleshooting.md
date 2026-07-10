@@ -42,4 +42,6 @@ Run:
 scripts/qwendex learn audit --json
 ```
 
-Do not adopt proposals that touch denied paths.
+`audit` inspects the staging area; it does not apply anything. To check one
+proposal's declared paths, run `learn adopt --proposal ... --approve --json`.
+A pass is allowlist preflight only, so review and apply desired changes manually.

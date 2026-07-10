@@ -11,7 +11,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import subprocess
 import sys
 import urllib.parse
 import urllib.request
@@ -32,7 +31,7 @@ DEFAULT_BRIDGE_LOG = Path(
                 Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local" / "state")))
                 / "qwendex"
                 / "local_qwen_bridge"
-                / "tabbyapi_responses_proxy.jsonl"
+                / "responses_bridge.jsonl"
             ),
         ),
     )
@@ -95,9 +94,11 @@ def tool_text(payload: dict[str, Any], *, is_error: bool = False) -> dict[str, A
 
 def trusted_roots() -> list[Path]:
     raw = os.environ.get("ARTIFACT_QUEUE_MCP_TRUSTED_ROOTS") or os.environ.get("QWENDEX_TRUSTED_ROOTS", "")
-    roots = [Path.cwd()]
-    if raw:
-        roots.extend(Path(item).expanduser() for item in raw.split(":") if item.strip())
+    roots = (
+        [Path(item).expanduser() for item in raw.split(":") if item.strip()]
+        if raw
+        else [Path.cwd()]
+    )
     resolved: list[Path] = []
     seen: set[str] = set()
     for root in roots:
@@ -623,7 +624,18 @@ def tool_search_web(args: dict[str, Any]) -> dict[str, Any]:
     limit = clamp_int(args.get("limit"), 5, 1, 10)
     snippet_chars = clamp_int(args.get("snippet_chars"), 360, 80, 800)
     timeout = clamp_int(args.get("timeout_seconds"), 10, 2, 30)
-    base_url = str(args.get("base_url") or os.environ.get("SEARXNG_URL") or "http://127.0.0.1:6060").rstrip("/")
+    base_url = str(os.environ.get("SEARXNG_URL") or "http://127.0.0.1:6060").rstrip("/")
+    parsed_base = urllib.parse.urlsplit(base_url)
+    if (
+        parsed_base.scheme not in {"http", "https"}
+        or parsed_base.hostname not in {"127.0.0.1", "::1", "localhost"}
+        or parsed_base.username is not None
+        or parsed_base.password is not None
+        or parsed_base.query
+        or parsed_base.fragment
+        or parsed_base.path not in {"", "/"}
+    ):
+        raise ToolError("SEARXNG_URL must be an exact loopback HTTP(S) origin")
     params_dict: dict[str, Any] = {"q": query, "format": "json"}
     for key in ("language", "categories", "engines", "time_range"):
         value = str(args.get(key, "")).strip()
@@ -661,30 +673,13 @@ def tool_search_web(args: dict[str, Any]) -> dict[str, Any]:
 
 def tool_run_report(args: dict[str, Any]) -> dict[str, Any]:
     repo = resolve_target_dir(str(args.get("repo", "")))
-    script = repo / "scripts" / "local_qwen_run_report.py"
-    timeout = clamp_int(args.get("timeout_seconds"), 10, 2, 30)
     max_chars = clamp_int(args.get("max_chars"), 8000, 1000, 20000)
-    source = "mcp_builtin"
-    if script.is_file():
-        proc = subprocess.run(
-            [sys.executable, str(script), "--markdown"],
-            cwd=str(repo),
-            text=True,
-            capture_output=True,
-            timeout=timeout,
-            check=False,
-        )
-        if proc.returncode != 0:
-            raise ToolError(f"run report failed rc={proc.returncode}: {clip_text(proc.stderr, 1000)}")
-        report = clip_text(proc.stdout, max_chars)
-        source = "repo_script"
-    else:
-        report = builtin_run_report(repo, max_chars)
+    report = builtin_run_report(repo, max_chars)
     return {
         "schema": "local_harness_mcp.run_report.v1",
         "status": "pass",
         "repo": str(repo),
-        "source": source,
+        "source": "mcp_builtin",
         "report": report,
     }
 
@@ -771,7 +766,7 @@ TOOLS = [
             "dir": {"type": "string", "description": "Trusted repository or artifact directory."},
             "file": {
                 "type": "string",
-                "description": "Relative Markdown path under dir, for example monetization_research/digital_products.md.",
+                "description": "Relative Markdown path under dir, for example docs/example.md.",
             },
             "section_title": {"type": "string", "description": "Heading text without leading # markers."},
             "body": {"type": "string", "description": "Markdown body for this section."},
@@ -817,10 +812,6 @@ TOOLS = [
                 "type": "string",
                 "description": "Optional SearXNG time range, for example day, week, month, or year.",
             },
-            "base_url": {
-                "type": "string",
-                "description": "Optional SearXNG base URL. Defaults to SEARXNG_URL or http://127.0.0.1:6060.",
-            },
         },
         ["query"],
     ),
@@ -830,7 +821,6 @@ TOOLS = [
         {
             "repo": {"type": "string", "description": "Trusted repo root, such as the current Qwendex workspace."},
             "max_chars": {"type": "integer", "minimum": 1000, "maximum": 20000},
-            "timeout_seconds": {"type": "integer", "minimum": 2, "maximum": 30},
         },
         ["repo"],
     ),
