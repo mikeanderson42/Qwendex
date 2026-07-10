@@ -1262,6 +1262,42 @@ def test_release_gate_requires_current_ci_attestation_for_publish_but_not_candid
     assert string_run_id["ci_attestation"]["checks"]["run_identity_valid"] is False
 
 
+def test_ci_run_url_identity_allows_github_repository_case_normalization(tmp_path):
+    fixture = release_fixture(tmp_path)
+    release_gate = load_release_gate()
+    ci_path = Path(fixture["ci_attestation"])
+    payload = json.loads(ci_path.read_text(encoding="utf-8"))
+    payload["repository"] = "Qwendex-Test/Qwendex"
+    payload["workflow_ref"] = (
+        "Qwendex-Test/Qwendex/.github/workflows/ci.yml@refs/heads/main"
+    )
+    payload["run_url"] = (
+        f"https://github.com/Qwendex-Test/Qwendex/actions/runs/{payload['run_id']}"
+    )
+    write_json(ci_path, payload)
+    source, source_blockers, publish_blockers = release_gate.source_contract(
+        Path(fixture["repo"]),
+        "1.2.3",
+        "v1.2.3",
+        "0.144.0",
+        "main",
+        TRUSTED_ORIGIN,
+    )
+    assert source_blockers == []
+    assert publish_blockers == []
+    artifacts, artifact_blockers = release_gate.artifact_contract(
+        Path(fixture["repo"]), source["commit"]
+    )
+    assert artifact_blockers == []
+
+    inspected, blockers = release_gate.inspect_ci_attestation(
+        ci_path, source, artifacts, datetime.now(UTC), 168
+    )
+
+    assert blockers == []
+    assert inspected["checks"]["run_identity_valid"] is True
+
+
 def test_release_gate_requires_trusted_configured_origin_and_annotated_tag(tmp_path):
     fixture = release_fixture(tmp_path)
     repo = Path(fixture["repo"])
