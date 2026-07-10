@@ -89,7 +89,8 @@ from subagent sessions and honors the effective mode passed by command handling,
 including `--mode manager`. It stores the policy hash, hook status, local/cloud
 availability, prompt digest or `interactive_prompt_unknown_prelaunch`, selected
 route, routing reason, direct-work exception flag, verifier requirement,
-validation plan, receipt paths, and STOP status.
+validation plan, receipt paths, launcher-derived root ownership id, and STOP
+status.
 
 Inspect the latest decision or a specific ledger:
 
@@ -114,8 +115,10 @@ Qwen is enabled and usable.
 ## Write Safety
 
 The first release uses a conservative single-writer strategy for the base
-worktree. `PreToolUse` write events must include both `agent_id` and target file
-paths so Qwendex can record ownership in the local state DB.
+worktree. Qwendex records write ownership in the local state DB before a
+write-capable tool runs. Root Codex sessions and registered subagents use
+different identity contracts because Codex intentionally omits top-level
+`agent_id` from root lifecycle events.
 
 ```bash
 scripts/qwendex agent hook PreToolUse --event-json '{"tool_name":"apply_patch","agent_id":"writer-a","profile":"implementer","path":"scripts/qwendex_cli.py"}' --json
@@ -126,9 +129,21 @@ Rules:
 
 - a read-only profile cannot write source files; managed shell execution is
   fail-closed to the inspection allowlist below
-- every non-allowlisted managed shell event is presumed write-capable for a
-  writer profile and must declare `agent_id` plus explicit target paths before
-  Qwendex acquires its file lock
+- `qdex` Manager preflight derives and exports a stable root owner from the
+  trusted launch ledger; prompt text and `tool_input.agent_id` cannot supply or
+  override this identity
+- an opaque root write takes the repository-wide `<repo-root>` lease. A root
+  lease is scoped to its `tool_use_id` and released by `PostToolUse`; `Stop`
+  releases all remaining launch leases. Codex emits `PostToolUse` only after a
+  successful tool result, so an aborted tool remains conservatively blocking
+  until `Stop`. A later `qdex` launch reclaims an orphan only after the recorded
+  launcher PID/process-start identity is no longer live
+- a native subagent write must carry Codex's top-level `agent_id`, match an
+  active registered runtime id, repository, and current Manager task, and use
+  target paths from the hook event or its registered exact-file/write surface.
+  An opaque declared scope conservatively resolves to `<repo-root>`
+- `create_goal`, `update_goal`, and `update_plan` are control-plane bookkeeping,
+  not filesystem writes, and do not acquire file locks
 - a scribe can write only under `.qwendex/runs/`
 - a second writer is blocked while another agent owns an active write lock in
   the base worktree, even when the requested path differs
@@ -139,11 +154,12 @@ The status payload includes `write_safety.strategy`, active locks, and active
 writer counts.
 
 For the managed `PreToolUse` hook, read-only profiles may invoke only bare
-`pwd`, `ls`, `rg`, `grep`, `cat`, `head`, `tail`, `stat`, `jq`, `find`, and
-`wc` commands, plus `git status`, `git diff`, `git log`, `git show`, and
-`git rev-parse`. Git accepts only `-C` and `--no-pager` before the subcommand.
-Quote-aware lists and pipelines using newline, `;`, `&&`, `||`, and `|` are
-accepted only when every segment passes the same allowlist.
+`pwd`, `ls`, `rg`, `grep`, `cat`, `file`, `head`, `tail`, `stat`, `jq`, `find`,
+and `wc` commands, Python's `-V`, `-VV`, or `--version` query, plus `git status`,
+`git diff`, `git log`, `git show`, and `git rev-parse`. Git accepts only `-C`
+and `--no-pager` before the subcommand. Quote-aware lists and pipelines using
+newline, `;`, `&&`, `||`, and `|` are accepted only when every segment passes
+the same allowlist.
 
 The read-only shell grammar rejects executable paths, environment assignments,
 wrappers, interpreters, scripts, redirects, background jobs, command or
@@ -168,10 +184,11 @@ The same classifier protects writer profiles from undeclared shell side
 effects. Only a command proven to be in the inspection allowlist runs without a
 write lock. Everything else—including tests, builds, interpreters, `awk`,
 network clients, Git mutations, archive tools, `make`, and package managers—is
-presumed write-capable. Its managed event must name the owning `agent_id` and
-every target path through `path`, `paths`, `file`, `files`, or the equivalent
-`tool_input` fields. Qwendex does not guess destinations from arbitrary shell
-syntax; missing identity or paths blocks before execution and lock acquisition.
+presumed write-capable. Registered workers resolve target metadata through
+`path`, `paths`, `file`, `files`, equivalent `tool_input` fields, or their
+declared manager scope. Qwendex does not guess destinations from arbitrary
+shell syntax; an opaque root or declared worker scope takes the conservative
+repository lease.
 
 This is the Qwendex managed-hook classification boundary. It does not replace
 the host sandbox, filesystem permissions, or stock Codex tool filtering, and it
@@ -266,8 +283,12 @@ scripts/qwendex agent hook-config --install --codex-home "$CODEX_HOME" --json
 scripts/qwendex agent hook-config --verify --codex-home "$CODEX_HOME" --json
 ```
 
-Writes are approval-gated and refuse to overwrite an existing file unless
-`--force` is supplied. The generated commands invoke the same native gate
+Explicit `--write` operations are approval-gated and refuse to overwrite an
+existing file unless `--force` is supplied. `--install` is an idempotent managed
+upgrade: it replaces Qwendex lifecycle handlers while preserving unrelated hook
+entries. `--install --force` replaces the complete hook file and is intended for
+operator-approved recovery from an unparseable or discarded config. The
+generated commands invoke the same native gate
 evaluator through raw Codex-compatible stdout; hook files reinforce the runtime
 policy but are not the only enforcement path. Manager Mode launches block when
 no verified managed hook config is detected. Missing or partial hook configs

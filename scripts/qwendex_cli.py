@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.5.1"
+VERSION = "0.5.2"
 CONFIG_DIR = ROOT / "config" / "qwendex"
 DEFAULT_PROJECT_CONFIG = CONFIG_DIR / "qwendex.json"
 DEFAULT_USER_CONFIG = Path.home() / ".config" / "qwendex" / "config.json"
@@ -180,6 +180,7 @@ MANAGED_AGENT_HOOKS = {
     "SubagentStop": {"matcher": ".*", "timeout": 5},
     "Stop": {"matcher": "", "timeout": 5},
     "PreToolUse": {"matcher": ".*", "timeout": 5},
+    "PostToolUse": {"matcher": ".*", "timeout": 5},
     "PreCompact": {"matcher": "", "timeout": 5},
     "PostCompact": {"matcher": "", "timeout": 5},
 }
@@ -194,6 +195,7 @@ READ_ONLY_AGENT_PROFILES = {
 }
 ROOT_ONLY_AGENT_TOOLS = {"spawn_agent", "close_agent", "wait_agent", "resume_agent", "agent_ledger_update_status"}
 WRITE_TOOL_NAMES = {"write", "edit", "apply_patch", "create_file", "delete_file", "move_file"}
+NON_FILESYSTEM_CONTROL_TOOL_NAMES = {"create_goal", "update_goal", "update_plan"}
 READ_ONLY_NON_SHELL_TOOL_NAMES = {
     "finance",
     "find",
@@ -296,7 +298,7 @@ READ_ONLY_EXECUTION_TOOL_NAMES = {
     "terminal",
     "zsh",
 }
-READ_ONLY_SIMPLE_COMMANDS = {"cat", "grep", "head", "jq", "ls", "pwd", "stat", "tail", "wc"}
+READ_ONLY_SIMPLE_COMMANDS = {"cat", "file", "grep", "head", "jq", "ls", "pwd", "stat", "tail", "wc"}
 READ_ONLY_GIT_SUBCOMMANDS = {"diff", "log", "rev-parse", "show", "status"}
 READ_ONLY_GIT_UNSAFE_OPTIONS = {"--ext-diff", "--output", "--textconv"}
 READ_ONLY_FIND_UNSAFE_PREFIXES = (
@@ -499,6 +501,11 @@ MANAGER_STOP_STATUSES = {
 MANAGER_PROMPT_UNKNOWN_SUMMARY = "interactive_prompt_unknown_prelaunch"
 MANAGER_UNHOOKED_OVERRIDE_ENV = "QWENDEX_MANAGER_ALLOW_UNHOOKED"
 MANAGER_UNHOOKED_REASON_ENV = "QWENDEX_MANAGER_UNHOOKED_REASON"
+MANAGER_ROOT_AGENT_ID_ENV = "QWENDEX_MANAGER_ROOT_AGENT_ID"
+MANAGER_LAUNCH_PID_ENV = "QWENDEX_MANAGER_LAUNCH_PID"
+MANAGER_LAUNCH_START_TICKS_ENV = "QWENDEX_MANAGER_LAUNCH_START_TICKS"
+MANAGER_ROOT_LOCK_PATH = "<repo-root>"
+MANAGER_ROOT_TOOL_SEPARATOR = "--tool-"
 QWENDEX_CODEX_PATCH_MARKER = "QWENDEX_CODEX_TUI_PATCH_V1"
 QWENDEX_CODEX_STATUS_ITEM_ID = "qwendex-manager"
 QWENDEX_CODEX_STATUS_FILE_ENV = "QWENDEX_CODEX_STATUS_FILE"
@@ -2312,6 +2319,8 @@ def ensure_state_schema(conn: sqlite3.Connection) -> None:
     ensure_table_column(conn, "qwendex_manager_decisions", "launch_ledger_id", "TEXT NOT NULL DEFAULT ''")
     ensure_table_column(conn, "qwendex_manager_decisions", "turn_id", "TEXT NOT NULL DEFAULT ''")
     ensure_table_column(conn, "qwendex_manager_decisions", "agent_task_id", "TEXT NOT NULL DEFAULT ''")
+    ensure_table_column(conn, "qwendex_manager_decisions", "launch_pid", "INTEGER NOT NULL DEFAULT 0")
+    ensure_table_column(conn, "qwendex_manager_decisions", "launch_start_ticks", "TEXT NOT NULL DEFAULT ''")
     ensure_table_column(conn, "qwendex_agent_file_locks", "repo_root", "TEXT NOT NULL DEFAULT ''")
     ensure_table_column(conn, "qwendex_context_snapshots", "repo_root", "TEXT NOT NULL DEFAULT ''")
     ensure_table_column(conn, "qwendex_handoffs", "repo_root", "TEXT NOT NULL DEFAULT ''")
@@ -2382,6 +2391,7 @@ def row_to_manager_decision(row: sqlite3.Row | None) -> dict[str, Any] | None:
         except json.JSONDecodeError:
             parsed = []
         data[key] = parsed if isinstance(parsed, list) else []
+    data["root_agent_id"] = manager_decision_root_agent_id(data)
     return data
 
 
@@ -2491,20 +2501,31 @@ def agent_outcomes_for_sessions(sessions: list[dict[str, Any]]) -> list[dict[str
     return outcomes
 
 
-def normalize_lock_path(value: str) -> str:
+def normalize_lock_path(value: str, *, repo_root: str = "") -> str:
     raw = str(value or "").strip()
     if not raw:
         return ""
+    if raw == MANAGER_ROOT_LOCK_PATH:
+        return raw
     path = Path(raw).expanduser()
+    if repo_root:
+        root = Path(repo_root).expanduser().resolve()
+        candidate = path if path.is_absolute() else root / path
+        try:
+            normalized = candidate.resolve().relative_to(root).as_posix()
+        except (OSError, ValueError):
+            return ""
+        return normalized or MANAGER_ROOT_LOCK_PATH
     if path.is_absolute():
         try:
             return rel(path.resolve())
         except ValueError:
             return str(path.resolve())
-    return str(Path(raw).as_posix()).lstrip("./")
+    normalized = Path(raw).as_posix()
+    return normalized.removeprefix("./")
 
 
-def event_file_paths(event: Mapping[str, Any]) -> list[str]:
+def event_file_path_values(event: Mapping[str, Any]) -> list[Any]:
     values: list[Any] = []
     for key in ("path", "file", "file_path", "target_path"):
         if event.get(key):
@@ -2526,14 +2547,67 @@ def event_file_paths(event: Mapping[str, Any]) -> list[str]:
                 values.extend(item)
             elif item:
                 values.append(item)
+    return values
+
+
+def event_file_paths(event: Mapping[str, Any], *, repo_root: str = "") -> list[str]:
     normalized: list[str] = []
-    for item in values:
+    for item in event_file_path_values(event):
         if isinstance(item, Mapping):
             item = item.get("path") or item.get("file") or item.get("file_path") or ""
-        path = normalize_lock_path(str(item))
+        path = normalize_lock_path(str(item), repo_root=repo_root)
         if path and path not in normalized:
             normalized.append(path)
     return normalized
+
+
+def registered_session_lock_paths(session: Mapping[str, Any]) -> list[str]:
+    repo_root = str(session.get("repo_root") or "")
+    packet = session.get("context_packet")
+    exact_files = packet.get("exact_files") if isinstance(packet, Mapping) else []
+    if isinstance(exact_files, list) and exact_files:
+        paths = [
+            normalize_lock_path(str(item), repo_root=repo_root)
+            for item in exact_files
+        ]
+        paths = [path for path in paths if path]
+        return list(dict.fromkeys(paths))
+    write_surface = str(session.get("write_surface") or "").strip()
+    if write_surface in {"", "read-only", "readonly"}:
+        return []
+    if write_surface == ".qwendex/runs":
+        return [".qwendex/runs/<opaque>"]
+    if write_surface != "declared-scope":
+        normalized = normalize_lock_path(write_surface, repo_root=repo_root)
+        return [normalized] if normalized else []
+    return [MANAGER_ROOT_LOCK_PATH]
+
+
+def registered_session_path_allowed(session: Mapping[str, Any], path: str) -> bool:
+    repo_root = str(session.get("repo_root") or "")
+    normalized = normalize_lock_path(path, repo_root=repo_root)
+    if not normalized:
+        return False
+    packet = session.get("context_packet")
+    exact_files = packet.get("exact_files") if isinstance(packet, Mapping) else []
+    if isinstance(exact_files, list) and exact_files:
+        exact_scopes = {
+            normalize_lock_path(str(item), repo_root=repo_root)
+            for item in exact_files
+        }
+        exact_scopes.discard("")
+        return normalized in exact_scopes
+    if not exact_files and str(session.get("write_surface") or "") == "declared-scope":
+        return normalized != MANAGER_ROOT_LOCK_PATH
+    for scope in registered_session_lock_paths(session):
+        if scope == MANAGER_ROOT_LOCK_PATH:
+            return True
+        if scope == ".qwendex/runs/<opaque>":
+            return scribe_path_allowed(normalized, repo_root=repo_root)
+        normalized_scope = normalize_lock_path(scope, repo_root=repo_root).rstrip("/")
+        if normalized == normalized_scope or normalized.startswith(f"{normalized_scope}/"):
+            return True
+    return False
 
 
 def active_file_locks(conn: sqlite3.Connection, *, repo_root: str = "") -> list[dict[str, Any]]:
@@ -2567,14 +2641,68 @@ def release_agent_locks(conn: sqlite3.Connection, agent_id: str, *, now: str) ->
     return [lock for row in rows if (lock := row_to_file_lock(row))]
 
 
-def scribe_path_allowed(path: str) -> bool:
-    normalized = normalize_lock_path(path)
+def scribe_path_allowed(path: str, *, repo_root: str = "") -> bool:
+    normalized = normalize_lock_path(path, repo_root=repo_root)
     return normalized.startswith(".qwendex/runs/")
 
 
 def safe_artifact_component(value: str, fallback: str) -> str:
     text = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(value or "").strip()).strip(".-")
     return (text[:96] or fallback).strip(".-") or fallback
+
+
+def manager_root_agent_id(ledger_id: str, session_id: str) -> str:
+    identity = safe_artifact_component(ledger_id or session_id, "unattached")
+    return f"manager-root-{identity}"
+
+
+def manager_decision_root_agent_id(decision: Mapping[str, Any]) -> str:
+    return manager_root_agent_id(
+        str(decision.get("launch_ledger_id") or decision.get("ledger_id") or ""),
+        str(decision.get("session_id") or ""),
+    )
+
+
+def manager_root_tool_agent_id(root_agent_id: str, tool_use_id: str) -> str:
+    tool_id = safe_artifact_component(tool_use_id, "") if tool_use_id else ""
+    return (
+        f"{root_agent_id}{MANAGER_ROOT_TOOL_SEPARATOR}{tool_id}"
+        if root_agent_id and tool_id
+        else root_agent_id
+    )
+
+
+def manager_root_owner_family(agent_id: str) -> str:
+    text = str(agent_id or "")
+    if text.startswith("manager-root-"):
+        return text.split(MANAGER_ROOT_TOOL_SEPARATOR, 1)[0]
+    return text
+
+
+def process_start_ticks(pid: int) -> str:
+    if pid <= 0:
+        return ""
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    closing = stat.rfind(")")
+    fields = stat[closing + 2:].split() if closing >= 0 else []
+    return fields[19] if len(fields) > 19 else ""
+
+
+def process_identity_alive(pid: int, start_ticks: str) -> bool:
+    if pid <= 0:
+        return False
+    current_ticks = process_start_ticks(pid)
+    if current_ticks:
+        return not start_ticks or current_ticks == str(start_ticks)
+    try:
+        os.kill(pid, 0)
+    except (OSError, ValueError):
+        return False
+    # On a non-/proc host, a live PID is safer to retain than reclaim.
+    return True
 
 
 def final_report_sections(message: str) -> dict[str, str]:
@@ -2696,7 +2824,14 @@ def acquire_file_locks(
     reason: str,
     repo_root: str,
 ) -> dict[str, Any]:
-    normalized_paths = [path for path in (normalize_lock_path(item) for item in paths) if path]
+    normalized_paths = [
+        path
+        for path in (
+            normalize_lock_path(item, repo_root=repo_root)
+            for item in paths
+        )
+        if path
+    ]
     if busy_error := begin_immediate(conn):
         return {
             "acquired": [],
@@ -2705,18 +2840,34 @@ def acquire_file_locks(
             "repo_root": repo_root,
             "busy_error": busy_error,
         }
+    reclaimed_root_locks = release_reclaimable_manager_root_locks(
+        conn,
+        repo_root=repo_root,
+        now=now,
+    )
     active = active_file_locks(conn, repo_root=repo_root)
     conflicts: list[dict[str, Any]] = []
     if lock_type == "write":
         for lock in active:
-            if lock.get("agent_id") == agent_id:
+            lock_agent_id = str(lock.get("agent_id") or "")
+            same_root_family = (
+                agent_id.startswith("manager-root-")
+                and manager_root_owner_family(lock_agent_id)
+                == manager_root_owner_family(agent_id)
+            )
+            if lock_agent_id == agent_id or same_root_family:
                 continue
             same_path = lock.get("path") in normalized_paths
             other_writer = lock.get("lock_type") == "write"
             if same_path or other_writer:
                 conflicts.append(lock)
     if conflicts:
-        return {"acquired": [], "conflicts": conflicts, "active_locks": active}
+        return {
+            "acquired": [],
+            "conflicts": conflicts,
+            "active_locks": active,
+            "reclaimed_root_locks": reclaimed_root_locks,
+        }
     acquired: list[dict[str, Any]] = []
     for path in normalized_paths:
         existing = conn.execute(
@@ -2749,6 +2900,7 @@ def acquire_file_locks(
         "conflicts": [],
         "active_locks": active_file_locks(conn, repo_root=repo_root),
         "repo_root": repo_root,
+        "reclaimed_root_locks": reclaimed_root_locks,
     }
 
 
@@ -6335,6 +6487,31 @@ def event_agent_id(event: Mapping[str, Any]) -> str:
     return ""
 
 
+def event_is_codex_root(event: Mapping[str, Any]) -> bool:
+    """Identify the root-only shape emitted by Codex lifecycle hooks.
+
+    Codex deliberately omits top-level agent_id for the root session and emits
+    it for subagents. Tool input is agent-controlled, so it is not an identity
+    authority; session_id plus cwd distinguish the real root hook envelope from
+    incomplete synthetic events.
+    """
+    return bool(
+        not event_agent_id(event)
+        and not str(event.get("agent_type") or "").strip()
+        and str(event.get("session_id") or "").strip()
+        and str(event.get("cwd") or "").strip()
+    )
+
+
+def event_is_codex_subagent(event: Mapping[str, Any]) -> bool:
+    return bool(
+        event_agent_id(event)
+        and str(event.get("agent_type") or "").strip()
+        and str(event.get("session_id") or "").strip()
+        and str(event.get("cwd") or "").strip()
+    )
+
+
 def command_has_shell_redirection(command: str) -> bool:
     try:
         tokens = shlex.split(command, posix=True)
@@ -6423,7 +6600,17 @@ def event_tool_is_collaboration_lifecycle(tool: str) -> bool:
     return bool(re.search(r"(?:^|__|[/:.])collaboration(?:__|[/:.])", raw))
 
 
+def event_tool_is_non_filesystem_control(tool: str) -> bool:
+    raw = tool.strip().lower().replace("-", "_")
+    trusted_names = set(NON_FILESYSTEM_CONTROL_TOOL_NAMES)
+    trusted_names.update(f"functions.{name}" for name in NON_FILESYSTEM_CONTROL_TOOL_NAMES)
+    trusted_names.update(f"functions__{name}" for name in NON_FILESYSTEM_CONTROL_TOOL_NAMES)
+    return raw in trusted_names
+
+
 def event_tool_is_mutating(tool: str) -> bool:
+    if event_tool_is_non_filesystem_control(tool):
+        return False
     if event_tool_is_collaboration_lifecycle(tool):
         return False
     if normalized_event_tool_name(tool) in WRITE_TOOL_NAMES:
@@ -6605,10 +6792,23 @@ def read_only_find_command_allowed(tokens: list[str]) -> bool:
     )
 
 
+def read_only_file_command_allowed(tokens: list[str]) -> bool:
+    return not any(
+        token == "--compile"
+        or token.startswith("--compile=")
+        or bool(re.match(r"^-[^-]*C", token))
+        for token in tokens[1:]
+    )
+
+
 def read_only_segment_allowed(tokens: list[str]) -> bool:
     command = tokens[0]
     if "/" in command or shell_assignment_name(command):
         return False
+    if token_is_python_command(command):
+        return len(tokens) == 2 and tokens[1] in {"-V", "-VV", "--version"}
+    if command == "file":
+        return read_only_file_command_allowed(tokens)
     if command in READ_ONLY_SIMPLE_COMMANDS:
         return True
     if command == "rg":
@@ -7248,13 +7448,38 @@ def pre_tool_gate(config: Mapping[str, Any], event: Mapping[str, Any], agent_pol
     profile = event_profile(event)
     read_only_profile = event_uses_read_only_profile(event, profile)
     agent_id = event_agent_id(event)
+    codex_root = event_is_codex_root(event)
+    codex_subagent = event_is_codex_subagent(event)
+    root_decision: dict[str, Any] | None = None
+    root_agent_id = ""
+    ownership_source = "hook_agent_id" if agent_id else ""
+    event_repo_root = canonical_manager_repo_root(event=event)
     command = event_command_text(event)
     managed_shell_event = event_uses_managed_shell(tool_key, command)
     allowlisted_inspection = managed_shell_event and read_only_shell_command_allowed(command)
     write_attempt = False if allowlisted_inspection else (
         event_is_write_attempt(tool, command) or managed_shell_event
     )
-    if depth > 0 and tool_key in ROOT_ONLY_AGENT_TOOLS:
+    manager_mode_active = (
+        bool(os.environ.get(MANAGER_ROOT_AGENT_ID_ENV))
+        or str(agent_policy.get("mode") or "") == "manager"
+        or selected_manager_mode_for_policy(config) == "manager"
+    )
+    native_envelope = bool(
+        str(event.get("session_id") or "").strip()
+        and str(event.get("cwd") or "").strip()
+    )
+    if (
+        manager_mode_active
+        and native_envelope
+        and bool(agent_id) != bool(str(event.get("agent_type") or "").strip())
+    ):
+        return {
+            "decision": "block",
+            "event": "agent.identity_malformed",
+            "reason": "Manager Mode native hooks must provide both agent_id and agent_type for a child, or neither for root.",
+        }
+    if (codex_subagent or depth > 0) and tool_key in ROOT_ONLY_AGENT_TOOLS:
         return {
             "decision": "block",
             "event": "agent.spawn_rejected",
@@ -7292,51 +7517,162 @@ def pre_tool_gate(config: Mapping[str, Any], event: Mapping[str, Any], agent_pol
             "reason": f"{agent_policy.get('agent_use')} mode disables subagents unless the user explicitly requested one.",
         }
     if write_attempt:
-        paths = event_file_paths(event)
+        if codex_root and not manager_mode_active:
+            # Outside Manager Mode the Codex root remains the normal direct
+            # execution plane and is not forced through agent identity, path,
+            # or repository-lock validation.
+            return {}
+        raw_path_values = event_file_path_values(event)
+        paths = event_file_paths(event, repo_root=event_repo_root)
+        invalid_paths: list[str] = []
+        for raw_path in raw_path_values:
+            if isinstance(raw_path, Mapping):
+                raw_path = raw_path.get("path") or raw_path.get("file") or raw_path.get("file_path") or ""
+            raw_text = str(raw_path or "").strip()
+            if raw_text and not normalize_lock_path(raw_text, repo_root=event_repo_root):
+                invalid_paths.append(raw_text)
+        if invalid_paths and (codex_root or (codex_subagent and manager_mode_active)):
+            return {
+                "decision": "block",
+                "event": "agent.path_scope_mismatch",
+                "reason": "Native write path escapes the active repository scope.",
+                "denied_paths": invalid_paths,
+            }
+        if not agent_id and codex_root:
+            agent_id, root_decision, root_error = manager_root_ownership_for_event(
+                config,
+                event,
+                agent_policy,
+            )
+            if root_error:
+                return {
+                    "decision": "block",
+                    "event": "manager.root_unattached",
+                    "reason": root_error,
+                }
+            root_agent_id = agent_id
+            agent_id = manager_root_tool_agent_id(
+                root_agent_id,
+                str(event.get("tool_use_id") or ""),
+            )
+            ownership_source = "manager_preflight"
+            if not paths:
+                # The first-release strategy already excludes every other
+                # writer in the repository. A repo-wide sentinel preserves
+                # that safety boundary for opaque root tool schemas.
+                paths = [MANAGER_ROOT_LOCK_PATH]
         if not agent_id:
             return {
                 "decision": "block",
                 "event": "agent.write_lock_rejected",
                 "reason": "Write attempts must include agent_id so Qwendex can record file ownership.",
             }
-        if not paths:
+        if not paths and not codex_subagent:
             return {
                 "decision": "block",
                 "event": "agent.write_lock_rejected",
                 "reason": "Write attempts must include at least one target file path for Qwendex file-lock tracking.",
             }
-        if profile == "scribe":
-            denied = [path for path in paths if not scribe_path_allowed(path)]
-            if denied:
+        with connect_state(config) as conn:
+            session_row = conn.execute(
+                "SELECT * FROM qwendex_agent_sessions WHERE agent_id = ?",
+                (agent_id,),
+            ).fetchone()
+            session = row_to_agent_session(session_row) or {}
+            if root_decision is not None:
+                repo_root = str(root_decision.get("repo_root") or "")
+            elif codex_subagent and manager_mode_active and session_row is None:
+                return {
+                    "decision": "block",
+                    "event": "agent.unregistered",
+                    "reason": "Manager Mode subagent must be registered with its exact runtime agent_id before writing.",
+                }
+            elif codex_subagent and manager_mode_active and str(session.get("status") or "") != "active":
+                return {
+                    "decision": "block",
+                    "event": "agent.inactive",
+                    "reason": "Manager Mode subagent must have an active registered session before writing.",
+                }
+            elif codex_subagent and manager_mode_active and manager_session_is_read_only(session):
                 return {
                     "decision": "block",
                     "event": "agent.write_rejected",
-                    "reason": "Scribe can write only under .qwendex/runs.",
-                    "denied_paths": denied,
+                    "reason": "Manager Mode subagent registration is read-only and cannot acquire write locks.",
                 }
-        with connect_state(config) as conn:
-            session_row = conn.execute(
-                "SELECT repo_root FROM qwendex_agent_sessions WHERE agent_id = ?",
-                (agent_id,),
-            ).fetchone()
-            event_repo_root = canonical_manager_repo_root(event=event)
-            if session_row is not None and not session_row["repo_root"]:
+            elif session_row is not None and not session_row["repo_root"]:
                 return {
                     "decision": "block",
                     "event": "agent.legacy_scope_unresolved",
                     "reason": "Legacy-unscoped agent must be claimed with manager assign before writing.",
                 }
-            if session_row is not None and str(session_row["repo_root"]) != event_repo_root:
+            elif session_row is not None and str(session_row["repo_root"]) != event_repo_root:
                 return {
                     "decision": "block",
                     "event": "agent.repository_scope_mismatch",
                     "reason": "Write event repository does not match the registered agent scope.",
                 }
-            repo_root = (
-                str(session_row["repo_root"] or "")
-                if session_row is not None and session_row["repo_root"]
-                else event_repo_root
-            )
+            else:
+                repo_root = (
+                    str(session_row["repo_root"] or "")
+                    if session_row is not None and session_row["repo_root"]
+                    else event_repo_root
+                )
+            if codex_subagent and manager_mode_active:
+                ledger_id, manager_session_id = manager_decision_identity(event)
+                decision = manager_decision_for_agent_task(
+                    conn,
+                    ledger_id=ledger_id,
+                    session_id=manager_session_id,
+                    repo_root=event_repo_root,
+                    agent_task_id=str(session.get("task_id") or ""),
+                ) if (ledger_id or manager_session_id) else None
+                if str(agent_policy.get("mode") or "") == "manager" and decision is None:
+                    return {
+                        "decision": "block",
+                        "event": "agent.unattached",
+                        "reason": "Manager Mode subagent write could not attach to the active qdex preflight decision.",
+                    }
+                if decision is not None:
+                    expected_task_id = str(
+                        decision.get("agent_task_id")
+                        or decision.get("session_id")
+                        or ""
+                    )
+                    if expected_task_id and str(session.get("task_id") or "") != expected_task_id:
+                        return {
+                            "decision": "block",
+                            "event": "agent.task_scope_mismatch",
+                            "reason": "Manager Mode subagent write does not belong to the active manager task.",
+                        }
+                if not paths:
+                    paths = registered_session_lock_paths(session)
+                else:
+                    denied_paths = [
+                        path for path in paths
+                        if not registered_session_path_allowed(session, path)
+                    ]
+                    if denied_paths:
+                        return {
+                            "decision": "block",
+                            "event": "agent.path_scope_mismatch",
+                            "reason": "Manager Mode subagent write exceeds its registered path scope.",
+                            "denied_paths": denied_paths,
+                        }
+            if not paths:
+                return {
+                    "decision": "block",
+                    "event": "agent.write_lock_rejected",
+                    "reason": "Write attempts must resolve at least one registered target scope for Qwendex file-lock tracking.",
+                }
+            if profile == "scribe":
+                denied = [path for path in paths if not scribe_path_allowed(path)]
+                if denied:
+                    return {
+                        "decision": "block",
+                        "event": "agent.write_rejected",
+                        "reason": "Scribe can write only under .qwendex/runs.",
+                        "denied_paths": denied,
+                    }
             lock_result = acquire_file_locks(
                 conn,
                 agent_id=agent_id,
@@ -7364,6 +7700,8 @@ def pre_tool_gate(config: Mapping[str, Any], event: Mapping[str, Any], agent_pol
         return {
             "event": "agent.file_locks_acquired",
             "agent_id": agent_id,
+            "root_agent_id": root_agent_id or None,
+            "ownership_source": ownership_source,
             **lock_result,
         }
     return {}
@@ -7572,6 +7910,16 @@ def evaluate_agent_hook(
                 "reason": "Manager Mode launch was blocked before Codex attachment.",
                 "stop_status": "STOP_MANAGER_BLOCKED_UNHOOKED",
             }, {"manager_decision": decision, "agent_sessions": sessions}
+        # Stop is the root turn boundary even when finalization needs more
+        # evidence. Release this launch's synthetic root lease so a retry or a
+        # fresh qdex process cannot be trapped behind the prior root identity.
+        with connect_state(config) as conn:
+            released_root_locks = release_manager_root_locks(
+                conn,
+                decision,
+                now=utc_now(),
+            )
+            conn.commit()
         last_message = str(event.get("last_assistant_message") or "")
         edit_happened = bool(event.get("edit_happened") or event.get("files_changed"))
         if selected_route == "direct_single_writer":
@@ -7644,7 +7992,11 @@ def evaluate_agent_hook(
                 "event": "manager.finalized",
                 "stop_status": "STOP_MANAGER_CLOSED",
                 "ledger_id": decision.get("ledger_id"),
-            }, {"manager_decision": updated_decision or decision, "agent_sessions": sessions}
+            }, {
+                "manager_decision": updated_decision or decision,
+                "agent_sessions": sessions,
+                "released_root_locks": released_root_locks,
+            }
         incomplete = [
             session
             for session in sessions
@@ -7743,11 +8095,45 @@ def evaluate_agent_hook(
                 unresolved_risks=[],
                 subagents_used=bool(sessions),
             )
-        return "pass", {"event": "manager.finalized", "stop_status": "STOP_MANAGER_CLOSED", "ledger_id": decision.get("ledger_id")}, {"agent_sessions": sessions, "manager_decision": updated_decision or decision}
+        return "pass", {"event": "manager.finalized", "stop_status": "STOP_MANAGER_CLOSED", "ledger_id": decision.get("ledger_id")}, {
+            "agent_sessions": sessions,
+            "manager_decision": updated_decision or decision,
+            "released_root_locks": released_root_locks,
+        }
     if canonical == "PreToolUse":
         result = pre_tool_gate(config, event, agent_policy)
         return ("blocked" if result.get("decision") == "block" else "pass"), result, {}
-    if canonical in {"PostToolUse", "PreCompact", "PostCompact"}:
+    if canonical == "PostToolUse":
+        released_root_locks: list[dict[str, Any]] = []
+        cleanup_warning = ""
+        if event_is_codex_root(event) and os.environ.get(MANAGER_ROOT_AGENT_ID_ENV):
+            root_agent_id, _decision, root_error = manager_root_ownership_for_event(
+                config,
+                event,
+                agent_policy,
+            )
+            if root_error:
+                cleanup_warning = root_error
+            else:
+                tool_agent_id = manager_root_tool_agent_id(
+                    root_agent_id,
+                    str(event.get("tool_use_id") or ""),
+                )
+                with connect_state(config) as conn:
+                    released_root_locks = release_agent_locks(
+                        conn,
+                        tool_agent_id,
+                        now=utc_now(),
+                    )
+                    conn.commit()
+        return "pass", {
+            "event": "agent.PostToolUse",
+            "status": "recorded",
+        }, {
+            "released_root_locks": released_root_locks,
+            "cleanup_warning": cleanup_warning,
+        }
+    if canonical in {"PreCompact", "PostCompact"}:
         return "pass", {"event": f"agent.{canonical}", "status": "recorded"}, {}
     return "pass", {}, {}
 
@@ -7862,6 +8248,50 @@ def write_managed_hook_config(path: Path, payload: Mapping[str, Any], *, force: 
         raise FileExistsError(f"hook config already exists: {target}")
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json_dumps(payload) + "\n", encoding="utf-8")
+    return target
+
+
+def install_managed_hook_config(path: Path, payload: Mapping[str, Any], *, force: bool) -> Path:
+    target = path.expanduser()
+    if force or not target.exists():
+        return write_managed_hook_config(target, payload, force=force)
+    try:
+        loaded = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(
+            f"existing hook config is unreadable; repair it or retry with --force: {target}: {exc}"
+        ) from exc
+    if not isinstance(loaded, dict) or not isinstance(loaded.get("hooks", {}), Mapping):
+        raise ValueError(f"existing hook config has no mergeable hooks object: {target}")
+    merged = dict(loaded)
+    merged_hooks = dict(loaded.get("hooks") or {})
+    generated_hooks = payload.get("hooks") if isinstance(payload.get("hooks"), Mapping) else {}
+    for event_name, generated_entries in generated_hooks.items():
+        retained_entries: list[Any] = []
+        existing_entries = merged_hooks.get(event_name)
+        if isinstance(existing_entries, list):
+            for entry in existing_entries:
+                if not isinstance(entry, Mapping):
+                    retained_entries.append(entry)
+                    continue
+                hooks = entry.get("hooks")
+                if not isinstance(hooks, list):
+                    retained_entries.append(dict(entry))
+                    continue
+                retained_hooks = [
+                    hook
+                    for hook in hooks
+                    if not (
+                        isinstance(hook, Mapping)
+                        and is_qwendex_agent_hook_command(str(hook.get("command") or ""))
+                    )
+                ]
+                if retained_hooks:
+                    retained_entries.append({**dict(entry), "hooks": retained_hooks})
+        retained_entries.extend(list(generated_entries) if isinstance(generated_entries, list) else [])
+        merged_hooks[str(event_name)] = retained_entries
+    merged["hooks"] = merged_hooks
+    atomic_write_text(target, json_dumps(merged) + "\n")
     return target
 
 
@@ -8282,13 +8712,16 @@ def persist_manager_decision(conn: sqlite3.Connection, decision: Mapping[str, An
     conn.execute(
         """
         UPDATE qwendex_manager_decisions
-        SET launch_ledger_id = ?, turn_id = ?, agent_task_id = ?
+        SET launch_ledger_id = ?, turn_id = ?, agent_task_id = ?,
+            launch_pid = ?, launch_start_ticks = ?
         WHERE ledger_id = ?
         """,
         (
             str(decision.get("launch_ledger_id") or ledger_id),
             str(decision.get("turn_id") or ""),
             str(decision.get("agent_task_id") or decision.get("session_id") or ""),
+            int(decision.get("launch_pid") or 0),
+            str(decision.get("launch_start_ticks") or ""),
             ledger_id,
         ),
     )
@@ -8327,6 +8760,12 @@ def manager_preflight_payload(
     timestamp = utc_now()
     session_id = str(source_env.get("QWENDEX_MANAGER_SESSION_ID") or make_id("mgrsess"))
     ledger_id = str(source_env.get("QWENDEX_MANAGER_LEDGER_ID") or make_id("mgrldg"))
+    root_agent_id = manager_root_agent_id(ledger_id, session_id)
+    try:
+        launch_pid = max(0, int(source_env.get(MANAGER_LAUNCH_PID_ENV) or 0))
+    except (TypeError, ValueError):
+        launch_pid = 0
+    launch_start_ticks = str(source_env.get(MANAGER_LAUNCH_START_TICKS_ENV) or "").strip()
     prompt_digest, prompt_summary = prompt_digest_and_summary(prompt, known=prompt_known)
     estimate_id = ""
     estimate: dict[str, Any] | None = None
@@ -8390,6 +8829,9 @@ def manager_preflight_payload(
         "session_id": session_id,
         "ledger_id": ledger_id,
         "launch_ledger_id": ledger_id,
+        "root_agent_id": root_agent_id,
+        "launch_pid": launch_pid,
+        "launch_start_ticks": launch_start_ticks,
         "turn_id": "",
         "agent_task_id": session_id,
         "timestamp": timestamp,
@@ -8455,6 +8897,9 @@ def manager_preflight_payload(
             },
             "QWENDEX_MANAGER_SESSION_ID": session_id,
             "QWENDEX_MANAGER_LEDGER_ID": ledger_id,
+            MANAGER_ROOT_AGENT_ID_ENV: root_agent_id,
+            MANAGER_LAUNCH_PID_ENV: str(launch_pid) if launch_pid else "",
+            MANAGER_LAUNCH_START_TICKS_ENV: launch_start_ticks,
             "QWENDEX_MANAGER_POLICY_HASH": str(agent_policy.get("policy_hash") or ""),
             "QWENDEX_MANAGER_STOP_STATUS": stop_status,
             "QWENDEX_OUTPUT_POLICY": str(agent_policy.get("env", {}).get("QWENDEX_OUTPUT_POLICY") or "standard"),
@@ -8579,6 +9024,230 @@ def manager_decision_for_event(
         (repo_root, launch_id, launch_id),
     ).fetchone()
     return row_to_manager_decision(row) if row is not None else launch
+
+
+def manager_decision_for_agent_task(
+    conn: sqlite3.Connection,
+    *,
+    ledger_id: str,
+    session_id: str,
+    repo_root: str,
+    agent_task_id: str,
+) -> dict[str, Any] | None:
+    """Resolve a worker registration to its parent Manager task.
+
+    Native child hooks carry the child thread's turn_id, not the root turn_id
+    that created the assignment. The registered task id is therefore the
+    trusted join key beneath the launcher ledger.
+    """
+    if not agent_task_id:
+        return None
+    identity_clauses: list[str] = []
+    params: list[Any] = [repo_root, agent_task_id, agent_task_id]
+    if ledger_id:
+        identity_clauses.extend(["launch_ledger_id = ?", "ledger_id = ?"])
+        params.extend([ledger_id, ledger_id])
+    if session_id:
+        identity_clauses.append("session_id = ?")
+        params.append(session_id)
+    if not identity_clauses:
+        return None
+    rows = conn.execute(
+        f"""
+        SELECT * FROM qwendex_manager_decisions
+        WHERE repo_root = ?
+          AND (agent_task_id = ? OR (agent_task_id = '' AND session_id = ?))
+          AND final_status IN ('preflight_ready', 'validation_pending')
+          AND ({' OR '.join(identity_clauses)})
+        ORDER BY timestamp_updated DESC LIMIT 2
+        """,
+        tuple(params),
+    ).fetchall()
+    return row_to_manager_decision(rows[0]) if len(rows) == 1 else None
+
+
+def manager_root_ownership_for_event(
+    config: Mapping[str, Any],
+    event: Mapping[str, Any],
+    agent_policy: Mapping[str, Any],
+) -> tuple[str, dict[str, Any] | None, str]:
+    """Resolve root write ownership only from the trusted qdex preflight.
+
+    Root Codex hook events have no agent_id by design. The launcher-exported
+    root id is accepted only when it matches an active, repository-scoped
+    manager decision from the same Codex home and policy.
+    """
+    configured_root_id = str(os.environ.get(MANAGER_ROOT_AGENT_ID_ENV) or "").strip()
+    ledger_id, session_id = manager_decision_identity(event)
+    repo_root = canonical_manager_repo_root(event=event)
+    if not configured_root_id or not (ledger_id or session_id):
+        return "", None, "Manager Mode root writes require a qdex preflight root identity. Restart this repository through qdex."
+    with connect_state(config) as conn:
+        decision = manager_decision_for_event(
+            conn,
+            event,
+            ledger_id=ledger_id,
+            session_id=session_id,
+            repo_root=repo_root,
+        )
+    if decision is None:
+        return "", None, "Manager Mode root write could not attach to its qdex preflight decision."
+    expected_root_id = manager_decision_root_agent_id(decision)
+    if configured_root_id != expected_root_id:
+        return "", decision, "Manager Mode root identity does not match the attached qdex preflight decision."
+    launch_pid = int(decision.get("launch_pid") or 0)
+    launch_start_ticks = str(decision.get("launch_start_ticks") or "")
+    if launch_pid:
+        configured_pid = str(os.environ.get(MANAGER_LAUNCH_PID_ENV) or "").strip()
+        configured_start = str(os.environ.get(MANAGER_LAUNCH_START_TICKS_ENV) or "").strip()
+        if configured_pid != str(launch_pid) or configured_start != launch_start_ticks:
+            return "", decision, "Manager Mode launcher process identity does not match the attached qdex preflight decision."
+        if not process_identity_alive(launch_pid, launch_start_ticks):
+            return "", decision, "Manager Mode launcher process is no longer active. Restart this repository through qdex."
+    if str(decision.get("repo_root") or "") != repo_root:
+        return "", decision, "Manager Mode root write repository does not match the attached qdex preflight decision."
+    if str(decision.get("final_status") or "") not in {"preflight_ready", "validation_pending"}:
+        return "", decision, "Manager Mode root write requires an active preflight decision."
+    if str(decision.get("selected_route") or "") not in {"direct_single_writer", "manager_subagents"}:
+        return "", decision, "Manager Mode root write is not allowed by the attached preflight route."
+    expected_home = path_digest_policy(codex_home_from_env(os.environ))
+    actual_home = str(decision.get("codex_home_digest_or_path_policy") or "")
+    if actual_home and actual_home != expected_home:
+        return "", decision, "Manager Mode root write Codex home does not match the attached preflight decision."
+    expected_policy = str(agent_policy.get("policy_hash") or "")
+    actual_policy = str(decision.get("policy_hash") or "")
+    if expected_policy and actual_policy and expected_policy != actual_policy:
+        return "", decision, "Manager Mode root write policy does not match the attached preflight decision."
+    timestamp = str(decision.get("timestamp_updated") or decision.get("timestamp_created") or "")
+    try:
+        age_seconds = (datetime.now(UTC) - parse_utc(timestamp)).total_seconds()
+    except (TypeError, ValueError):
+        return "", decision, "Manager Mode root write preflight timestamp is invalid."
+    if age_seconds > MANAGER_DECISION_ATTACH_WINDOW_MINUTES * 60:
+        return "", decision, "Manager Mode root write preflight decision is stale."
+    if not bool(decision.get("hook_verified")) and not bool(decision.get("hook_override")):
+        return "", decision, "Manager Mode root write requires verified hooks or the recorded launch override."
+    return configured_root_id, decision, ""
+
+
+def release_manager_root_locks(
+    conn: sqlite3.Connection,
+    decision: Mapping[str, Any],
+    *,
+    now: str,
+) -> list[dict[str, Any]]:
+    root_agent_id = manager_decision_root_agent_id(decision)
+    prefix = f"{root_agent_id}{MANAGER_ROOT_TOOL_SEPARATOR}"
+    rows = conn.execute(
+        """
+        SELECT * FROM qwendex_agent_file_locks
+        WHERE released_at = ''
+          AND (agent_id = ? OR substr(agent_id, 1, ?) = ?)
+        """,
+        (root_agent_id, len(prefix), prefix),
+    ).fetchall()
+    conn.execute(
+        """
+        UPDATE qwendex_agent_file_locks
+        SET released_at = ?
+        WHERE released_at = ''
+          AND (agent_id = ? OR substr(agent_id, 1, ?) = ?)
+        """,
+        (now, root_agent_id, len(prefix), prefix),
+    )
+    return [lock for row in rows if (lock := row_to_file_lock(row))]
+
+
+def release_reclaimable_manager_root_locks(
+    conn: sqlite3.Connection,
+    *,
+    repo_root: str,
+    now: str,
+) -> list[dict[str, Any]]:
+    root_locks = [
+        lock
+        for lock in active_file_locks(conn, repo_root=repo_root)
+        if str(lock.get("agent_id") or "").startswith("manager-root-")
+    ]
+    if not root_locks:
+        return []
+    rows = conn.execute(
+        """
+        SELECT * FROM qwendex_manager_decisions
+        WHERE repo_root = ?
+        ORDER BY timestamp_updated DESC
+        """,
+        (repo_root,),
+    ).fetchall()
+    decisions = [
+        decision
+        for row in rows
+        if (decision := row_to_manager_decision(row)) is not None
+    ]
+    families = {
+        manager_root_owner_family(str(lock.get("agent_id") or ""))
+        for lock in root_locks
+    }
+    reclaimed: list[dict[str, Any]] = []
+    for family in families:
+        launch_decisions = [
+            decision
+            for decision in decisions
+            if manager_decision_root_agent_id(decision) == family
+        ]
+        if not launch_decisions:
+            continue
+        active_decisions = [
+            decision
+            for decision in launch_decisions
+            if str(decision.get("final_status") or "")
+            in {"preflight_ready", "validation_pending"}
+        ]
+        reason = ""
+        if not active_decisions:
+            reason = "terminal_manager_launch"
+        else:
+            identities = [
+                (
+                    int(decision.get("launch_pid") or 0),
+                    str(decision.get("launch_start_ticks") or ""),
+                )
+                for decision in active_decisions
+                if int(decision.get("launch_pid") or 0) > 0
+            ]
+            if identities and not any(
+                process_identity_alive(pid, start_ticks)
+                for pid, start_ticks in identities
+            ):
+                reason = "dead_manager_launch"
+            elif not identities:
+                timestamps = [
+                    str(
+                        decision.get("timestamp_updated")
+                        or decision.get("timestamp_created")
+                        or ""
+                    )
+                    for decision in active_decisions
+                ]
+                try:
+                    stale = timestamps and all(
+                        (datetime.now(UTC) - parse_utc(timestamp)).total_seconds()
+                        > MANAGER_DECISION_ATTACH_WINDOW_MINUTES * 60
+                        for timestamp in timestamps
+                    )
+                except (TypeError, ValueError):
+                    stale = False
+                if stale:
+                    reason = "stale_manager_launch"
+        if not reason:
+            continue
+        released = release_manager_root_locks(
+            conn,
+            launch_decisions[0],
+            now=now,
+        )
+        reclaimed.extend({**lock, "reclaim_reason": reason} for lock in released)
+    return reclaimed
 
 
 def clone_manager_decision_for_turn(
@@ -8849,6 +9518,9 @@ def manager_decision_receipt_payload(decision: Mapping[str, Any]) -> dict[str, A
         "session_id": decision.get("session_id"),
         "ledger_id": decision.get("ledger_id"),
         "launch_ledger_id": decision.get("launch_ledger_id") or decision.get("ledger_id"),
+        "root_agent_id": manager_decision_root_agent_id(decision),
+        "launch_pid": int(decision.get("launch_pid") or 0),
+        "launch_start_ticks": decision.get("launch_start_ticks") or "",
         "turn_id": decision.get("turn_id") or "",
         "agent_task_id": decision.get("agent_task_id") or decision.get("session_id"),
         "timestamp": decision.get("timestamp_updated"),
@@ -9157,8 +9829,12 @@ def command_agent(args: argparse.Namespace, config: dict[str, Any]) -> dict[str,
             )
         if getattr(args, "install", False):
             try:
-                written = write_managed_hook_config(hook_config_path_for_codex_home(codex_home), hook_payload, force=bool(getattr(args, "force", False)))
-            except OSError as exc:
+                written = install_managed_hook_config(
+                    hook_config_path_for_codex_home(codex_home),
+                    hook_payload,
+                    force=bool(getattr(args, "force", False)),
+                )
+            except (OSError, ValueError) as exc:
                 return stable_envelope(
                     command="agent",
                     status="blocked",

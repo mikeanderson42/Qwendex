@@ -183,7 +183,7 @@ def test_qwendex_version_and_config_are_in_sync():
     sample_config = json.loads((ROOT / "config" / "qwendex" / "qwendex.sample.json").read_text(encoding="utf-8"))
     version = json_result("version", "--json")
 
-    assert qwendex.VERSION == "0.5.1"
+    assert qwendex.VERSION == "0.5.2"
     assert version["data"]["version"] == qwendex.VERSION
     assert project_config["version"] == qwendex.VERSION
     assert sample_config["version"] == qwendex.VERSION
@@ -874,9 +874,11 @@ def test_qwendex_dev_env_public_surface_is_visible_and_isolated():
     assert "llmstack_check.json" in text
     assert "codex-patch apply" in text
     assert re.search(
-        r"cargo build\s+--locked\s+--release\s+-p codex-cli\s+--bin codex",
+        r"cargo build\s+--locked\s+--release\s+-p codex-cli\s+"
+        r"-p codex-code-mode-host\s+--bin codex\s+--bin codex-code-mode-host",
         text.replace("\\\n", " "),
     )
+    assert "Codex code-mode host is missing or not executable" in text
     assert "status_line = [\"model-with-reasoning\", \"current-dir\", \"qwendex-manager\"]" in text
     assert "qwendex_toggle_manager = \"alt-m\"" in text
     assert "qwendex_toggle_kaveman = \"alt-k\"" in text
@@ -902,6 +904,7 @@ def test_qwendex_dev_env_public_surface_is_visible_and_isolated():
     assert "repair-copy" in doc
     assert "~/qwendex-dev" in doc
     assert "fallback execution plane" in doc
+    assert "codex-code-mode-host" in doc
     assert "QWENDEX_DEV_ENABLE_PATCHED_TUI_CONFIG=1" in doc
     assert "patched-tui.example.toml" in doc
 
@@ -1310,6 +1313,73 @@ def test_qwendex_dev_env_second_same_root_sync_skips_its_codex_wrapper(tmp_path)
     assert dry_run["command"][0] == str(checkout / "bin" / "codex")
 
 
+def test_qwendex_dev_codex_wrapper_requires_code_mode_host(tmp_path):
+    _, checkout, _, env = same_root_dev_env_fixture(tmp_path)
+    dev_env = checkout / "scripts" / "qwendex_dev_env"
+    sync = subprocess.run(
+        [str(dev_env), "sync"],
+        cwd=checkout,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=60,
+    )
+    assert sync.returncode == 0, sync.stderr or sync.stdout
+
+    build_bin = checkout / ".qwendex-dev" / "codex-build" / "bin"
+    dev_codex = build_bin / "codex"
+    code_mode_host = build_bin / "codex-code-mode-host"
+    dev_codex.write_text(
+        "#!/usr/bin/env bash\nprintf 'codex-cli 0.144.0\\n'\n",
+        encoding="utf-8",
+    )
+    dev_codex.chmod(0o755)
+
+    blocked = subprocess.run(
+        [str(checkout / "bin" / "codex"), "--version"],
+        cwd=checkout,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=10,
+    )
+    assert blocked.returncode == 127
+    assert "Codex code-mode host is missing or not executable" in blocked.stderr
+    doctor = subprocess.run(
+        [str(dev_env), "doctor"],
+        cwd=checkout,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=60,
+    )
+    dev_status = json.loads(
+        (checkout / ".qwendex-dev" / "results" / "meta" / "dev_status.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert doctor.returncode != 0
+    assert dev_status["status"] == "blocked"
+    assert "codex-code-mode-host companion" in " ".join(dev_status["blockers"])
+
+    code_mode_host.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    code_mode_host.chmod(0o755)
+    ready = subprocess.run(
+        [str(checkout / "bin" / "codex"), "--version"],
+        cwd=checkout,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=10,
+    )
+    assert ready.returncode == 0, ready.stderr or ready.stdout
+    assert ready.stdout.strip() == "codex-cli 0.144.0"
+
+
 def assert_same_root_supports_quoted_path(tmp_path, path_fragment):
     quoted_root = tmp_path / path_fragment
     quoted_root.mkdir()
@@ -1391,7 +1461,7 @@ def assert_same_root_supports_quoted_path(tmp_path, path_fragment):
 
     assert config["projects"] == {str(checkout): {"trust_level": "trusted"}}
     assert qwendex.returncode == 0, qwendex.stderr or qwendex.stdout
-    assert json.loads(qwendex.stdout)["data"]["version"] == "0.5.1"
+    assert json.loads(qwendex.stdout)["data"]["version"] == "0.5.2"
     assert qwendex_dev.returncode == 0, qwendex_dev.stderr or qwendex_dev.stdout
     assert sourced_env.returncode == 0, sourced_env.stderr or sourced_env.stdout
     assert sourced_env.stdout.strip() == str(checkout)
@@ -1442,6 +1512,9 @@ Path(os.environ["QWENDEX_FAKE_CODEX_CWD"]).write_text(os.getcwd(), encoding="utf
         encoding="utf-8",
     )
     fake_codex.chmod(0o755)
+    fake_code_mode_host = fake_bin / "codex-code-mode-host"
+    fake_code_mode_host.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    fake_code_mode_host.chmod(0o755)
 
     env = {
         **os.environ,
@@ -1537,6 +1610,9 @@ Path(os.environ["QWENDEX_FAKE_CODEX_ARGS"]).write_text(json.dumps({
     "manager_target_repo": os.environ.get("QWENDEX_MANAGER_TARGET_REPO", ""),
     "manager_session_id": os.environ.get("QWENDEX_MANAGER_SESSION_ID", ""),
     "manager_ledger_id": os.environ.get("QWENDEX_MANAGER_LEDGER_ID", ""),
+    "manager_root_agent_id": os.environ.get("QWENDEX_MANAGER_ROOT_AGENT_ID", ""),
+    "manager_launch_pid": os.environ.get("QWENDEX_MANAGER_LAUNCH_PID", ""),
+    "manager_launch_start_ticks": os.environ.get("QWENDEX_MANAGER_LAUNCH_START_TICKS", ""),
     "manager_policy_hash": os.environ.get("QWENDEX_MANAGER_POLICY_HASH", ""),
     "effective_agent_use": os.environ.get("QWENDEX_EFFECTIVE_AGENT_USE", ""),
     "agent_policy_hash": os.environ.get("QWENDEX_AGENT_POLICY_HASH", ""),
@@ -1546,6 +1622,9 @@ Path(os.environ["QWENDEX_FAKE_CODEX_ARGS"]).write_text(json.dumps({
         encoding="utf-8",
     )
     fake_codex.chmod(0o755)
+    fake_code_mode_host = fake_bin / "codex-code-mode-host"
+    fake_code_mode_host.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    fake_code_mode_host.chmod(0o755)
 
     env = {
         **os.environ,
@@ -1664,7 +1743,17 @@ Path(os.environ["QWENDEX_FAKE_CODEX_ARGS"]).write_text(json.dumps({
     launched = subprocess.run(
         [str(qdex), "--repo", str(ROOT)],
         cwd=ROOT,
-        env={**env, "QWENDEX_MANAGER_ALLOW_UNHOOKED": "1"},
+        env={
+            **env,
+            "QWENDEX_MANAGER_ALLOW_UNHOOKED": "1",
+            "QWENDEX_MANAGER_SESSION_ID": "stale-session",
+            "QWENDEX_MANAGER_LEDGER_ID": "stale-ledger",
+            "QWENDEX_MANAGER_ROOT_AGENT_ID": "stale-root",
+            "QWENDEX_MANAGER_LAUNCH_PID": "999999999",
+            "QWENDEX_MANAGER_LAUNCH_START_TICKS": "stale-start",
+            "QWENDEX_MANAGER_POLICY_HASH": "stale-policy",
+            "QWENDEX_MANAGER_STOP_STATUS": "stale-stop",
+        },
         text=True,
         capture_output=True,
         check=False,
@@ -1676,6 +1765,15 @@ Path(os.environ["QWENDEX_FAKE_CODEX_ARGS"]).write_text(json.dumps({
     assert call["args"][call["args"].index("-C") + 1] == str(ROOT)
     assert call["manager_session_id"].startswith("mgrsess_")
     assert call["manager_ledger_id"].startswith("mgrldg_")
+    assert call["manager_root_agent_id"].startswith("manager-root-mgrldg_")
+    assert call["manager_session_id"] != "stale-session"
+    assert call["manager_ledger_id"] != "stale-ledger"
+    assert call["manager_root_agent_id"] != "stale-root"
+    assert int(call["manager_launch_pid"]) > 0
+    assert call["manager_launch_pid"] != "999999999"
+    assert call["manager_launch_start_ticks"]
+    assert call["manager_launch_start_ticks"] != "stale-start"
+    assert call["manager_policy_hash"] != "stale-policy"
     assert call["manager_policy_hash"]
     assert call["codex_home"] == str(dev_root / ".qwendex-dev" / "codex_home")
     assert call["manager_target_repo"] == str(ROOT)
@@ -2474,6 +2572,611 @@ def test_qwendex_manager_stop_recovers_latest_preflight_without_exported_env(tmp
     assert json.loads(repeated_stop.stdout) == {}
 
 
+def test_qwendex_manager_root_uses_preflight_identity_and_repo_lock(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    env = {
+        "QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite"),
+        "QWENDEX_RESULTS_ROOT": str(tmp_path / "results"),
+        "CODEX_HOME": str(tmp_path / "codex_home"),
+        "QWENDEX_MANAGER_TARGET_REPO": str(repo),
+    }
+    json_result(
+        "agent", "hook-config", "--install", "--codex-home", env["CODEX_HOME"], "--json", env=env
+    )
+    json_result("manager", "mode", "--set", "manager", "--json", env=env)
+
+    root_event = {
+        "session_id": "codex-root-session",
+        "turn_id": "root-turn-1",
+        "cwd": str(repo),
+    }
+    unattached = run_qwendex(
+        "agent", "hook", "PreToolUse", "--event-json",
+        json.dumps({
+            **root_event,
+            "tool_name": "exec_command",
+            "tool_input": {"agent_id": "main", "cmd": "touch generated.txt"},
+        }),
+        "--json",
+        env=env,
+    )
+    unattached_payload = parse_json_result(unattached)
+    assert unattached.returncode != 0
+    assert unattached_payload["data"]["hook_result"]["event"] == "manager.root_unattached"
+
+    malformed_identity = run_qwendex(
+        "agent", "hook", "PreToolUse", "--event-json",
+        json.dumps({
+            **root_event,
+            "tool_name": "apply_patch",
+            "agent_type": "implementer",
+            "tool_input": {"patch": "*** Begin Patch\n*** End Patch"},
+        }),
+        "--json",
+        env=env,
+    )
+    malformed_payload = parse_json_result(malformed_identity)
+    assert malformed_identity.returncode != 0
+    assert malformed_payload["data"]["hook_result"]["event"] == "agent.identity_malformed"
+
+    malformed_agent_id = run_qwendex(
+        "agent", "hook", "PreToolUse", "--event-json",
+        json.dumps({
+            **root_event,
+            "tool_name": "apply_patch",
+            "agent_id": "impersonated-child",
+            "tool_input": {"path": "file.txt"},
+        }),
+        "--json",
+        env=env,
+    )
+    assert malformed_agent_id.returncode != 0
+    assert parse_json_result(malformed_agent_id)["data"]["hook_result"]["event"] == "agent.identity_malformed"
+
+    preflight = json_result(
+        "manager", "preflight", "--interactive-prompt-unknown", "--json", env=env
+    )
+    manager_env = {**env, **preflight["data"]["exports"]}
+    prompt = json_result(
+        "agent", "hook", "UserPromptSubmit", "--event-json",
+        json.dumps({**root_event, "prompt": "Explain status."}),
+        "--json",
+        env=manager_env,
+    )
+    manager_task_id = prompt["data"]["manager_decision"]["agent_task_id"]
+    unregistered_child = run_qwendex(
+        "agent", "hook", "PreToolUse", "--event-json",
+        json.dumps({
+            "session_id": "codex-unregistered-child",
+            "turn_id": "unregistered-child-turn",
+            "cwd": str(repo),
+            "tool_name": "apply_patch",
+            "agent_id": "unregistered-child",
+            "agent_type": "implementer",
+            "tool_input": {"path": "file.txt"},
+        }),
+        "--json",
+        env=manager_env,
+    )
+    assert unregistered_child.returncode != 0
+    assert parse_json_result(unregistered_child)["data"]["hook_result"]["event"] == "agent.unregistered"
+    json_result(
+        "manager", "assign", "--agent-id", "read-only-child", "--lane", "review",
+        "--task-id", manager_task_id, "--write-surface", "read-only",
+        "--file", "file.txt", "--repo-root", str(repo), "--json", env=env,
+    )
+    read_only_write = run_qwendex(
+        "agent", "hook", "PreToolUse", "--event-json",
+        json.dumps({
+            "session_id": "codex-read-only-child",
+            "turn_id": "read-only-child-turn",
+            "cwd": str(repo),
+            "tool_name": "apply_patch",
+            "agent_id": "read-only-child",
+            "agent_type": "default",
+            "tool_input": {"path": "file.txt"},
+        }),
+        "--json",
+        env=manager_env,
+    )
+    assert read_only_write.returncode != 0
+    assert parse_json_result(read_only_write)["data"]["hook_result"]["event"] == "agent.write_rejected"
+    json_result(
+        "manager", "assign", "--agent-id", "invalid-scope-child", "--lane", "implementation",
+        "--task-id", manager_task_id, "--write-surface", "declared-scope",
+        "--file", "../outside.txt", "--repo-root", str(repo), "--json", env=env,
+    )
+    invalid_scope = run_qwendex(
+        "agent", "hook", "PreToolUse", "--event-json",
+        json.dumps({
+            "session_id": "codex-invalid-scope-child",
+            "turn_id": "invalid-scope-child-turn",
+            "cwd": str(repo),
+            "tool_name": "apply_patch",
+            "agent_id": "invalid-scope-child",
+            "agent_type": "implementer",
+            "tool_input": {"path": "file.txt"},
+        }),
+        "--json",
+        env=manager_env,
+    )
+    assert invalid_scope.returncode != 0
+    assert parse_json_result(invalid_scope)["data"]["hook_result"]["event"] == "agent.path_scope_mismatch"
+    for control_tool in ("create_goal", "update_goal", "update_plan"):
+        control = json_result(
+            "agent", "hook", "PreToolUse", "--event-json",
+            json.dumps({
+                **root_event,
+                "tool_name": control_tool,
+                "tool_input": {"status": "in_progress"},
+            }),
+            "--json",
+            env=manager_env,
+        )
+        assert control["data"]["hook_result"] == {}
+    spoofed_control = json_result(
+        "agent", "hook", "PreToolUse", "--event-json",
+        json.dumps({
+            **root_event,
+            "tool_name": "mcp__untrusted__update_plan",
+            "tool_use_id": "spoofed-control",
+            "tool_input": {"status": "in_progress"},
+        }),
+        "--json",
+        env=manager_env,
+    )
+    assert spoofed_control["data"]["hook_result"]["event"] == "agent.file_locks_acquired"
+    json_result(
+        "agent", "hook", "PostToolUse", "--event-json",
+        json.dumps({
+            **root_event,
+            "tool_name": "mcp__untrusted__update_plan",
+            "tool_use_id": "spoofed-control",
+            "tool_input": {"status": "in_progress"},
+        }),
+        "--json",
+        env=manager_env,
+    )
+    for inspection_command in ("python3 -V", "file README.md", "git status | head -n 1"):
+        inspection = json_result(
+            "agent", "hook", "PreToolUse", "--event-json",
+            json.dumps({
+                **root_event,
+                "tool_name": "exec_command",
+                "tool_input": {"cmd": inspection_command},
+            }),
+            "--json",
+            env=manager_env,
+        )
+        assert inspection["data"]["hook_result"] == {}
+    shell = json_result(
+        "agent", "hook", "PreToolUse", "--event-json",
+        json.dumps({
+            **root_event,
+            "tool_name": "exec_command",
+            "tool_use_id": "root-shell",
+            "tool_input": {"cmd": "touch generated.txt"},
+        }),
+        "--json",
+        env=manager_env,
+    )
+    opaque_patch = json_result(
+        "agent", "hook", "PreToolUse", "--event-json",
+        json.dumps({
+            **root_event,
+            "tool_name": "apply_patch",
+            "tool_use_id": "root-patch",
+            "tool_input": {"patch": "*** Begin Patch\n*** End Patch"},
+        }),
+        "--json",
+        env=manager_env,
+    )
+
+    for result in (shell, opaque_patch):
+        hook = result["data"]["hook_result"]
+        assert hook["event"] == "agent.file_locks_acquired"
+        assert hook["root_agent_id"] == preflight["data"]["root_agent_id"]
+        assert hook["agent_id"].startswith(f'{preflight["data"]["root_agent_id"]}--tool-')
+        assert hook["ownership_source"] == "manager_preflight"
+        assert hook["acquired"][0]["path"] == "<repo-root>"
+
+    root_only = run_qwendex(
+        "agent", "hook", "PreToolUse", "--event-json",
+        json.dumps({
+            "session_id": "codex-child-session",
+            "cwd": str(repo),
+            "tool_name": "spawn_agent",
+            "agent_id": "registered-writer",
+            "agent_type": "implementer",
+        }),
+        "--json",
+        env=manager_env,
+    )
+    assert root_only.returncode != 0
+    assert parse_json_result(root_only)["data"]["hook_result"]["event"] == "agent.spawn_rejected"
+
+    json_result(
+        "manager", "assign", "--agent-id", "registered-writer", "--lane", "implementation",
+        "--task-id", manager_task_id, "--write-surface", "file.txt",
+        "--file", "file.txt",
+        "--repo-root", str(repo), "--json", env=env,
+    )
+    conflict = run_qwendex(
+        "agent", "hook", "PreToolUse", "--event-json",
+        json.dumps({
+            "session_id": "codex-child-session",
+            "cwd": str(repo),
+            "tool_name": "apply_patch",
+            "agent_id": "registered-writer",
+            "agent_type": "implementer",
+            "tool_use_id": "child-patch",
+            "tool_input": {"patch": "*** Begin Patch\n*** End Patch"},
+        }),
+        "--json",
+        env=manager_env,
+    )
+    conflict_payload = parse_json_result(conflict)
+    assert conflict.returncode != 0
+    assert conflict_payload["data"]["hook_result"]["event"] == "agent.file_lock_conflict"
+
+    released_shell = json_result(
+        "agent", "hook", "PostToolUse", "--event-json",
+        json.dumps({
+            **root_event,
+            "tool_name": "exec_command",
+            "tool_use_id": "root-shell",
+            "tool_input": {"cmd": "touch generated.txt"},
+        }),
+        "--json",
+        env=manager_env,
+    )
+    assert len(released_shell["data"]["released_root_locks"]) == 1
+
+    still_conflicted = run_qwendex(
+        "agent", "hook", "PreToolUse", "--event-json",
+        json.dumps({
+            "session_id": "codex-child-session",
+            "cwd": str(repo),
+            "tool_name": "apply_patch",
+            "agent_id": "registered-writer",
+            "agent_type": "implementer",
+            "tool_use_id": "child-patch",
+            "tool_input": {"patch": "*** Begin Patch\n*** End Patch"},
+        }),
+        "--json",
+        env=manager_env,
+    )
+    assert still_conflicted.returncode != 0
+    assert parse_json_result(still_conflicted)["data"]["hook_result"]["event"] == "agent.file_lock_conflict"
+
+    released_patch = json_result(
+        "agent", "hook", "PostToolUse", "--event-json",
+        json.dumps({
+            **root_event,
+            "tool_name": "apply_patch",
+            "tool_use_id": "root-patch",
+            "tool_input": {"patch": "*** Begin Patch\n*** End Patch"},
+        }),
+        "--json",
+        env=manager_env,
+    )
+    assert len(released_patch["data"]["released_root_locks"]) == 1
+
+    for denied_path in ("other.txt", "file.txt/nested", "/etc/passwd", "../outside.txt"):
+        out_of_scope = run_qwendex(
+            "agent", "hook", "PreToolUse", "--event-json",
+            json.dumps({
+                "session_id": "codex-child-session",
+                "turn_id": "child-turn-1",
+                "cwd": str(repo),
+                "tool_name": "apply_patch",
+                "agent_id": "registered-writer",
+                "agent_type": "implementer",
+                "tool_use_id": "child-out-of-scope",
+                "tool_input": {"path": denied_path},
+            }),
+            "--json",
+            env=manager_env,
+        )
+        assert out_of_scope.returncode != 0
+        assert parse_json_result(out_of_scope)["data"]["hook_result"]["event"] == "agent.path_scope_mismatch"
+
+    child_acquired = json_result(
+        "agent", "hook", "PreToolUse", "--event-json",
+        json.dumps({
+            "session_id": "codex-child-session",
+            "cwd": str(repo),
+            "tool_name": "apply_patch",
+            "agent_id": "registered-writer",
+            "agent_type": "implementer",
+            "tool_use_id": "child-patch",
+            "tool_input": {"patch": "*** Begin Patch\n*** End Patch"},
+        }),
+        "--json",
+        env=manager_env,
+    )
+    child_hook = child_acquired["data"]["hook_result"]
+    assert child_hook["ownership_source"] == "hook_agent_id"
+    assert child_hook["acquired"][0]["path"] == "file.txt"
+
+    json_result(
+        "agent", "hook", "SubagentStop", "--event-json",
+        json.dumps({
+            "session_id": "codex-child-session",
+            "cwd": str(repo),
+            "agent_id": "registered-writer",
+            "agent_type": "implementer",
+            "last_assistant_message": (
+                "FINAL_REPORT\nstatus: completed\nsummary: contract probe\nevidence:\n- lock released"
+            ),
+        }),
+        "--json",
+        env=manager_env,
+    )
+
+    json_result(
+        "manager", "assign", "--agent-id", "declared-writer", "--lane", "implementation",
+        "--task-id", manager_task_id, "--write-surface", "declared-scope",
+        "--repo-root", str(repo), "--json", env=env,
+    )
+    declared_scope = json_result(
+        "agent", "hook", "PreToolUse", "--event-json",
+        json.dumps({
+            "session_id": "codex-declared-child",
+            "turn_id": "declared-child-turn",
+            "cwd": str(repo),
+            "tool_name": "apply_patch",
+            "agent_id": "declared-writer",
+            "agent_type": "implementer",
+            "tool_use_id": "declared-child-patch",
+            "tool_input": {"patch": "*** Begin Patch\n*** End Patch"},
+        }),
+        "--json",
+        env=manager_env,
+    )
+    assert declared_scope["data"]["hook_result"]["acquired"][0]["path"] == "<repo-root>"
+    json_result(
+        "agent", "hook", "SubagentStop", "--event-json",
+        json.dumps({
+            "session_id": "codex-declared-child",
+            "cwd": str(repo),
+            "agent_id": "declared-writer",
+            "agent_type": "implementer",
+            "last_assistant_message": (
+                "FINAL_REPORT\nstatus: completed\nsummary: declared scope probe\nevidence:\n- lock released"
+            ),
+        }),
+        "--json",
+        env=manager_env,
+    )
+
+    json_result(
+        "agent", "hook", "PreToolUse", "--event-json",
+        json.dumps({
+            **root_event,
+            "tool_name": "exec_command",
+            "tool_use_id": "root-validation",
+            "tool_input": {"cmd": "touch validation.txt"},
+        }),
+        "--json",
+        env=manager_env,
+    )
+
+    validation_pending = run_qwendex(
+        "agent", "hook", "Stop", "--event-json",
+        json.dumps({
+            **root_event,
+            "last_assistant_message": "Done without validation.",
+            "edit_happened": True,
+        }),
+        "--json",
+        env=manager_env,
+    )
+    assert validation_pending.returncode != 0
+    assert parse_json_result(validation_pending)["data"]["hook_result"]["event"] == "manager.validation_pending"
+    released_after_block = json_result("agent", "locks", "--json", env=manager_env)
+    assert released_after_block["data"]["write_safety"]["active_count"] == 0
+
+    reacquired = json_result(
+        "agent", "hook", "PreToolUse", "--event-json",
+        json.dumps({
+            **root_event,
+            "tool_name": "exec_command",
+            "tool_use_id": "root-final",
+            "tool_input": {"cmd": "touch final.txt"},
+        }),
+        "--json",
+        env=manager_env,
+    )
+    assert reacquired["data"]["hook_result"]["event"] == "agent.file_locks_acquired"
+
+    stopped = json_result(
+        "agent", "hook", "Stop", "--event-json",
+        json.dumps({
+            **root_event,
+            "last_assistant_message": "No edits. Validation: not required. Risks: none.",
+            "edit_happened": False,
+        }),
+        "--json",
+        env=manager_env,
+    )
+    locks = json_result("agent", "locks", "--json", env=manager_env)
+    assert stopped["data"]["hook_result"]["event"] == "manager.finalized"
+    assert len(stopped["data"]["released_root_locks"]) == 1
+    assert locks["data"]["write_safety"]["active_count"] == 0
+
+
+def test_qwendex_non_manager_codex_root_keeps_normal_write_plane(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    env = {
+        "QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite"),
+        "QWENDEX_MANAGER_TARGET_REPO": str(repo),
+    }
+    json_result("manager", "mode", "--set", "off", "--json", env=env)
+    result = json_result(
+        "agent", "hook", "PreToolUse", "--event-json",
+        json.dumps({
+            "session_id": "codex-root-session",
+            "cwd": str(repo),
+            "tool_name": "apply_patch",
+            "tool_input": {"patch": "*** Begin Patch\n*** End Patch"},
+        }),
+        "--json",
+        env=env,
+    )
+    structured_outside = json_result(
+        "agent", "hook", "PreToolUse", "--event-json",
+        json.dumps({
+            "session_id": "codex-root-session",
+            "cwd": str(repo),
+            "tool_name": "write",
+            "tool_input": {"path": "/tmp/non-manager-output.txt"},
+        }),
+        "--json",
+        env=env,
+    )
+    locks = json_result("agent", "locks", "--json", env=env)
+    assert result["data"]["hook_result"] == {}
+    assert structured_outside["data"]["hook_result"] == {}
+    assert locks["data"]["write_safety"]["active_count"] == 0
+
+
+def test_qwendex_medium_native_child_keeps_legacy_explicit_path_locking(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    env = {
+        "QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite"),
+        "QWENDEX_MANAGER_TARGET_REPO": str(repo),
+    }
+    json_result("manager", "mode", "--set", "medium", "--json", env=env)
+    result = json_result(
+        "agent", "hook", "PreToolUse", "--event-json",
+        json.dumps({
+            "session_id": "medium-child-session",
+            "turn_id": "medium-child-turn",
+            "cwd": str(repo),
+            "tool_name": "apply_patch",
+            "agent_id": "unregistered-medium-child",
+            "agent_type": "implementer",
+            "tool_input": {"path": "file.txt"},
+        }),
+        "--json",
+        env=env,
+    )
+    assert result["data"]["hook_result"]["event"] == "agent.file_locks_acquired"
+    assert result["data"]["hook_result"]["acquired"][0]["path"] == "file.txt"
+
+
+def test_qwendex_manager_root_reclaims_dead_launcher_lease(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    qwendex = load_qwendex()
+    live_pid = os.getpid()
+    live_start_ticks = qwendex.process_start_ticks(live_pid)
+    assert live_start_ticks
+    env = {
+        "QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite"),
+        "QWENDEX_RESULTS_ROOT": str(tmp_path / "results"),
+        "CODEX_HOME": str(tmp_path / "codex_home"),
+        "QWENDEX_MANAGER_TARGET_REPO": str(repo),
+        "QWENDEX_MANAGER_LAUNCH_PID": str(live_pid),
+        "QWENDEX_MANAGER_LAUNCH_START_TICKS": live_start_ticks,
+    }
+    json_result(
+        "agent", "hook-config", "--install", "--codex-home", env["CODEX_HOME"], "--json", env=env
+    )
+    json_result("manager", "mode", "--set", "manager", "--json", env=env)
+
+    first = json_result(
+        "manager", "preflight", "--interactive-prompt-unknown", "--json", env=env
+    )
+    first_env = {**env, **first["data"]["exports"]}
+    first_event = {
+        "session_id": "first-root-session",
+        "turn_id": "first-root-turn",
+        "cwd": str(repo),
+    }
+    json_result(
+        "agent", "hook", "UserPromptSubmit", "--event-json",
+        json.dumps({**first_event, "prompt": "Explain status."}),
+        "--json", env=first_env,
+    )
+    json_result(
+        "agent", "hook", "PreToolUse", "--event-json",
+        json.dumps({
+            **first_event,
+            "tool_name": "exec_command",
+            "tool_use_id": "stranded-root-tool",
+            "tool_input": {"cmd": "touch first.txt"},
+        }),
+        "--json", env=first_env,
+    )
+    second = json_result(
+        "manager", "preflight", "--interactive-prompt-unknown", "--json", env=env
+    )
+    second_env = {**env, **second["data"]["exports"]}
+    second_event = {
+        "session_id": "second-root-session",
+        "turn_id": "second-root-turn",
+        "cwd": str(repo),
+    }
+    json_result(
+        "agent", "hook", "UserPromptSubmit", "--event-json",
+        json.dumps({**second_event, "prompt": "Explain status."}),
+        "--json", env=second_env,
+    )
+    live_conflict = run_qwendex(
+        "agent", "hook", "PreToolUse", "--event-json",
+        json.dumps({
+            **second_event,
+            "tool_name": "exec_command",
+            "tool_use_id": "second-root-tool",
+            "tool_input": {"cmd": "touch second.txt"},
+        }),
+        "--json", env=second_env,
+    )
+    live_conflict_payload = parse_json_result(live_conflict)
+    assert live_conflict.returncode != 0
+    assert live_conflict_payload["data"]["hook_result"]["event"] == "agent.file_lock_conflict"
+    assert live_conflict_payload["data"]["hook_result"]["reclaimed_root_locks"] == []
+
+    with sqlite3.connect(env["QWENDEX_STATE_DB"]) as conn:
+        conn.execute(
+            """
+            UPDATE qwendex_manager_decisions
+            SET launch_pid = 999999999, launch_start_ticks = 'dead-launch'
+            WHERE launch_ledger_id = ? OR ledger_id = ?
+            """,
+            (first["data"]["ledger_id"], first["data"]["ledger_id"]),
+        )
+
+    acquired = json_result(
+        "agent", "hook", "PreToolUse", "--event-json",
+        json.dumps({
+            **second_event,
+            "tool_name": "exec_command",
+            "tool_use_id": "second-root-tool",
+            "tool_input": {"cmd": "touch second.txt"},
+        }),
+        "--json", env=second_env,
+    )
+    reclaimed = acquired["data"]["hook_result"]["reclaimed_root_locks"]
+    assert len(reclaimed) == 1
+    assert reclaimed[0]["reclaim_reason"] == "dead_manager_launch"
+    json_result(
+        "agent", "hook", "PostToolUse", "--event-json",
+        json.dumps({
+            **second_event,
+            "tool_name": "exec_command",
+            "tool_use_id": "second-root-tool",
+            "tool_input": {"cmd": "touch second.txt"},
+        }),
+        "--json", env=second_env,
+    )
+
+
 def test_qwendex_manager_cwdless_stop_uses_turnless_fallback_only_within_target_repo(tmp_path):
     state_db = tmp_path / "qwendex.sqlite"
     repo_a = tmp_path / "repo-a"
@@ -2738,6 +3441,11 @@ def test_qwendex_manager_preflight_records_decision_ledger_and_hook_status(tmp_p
     assert ready["data"]["hook_status"]["verified"] is True
     assert ready["data"]["hook_status"]["override"] is False
     assert ready["data"]["ledger_id"].startswith("mgrldg_")
+    assert ready["data"]["root_agent_id"].startswith("manager-root-mgrldg_")
+    assert (
+        ready["data"]["exports"]["QWENDEX_MANAGER_ROOT_AGENT_ID"]
+        == ready["data"]["root_agent_id"]
+    )
     assert ready["data"]["prompt"]["known"] is True
     assert ready["data"]["prompt"]["prompt_digest"]
     assert ready["data"]["prompt"]["prompt_summary"] == "Small edit with validation evidence"
@@ -2751,6 +3459,7 @@ def test_qwendex_manager_preflight_records_decision_ledger_and_hook_status(tmp_p
     decision = json_result("manager", "decision", "--agent-id", ready["data"]["ledger_id"], "--json", env=env)
     assert decision["data"]["manager_decision"]["record_type"] == "manager_decision"
     assert decision["data"]["manager_decision"]["ledger_id"] == ready["data"]["ledger_id"]
+    assert decision["data"]["manager_decision"]["root_agent_id"] == ready["data"]["root_agent_id"]
 
     env_override = json_result(
         "manager",
@@ -3542,7 +4251,8 @@ def test_qwendex_agent_hook_config_generation_and_write_gate(tmp_path):
     rendered = json_result("agent", "hook-config", "--qwendex-command", "scripts/qwendex", "--json", env=env)
     hooks = rendered["data"]["hook_config"]["hooks"]
     stop_command = hooks["Stop"][0]["hooks"][0]["command"]
-    assert {"UserPromptSubmit", "SubagentStart", "SubagentStop", "Stop", "PreToolUse"} <= set(hooks)
+    assert set(hooks) == set(load_qwendex().MANAGED_AGENT_HOOKS)
+    assert "PostToolUse" in hooks
     assert stop_command.startswith("env ")
     assert "QWENDEX_STATE_DB=" in stop_command
     assert stop_command.endswith("scripts/qwendex agent hook Stop --codex-hook-output")
@@ -3584,10 +4294,28 @@ def test_qwendex_agent_hook_config_generation_and_write_gate(tmp_path):
     installed = json_result("agent", "hook-config", "--install", "--codex-home", str(codex_home), "--json", env=env)
     assert installed["data"]["operator_action"] == "install"
     assert installed["data"]["hook_status"]["verified"] is True
-    assert installed["data"]["hook_status"]["compatible_hook_source_count"] >= 7
+    assert installed["data"]["hook_status"]["compatible_hook_source_count"] >= len(hooks)
+    installed_payload = json.loads((codex_home / "hooks.json").read_text(encoding="utf-8"))
+    installed_payload["hooks"]["PreToolUse"].insert(0, {
+        "matcher": "^custom$",
+        "hooks": [{"type": "command", "command": "custom-hook", "timeout": 3}],
+    })
+    (codex_home / "hooks.json").write_text(json.dumps(installed_payload), encoding="utf-8")
+    updated = json_result(
+        "agent", "hook-config", "--install", "--codex-home", str(codex_home), "--json", env=env
+    )
+    updated_payload = json.loads((codex_home / "hooks.json").read_text(encoding="utf-8"))
+    pre_tool_commands = [
+        hook["command"]
+        for entry in updated_payload["hooks"]["PreToolUse"]
+        for hook in entry.get("hooks", [])
+    ]
+    assert updated["data"]["hook_status"]["verified"] is True
+    assert "custom-hook" in pre_tool_commands
+    assert sum("agent hook PreToolUse" in command for command in pre_tool_commands) == 1
     verified = json_result("agent", "hook-config", "--verify", "--codex-home", str(codex_home), "--json", env=env)
-    assert verified["data"]["hook_status"]["hook_source_count"] >= 7
-    assert verified["data"]["hook_status"]["compatible_hook_source_count"] >= 7
+    assert verified["data"]["hook_status"]["hook_source_count"] >= len(hooks)
+    assert verified["data"]["hook_status"]["compatible_hook_source_count"] >= len(hooks)
     assert verified["data"]["hook_status"]["missing_runtime_env_events"] == []
     assert verified["data"]["hook_status"]["verified"] is True
 
@@ -3989,6 +4717,9 @@ def test_qwendex_read_only_shell_gate_is_fail_closed_and_quote_aware(tmp_path):
         'stat -c "%n %s" README.md',
         "find . -maxdepth 2 -type f -print",
         'rg "foo|bar" scripts | head -n 5',
+        "python3 -V",
+        "python3.12 --version",
+        "file README.md | head -n 1",
         "pwd &&\nls",
         "rg '$HOME' scripts",
     )
@@ -4032,6 +4763,9 @@ def test_qwendex_read_only_shell_gate_is_fail_closed_and_quote_aware(tmp_path):
         "pwd && git status\nrm -f output.txt",
         "rg 'unterminated",
         "python3 -c 'print(1)'",
+        "python3 -VV extra",
+        "file -C -m magic",
+        "file --compile -m magic",
     )
 
     for command in safe_commands:

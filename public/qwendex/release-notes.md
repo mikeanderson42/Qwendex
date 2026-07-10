@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## 0.5.2
+
+- Fixed the Codex `0.144.0` Manager hook contract by deriving root ownership
+  from the trusted `qdex` preflight instead of requiring the root lifecycle
+  event to carry an `agent_id` that Codex intentionally omits.
+- Added per-tool root leases, successful `PostToolUse` cleanup, Stop fallback,
+  dead-launch orphan recovery, strict registered worker identity/task/path
+  checks, and lock-free goal/plan bookkeeping.
+- Made managed hook installation idempotently upgrade Qwendex handlers while
+  preserving unrelated hooks, and added safe inspection classification for
+  `file`, Python version probes, and allowlisted read-only pipelines.
+- Installed and receipts the Codex `codex-code-mode-host` companion alongside
+  the patched CLI so code-mode and goal tools cannot launch with an incomplete
+  runtime.
+
 ## 0.5.1
 
 - Fixed the dependency installer's externally managed Python probe so PEP 668
