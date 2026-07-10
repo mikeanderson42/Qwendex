@@ -281,6 +281,29 @@ def validate_repository(repo_root: Path) -> dict[str, Any]:
                     f"expected {schema_version!r}; got {config_schema_version!r}",
                 )
             )
+        seats = config.get("seats")
+        context = config.get("context")
+        global_compact = context.get("compact_limit") if isinstance(context, dict) else None
+        if isinstance(seats, dict):
+            for seat_name, seat in seats.items():
+                if not isinstance(seat, dict):
+                    continue
+                context_window = seat.get("context_window")
+                compact_limit = seat.get("compact_limit", global_compact)
+                if (
+                    isinstance(context_window, int)
+                    and not isinstance(context_window, bool)
+                    and isinstance(compact_limit, int)
+                    and not isinstance(compact_limit, bool)
+                    and compact_limit >= context_window
+                ):
+                    errors.append(
+                        issue(
+                            "invalid_context_budget",
+                            f"{relative_path}#/seats/{seat_name}/compact_limit",
+                            "compact_limit must be lower than context_window",
+                        )
+                    )
 
     distinct_versions = set(versions.values())
     if len(versions) == len(PUBLISHED_CONFIG_PATHS) and len(distinct_versions) != 1:

@@ -130,8 +130,8 @@
     "qwen": {
       "authority": "bounded_operator",
       "backend": "local-responses-adapter",
-      "context_window": 65536,
-      "compact_limit": 56000,
+      "context_window": 32768,
+      "compact_limit": 28672,
       "guard_profile": "balanced"
     },
     "audit": {
@@ -152,6 +152,7 @@
       "authority": "isolated_probe",
       "backend": "local-responses-adapter",
       "context_window": 32768,
+      "compact_limit": 28672,
       "guard_profile": "max_safety"
     }
   }

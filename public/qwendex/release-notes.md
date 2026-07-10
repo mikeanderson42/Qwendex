@@ -24,6 +24,9 @@
 - Made the clean-install learning mock an explicit non-mutating contract check;
   external SkillOpt remains required for status, harvest, and run, while
   `adopt --approve` performs allowlist preflight only and never applies files.
+- Aligned the public 32k backend, local seats, launcher fallback, and sample
+  environment on a 32768/28672 context/compaction budget with cross-field
+  validation.
 - Removed machine-local launchers, downstream workflow templates, private
   inventory, and raw validation transcripts from the public source artifact.
 

@@ -704,8 +704,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "qwen": {
             "authority": "bounded_operator",
             "backend": "local-responses-adapter",
-            "context_window": 65536,
-            "compact_limit": 56000,
+            "context_window": 32768,
+            "compact_limit": 28672,
             "guard_profile": "balanced",
         },
         "audit": {
@@ -726,6 +726,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "authority": "isolated_probe",
             "backend": "local-responses-adapter",
             "context_window": 32768,
+            "compact_limit": 28672,
             "guard_profile": "max_safety",
         },
     },
@@ -1409,6 +1410,31 @@ def validate_qwendex_config(config: Mapping[str, Any]) -> list[str]:
         if expected_backend and seat_config.get("backend") != expected_backend:
             failures.append(
                 f"invalid seats.{seat_name}.backend: {seat_config.get('backend')}"
+            )
+        context_window = seat_config.get("context_window")
+        compact_limit = seat_config.get(
+            "compact_limit", config.get("context", {}).get("compact_limit")
+        )
+        if (
+            not isinstance(context_window, int)
+            or isinstance(context_window, bool)
+            or context_window < 1024
+        ):
+            failures.append(
+                f"invalid seats.{seat_name}.context_window: {context_window}"
+            )
+        if (
+            not isinstance(compact_limit, int)
+            or isinstance(compact_limit, bool)
+            or compact_limit < 1024
+            or (
+                isinstance(context_window, int)
+                and not isinstance(context_window, bool)
+                and compact_limit >= context_window
+            )
+        ):
+            failures.append(
+                f"invalid seats.{seat_name}.compact_limit: {compact_limit}"
             )
     for seat in ("primary", "qwen", "audit", "release", "sandbox"):
         if seat not in seats:

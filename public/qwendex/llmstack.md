@@ -54,6 +54,11 @@ validate the selected runtime's supported flags before use. The vLLM launcher
 keeps remote model code disabled unless `VLLM_TRUST_REMOTE_CODE=1` is set
 explicitly.
 
+The published 32k backend profile, local Qwendex seats, launcher fallback, and
+sample environment all use a 32768-token context with auto-compaction at
+28672. A local backend override may lower both values, but its compact limit
+must remain below the actual served context window.
+
 ## Windows Launcher
 
 `scripts/windows/open.ps1` is a best-effort bring-your-own-WSL PowerShell

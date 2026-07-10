@@ -222,7 +222,7 @@
     },
     "qwenSeat": {
       "type": "object",
-      "required": ["authority", "backend", "context_window", "guard_profile"],
+      "required": ["authority", "backend", "context_window", "compact_limit", "guard_profile"],
       "additionalProperties": false,
       "properties": {
         "authority": {"const": "bounded_operator"},
@@ -260,7 +260,7 @@
     },
     "sandboxSeat": {
       "type": "object",
-      "required": ["authority", "backend", "context_window", "guard_profile"],
+      "required": ["authority", "backend", "context_window", "compact_limit", "guard_profile"],
       "additionalProperties": false,
       "properties": {
         "authority": {"const": "isolated_probe"},

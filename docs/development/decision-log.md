@@ -350,6 +350,21 @@ Reason: a configured status URL is not useful evidence if arbitrary content or
 a different service can satisfy it. A small versioned contract makes bridge
 identity and readiness testable while preserving existing local integrations.
 
+## Canonical Local Context Budget
+
+Decision: the public 32k backend profile, Qwendex local seats, launcher
+fallback, and sample environment share a 32768-token context window and a
+28672-token auto-compact limit. Runtime and published-config validation reject
+any effective compact limit at or above its seat context. Capability catalogs
+may describe a model's larger theoretical maximum, but remain explicitly
+non-authoritative for the active runtime.
+
+Reason: advertising 65k in the seat policy while the default and operator
+backend serve 32k makes direct local execution fail its own bridge preflight;
+an isolated sandbox seat also inherited a 56k compact limit above its 32k
+window. One conservative runtime budget keeps clean installs and the current
+operator stack aligned without increasing model memory pressure.
+
 ## Local Endpoint And Target-Repository Binding
 
 Decision: the local Codex launcher derives one canonical bridge base from the

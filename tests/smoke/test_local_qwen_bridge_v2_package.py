@@ -622,6 +622,43 @@ def test_public_stack_status_url_matches_bridge_and_probes() -> None:
     assert '"$CODEX_BASE/status"' in check
 
 
+def test_public_local_context_budget_is_connected_end_to_end() -> None:
+    qwendex = json.loads(
+        (ROOT / "config/qwendex/qwendex.json").read_text(encoding="utf-8")
+    )
+    qwendex_sample = json.loads(
+        (ROOT / "config/qwendex/qwendex.sample.json").read_text(encoding="utf-8")
+    )
+    stack = json.loads(
+        (ROOT / "config/local_llm_stack/stack_manager.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    active_profile = next(
+        profile
+        for profile in stack["backend_profiles"]
+        if profile["name"] == stack["active_backend_profile"]
+    )
+    bridge_command = active_profile["service_overrides"]["bridge"]["command"]
+    env_sample = (ROOT / "config/local_llm_stack/local_harness.env.sample").read_text(
+        encoding="utf-8"
+    )
+    launcher = (ROOT / "scripts/run_local_qwen_codex.sh").read_text(
+        encoding="utf-8"
+    )
+
+    for published in (qwendex, qwendex_sample):
+        assert published["seats"]["qwen"]["context_window"] == 32768
+        assert published["seats"]["qwen"]["compact_limit"] == 28672
+        assert published["seats"]["sandbox"]["context_window"] == 32768
+        assert published["seats"]["sandbox"]["compact_limit"] == 28672
+    assert "CODEX_TEXTGEN_CONTEXT_LIMIT_TOKENS=32768" in bridge_command
+    assert "LOCAL_QWEN_CODEX_CONTEXT_WINDOW=32768" in env_sample
+    assert "LOCAL_QWEN_CODEX_AUTO_COMPACT_LIMIT=28672" in env_sample
+    assert 'CODEX_TEXTGEN_CONTEXT_LIMIT_TOKENS:-32768' in launcher
+    assert 'LOCAL_QWEN_CODEX_AUTO_COMPACT_LIMIT:-28672' in launcher
+
+
 def test_bridge_launcher_has_no_hidden_system_prompt_dependency(
     tmp_path: Path,
 ) -> None:

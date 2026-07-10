@@ -136,6 +136,9 @@ output limits are carried into the child command/environment and recorded in
 the receipt execution policy. `max_output_tokens` is recorded as a declared,
 not-enforced value until the launcher/runtime consumes it; the receipt's
 `enforcement` map names this boundary.
+The published local seats and 32k backend profile use a `32768` context window
+and a `28672` auto-compact limit. Every seat must keep its effective compact
+limit below its context window; config validation rejects an inverted budget.
 
 `local_probe_url` must end in `/v1/models` without a query or fragment. Qwendex
 derives the launcher base by removing that suffix and passes both the derived

@@ -142,6 +142,22 @@ def test_validator_blocks_invalid_semver_and_published_version_drift(tmp_path: P
     assert "release_version_mismatch" in error_codes(payload)
 
 
+def test_validator_blocks_compact_limit_at_or_above_context_window(tmp_path: Path) -> None:
+    repo = isolated_surface(tmp_path)
+    config_path = repo / "config" / "qwendex" / "qwendex.json"
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    config["seats"]["sandbox"]["compact_limit"] = config["seats"]["sandbox"][
+        "context_window"
+    ]
+    write_json(config_path, config)
+
+    result, payload = run_validator(repo)
+
+    assert result.returncode == 1
+    assert "invalid_context_budget" in error_codes(payload)
+    assert any("sandbox/compact_limit" in item["path"] for item in payload["errors"])
+
+
 def test_validator_blocks_jsonschema_dependency_pin_drift(tmp_path: Path) -> None:
     repo = isolated_surface(tmp_path)
     dependencies_path = repo / "config" / "qwendex" / "dependencies.json"

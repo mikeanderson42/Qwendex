@@ -418,6 +418,7 @@ def test_qwendex_config_blocks_unknown_keys_and_secret_values(tmp_path):
         ({"seats": {"qwen": {"model": "other-local-model"}}}, "seats.qwen key: model"),
         ({"seats": {"primary": {"authority": "read_only_review"}}}, "seats.primary.authority"),
         ({"seats": {"qwen": {"backend": "codex"}}}, "seats.qwen.backend"),
+        ({"seats": {"sandbox": {"compact_limit": 32768}}}, "seats.sandbox.compact_limit"),
         ({"seats": {"custom": {"model": "gpt-5.5"}}}, "unknown seat: custom"),
     ],
 )
