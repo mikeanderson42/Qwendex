@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.5.1
+
+- Fixed the dependency installer's externally managed Python probe so PEP 668
+  systems add pip's explicit override while retaining `--user` scope.
+- Added an executable regression for the embedded probe and verified exact
+  pinned Python tools in a clean isolated CachyOS home.
+
 ## 0.5.0
 
 - Replaced the downstream-specific local-Qwen bridge monolith with a generic

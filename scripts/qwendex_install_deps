@@ -78,6 +78,7 @@ python_compatible() {
 
 python_externally_managed() {
   python3 - <<'PY' >/dev/null 2>&1
+import sys
 import sysconfig
 from pathlib import Path
 
