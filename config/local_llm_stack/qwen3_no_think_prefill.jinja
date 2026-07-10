@@ -1,5 +1,5 @@
-{# Qwen3 non-thinking serving template for SimonYCL Plateau checkpoints.
-   This checkpoint tends to emit a leading <|im_start|> token as its first
+{# Qwen3 non-thinking serving template for checkpoints that emit a leading
+   <|im_start|> token as their first
    generated token. Prefilling that marker keeps API responses clean while
    preserving the normal Qwen chat framing in the prompt.
 #}

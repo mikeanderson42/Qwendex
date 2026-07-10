@@ -132,6 +132,7 @@ class ServiceRuntimeState:
     tmux_window: TmuxWindowState
     runtime_state: str
     last_error: str = ""
+    status_health: HealthCheckResult | None = None
 
 
 @dataclass(frozen=True)
@@ -446,12 +447,23 @@ def http_health(url: str, port: int, timeout: float = 3.0) -> HealthCheckResult:
             state = "healthy"
             if url.endswith("/v1/models") and not models:
                 state = "unhealthy"
+            status_payload_ready = not url.endswith("/status") or (
+                isinstance(raw, dict)
+                and raw.get("schema_version")
+                == "qwendex.responses_bridge.status.v1"
+                and raw.get("status") == "ok"
+            )
+            if not status_payload_ready:
+                state = "unhealthy"
             return HealthCheckResult(
                 state=state,
                 endpoint_responding=True,
                 port_occupied=True,
                 url=url,
                 status_code=getattr(resp, "status", None),
+                error=""
+                if status_payload_ready
+                else "status payload did not report ready",
                 models=models,
                 raw=raw,
             )
@@ -513,28 +525,36 @@ def tmux_session_state(cfg: StackConfig) -> TmuxSessionState:
     return TmuxSessionState(cfg.tmux_session, exists, windows, duplicates)
 
 
+def health_is_ready(health: HealthCheckResult) -> bool:
+    return health.endpoint_responding and health.state == "healthy"
+
+
 def service_runtime_state(service: ServiceDefinition, session: TmuxSessionState) -> ServiceRuntimeState:
     health = http_health(service.health_url, service.port)
+    status_health = http_health(service.status_url, service.port) if service.status_url else None
+    ready = health_is_ready(health) and (status_health is None or health_is_ready(status_health))
     window = session.windows.get(service.name, TmuxWindowState(service.window_name, False, False, False))
     last_error = health.error
+    if status_health is not None and not health_is_ready(status_health):
+        last_error = status_health.error or f"status endpoint is {status_health.state}: {service.status_url}"
     if window.count > 1:
         runtime = "duplicate"
     elif window.exists and window.pane_dead:
         runtime = "stale"
-    elif health.endpoint_responding and health.state == "healthy" and not window.exists:
+    elif ready and not window.exists:
         runtime = "externally-managed"
-    elif health.endpoint_responding and health.state == "healthy":
+    elif ready:
         runtime = "healthy"
+    elif health.port_occupied and not window.exists:
+        runtime = "unhealthy"
+        last_error = last_error or "port occupied but the configured health endpoints are not ready"
     elif window.live and not health.port_occupied:
         runtime = "starting"
     elif window.live and health.port_occupied:
         runtime = "unhealthy"
-    elif health.port_occupied and not window.exists:
-        runtime = "externally-managed"
-        last_error = health.error or "port occupied but managed tmux window is missing"
     else:
         runtime = "stopped"
-    return ServiceRuntimeState(service, health, window, runtime, last_error)
+    return ServiceRuntimeState(service, health, window, runtime, last_error, status_health)
 
 
 def collect_runtime(cfg: StackConfig) -> tuple[TmuxSessionState, list[ServiceRuntimeState]]:
@@ -590,7 +610,12 @@ def build_reconcile_plan(cfg: StackConfig) -> ReconcilePlan:
         elif state.runtime_state == "externally-managed":
             warnings.append(f"{service.name} endpoint or port exists outside the managed tmux window; leaving it alone.")
         elif state.runtime_state == "unhealthy":
-            warnings.append(f"{service.name} is live but unhealthy; use restart after reviewing logs.")
+            if state.tmux_window.live:
+                warnings.append(f"{service.name} is live but unhealthy; use restart after reviewing logs.")
+            else:
+                warnings.append(
+                    f"{service.name} has an unhealthy endpoint outside the managed tmux window; leaving it alone."
+                )
     return ReconcilePlan(actions, warnings, destructive)
 
 
@@ -721,10 +746,17 @@ def wait_for_service(service: ServiceDefinition) -> ActionResult:
     deadline = time.monotonic() + service.startup_timeout_seconds
     while time.monotonic() < deadline:
         health = http_health(service.health_url, service.port)
-        if health.endpoint_responding and health.state == "healthy":
-            return ActionResult(True, f"{service.name} is healthy at {service.health_url}")
+        status_health = http_health(service.status_url, service.port) if service.status_url else None
+        if health_is_ready(health) and (status_health is None or health_is_ready(status_health)):
+            endpoints = service.health_url
+            if service.status_url:
+                endpoints += f" and {service.status_url}"
+            return ActionResult(True, f"{service.name} is healthy at {endpoints}")
         time.sleep(5)
-    return ActionResult(False, f"{service.name} did not become healthy at {service.health_url}")
+    endpoints = service.health_url
+    if service.status_url:
+        endpoints += f" and {service.status_url}"
+    return ActionResult(False, f"{service.name} did not become healthy at {endpoints}")
 
 
 def service_by_name(cfg: StackConfig, name: str) -> ServiceDefinition:
@@ -802,6 +834,11 @@ def start_one(cfg: StackConfig, name: str, *, wait: bool = False) -> ActionResul
         session, states = collect_runtime(cfg)
         state_by_name = {item.definition.name: item for item in states}
         current = state_by_name[name]
+    if current.runtime_state == "unhealthy" and not current.tmux_window.exists and current.health.port_occupied:
+        return ActionResult(
+            False,
+            f"{service.name} port {service.port} is occupied by an unmanaged process with unhealthy endpoints.",
+        )
     if current.health.port_occupied and not current.health.endpoint_responding and not current.tmux_window.exists:
         if wait_for_port_closed(service.port, timeout_seconds=10.0):
             session, states = collect_runtime(cfg)
@@ -1551,9 +1588,11 @@ def service_state_to_dict(cfg: StackConfig, state: ServiceRuntimeState) -> dict[
         "last_error": state.last_error,
         "port": service.port,
         "health_url": service.health_url,
+        "status_url": service.status_url,
         "models_url": service.models_url,
         "tmux_window": tmux_window_to_dict(state.tmux_window),
         "health": health_to_dict(state.health),
+        "status_health": health_to_dict(state.status_health) if state.status_health is not None else None,
         "model_summary": service_model_summary(cfg, state),
     }
 

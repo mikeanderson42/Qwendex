@@ -11,6 +11,7 @@ CALLER_LOCAL_QWEN_CODEX_AUTO_COMPACT_LIMIT="${LOCAL_QWEN_CODEX_AUTO_COMPACT_LIMI
 CALLER_LOCAL_QWEN_GUARD_PROFILE="${LOCAL_QWEN_GUARD_PROFILE+x}${LOCAL_QWEN_GUARD_PROFILE-}"
 CALLER_LOCAL_QWEN_CODEX_MAX_WALL_TIME_SECONDS="${LOCAL_QWEN_CODEX_MAX_WALL_TIME_SECONDS+x}${LOCAL_QWEN_CODEX_MAX_WALL_TIME_SECONDS-}"
 CALLER_LOCAL_QWEN_CODEX_MAX_TOOL_CALLS="${LOCAL_QWEN_CODEX_MAX_TOOL_CALLS+x}${LOCAL_QWEN_CODEX_MAX_TOOL_CALLS-}"
+CALLER_LOCAL_QWEN_CODEX_SANDBOX_MODE="${LOCAL_QWEN_CODEX_SANDBOX_MODE+x}${LOCAL_QWEN_CODEX_SANDBOX_MODE-}"
 CALLER_LOCAL_QWEN_HEALTH_LOG="${LOCAL_QWEN_HEALTH_LOG+x}${LOCAL_QWEN_HEALTH_LOG-}"
 CALLER_CODEX_TEXTGEN_CONTEXT_LIMIT_TOKENS="${CODEX_TEXTGEN_CONTEXT_LIMIT_TOKENS+x}${CODEX_TEXTGEN_CONTEXT_LIMIT_TOKENS-}"
 if [[ -f "$ENV_FILE" ]]; then
@@ -26,10 +27,11 @@ fi
 [[ "$CALLER_LOCAL_QWEN_GUARD_PROFILE" == x* ]] && LOCAL_QWEN_GUARD_PROFILE="${CALLER_LOCAL_QWEN_GUARD_PROFILE#x}"
 [[ "$CALLER_LOCAL_QWEN_CODEX_MAX_WALL_TIME_SECONDS" == x* ]] && LOCAL_QWEN_CODEX_MAX_WALL_TIME_SECONDS="${CALLER_LOCAL_QWEN_CODEX_MAX_WALL_TIME_SECONDS#x}"
 [[ "$CALLER_LOCAL_QWEN_CODEX_MAX_TOOL_CALLS" == x* ]] && LOCAL_QWEN_CODEX_MAX_TOOL_CALLS="${CALLER_LOCAL_QWEN_CODEX_MAX_TOOL_CALLS#x}"
+[[ "$CALLER_LOCAL_QWEN_CODEX_SANDBOX_MODE" == x* ]] && LOCAL_QWEN_CODEX_SANDBOX_MODE="${CALLER_LOCAL_QWEN_CODEX_SANDBOX_MODE#x}"
 [[ "$CALLER_LOCAL_QWEN_HEALTH_LOG" == x* ]] && LOCAL_QWEN_HEALTH_LOG="${CALLER_LOCAL_QWEN_HEALTH_LOG#x}"
 [[ "$CALLER_CODEX_TEXTGEN_CONTEXT_LIMIT_TOKENS" == x* ]] && CODEX_TEXTGEN_CONTEXT_LIMIT_TOKENS="${CALLER_CODEX_TEXTGEN_CONTEXT_LIMIT_TOKENS#x}"
 
-SAFE_HOME="${CODEX_HOME:-$HOME/.codex_lmstudio_safe}"
+SAFE_HOME="${CODEX_HOME:-$HOME/.codex_qwendex_local_safe}"
 CODEX_CWD="${LOCAL_QWEN_CODEX_CWD:-$ROOT}"
 
 # Use the stable bridge alias for Codex repo-agent work. The loaded backend may
@@ -39,6 +41,13 @@ MODEL="${LOCAL_QWEN_MODEL:-qwen-local}"
 
 # Codex must talk to the Responses bridge here, not raw TextGen or LiteLLM.
 CODEX_BASE="${LOCAL_QWEN_BASE:-${LOCAL_LLM_CODEX_BASE:-http://127.0.0.1:1234}}"
+CODEX_BASE="${CODEX_BASE%/}"
+EXPECTED_CODEX_OSS_BASE_URL="$CODEX_BASE/v1"
+if [[ -n "${CODEX_OSS_BASE_URL:-}" && "${CODEX_OSS_BASE_URL%/}" != "$EXPECTED_CODEX_OSS_BASE_URL" ]]; then
+  echo "CODEX_OSS_BASE_URL conflicts with the verified Qwendex bridge: $CODEX_OSS_BASE_URL != $EXPECTED_CODEX_OSS_BASE_URL" >&2
+  exit 2
+fi
+export CODEX_OSS_BASE_URL="$EXPECTED_CODEX_OSS_BASE_URL"
 
 HEALTH_LOG="${LOCAL_QWEN_HEALTH_LOG:-$SAFE_HOME/logs/local_qwen_codex.health.log}"
 TOOL_OUTPUT_TOKEN_LIMIT="${LOCAL_QWEN_TOOL_OUTPUT_TOKEN_LIMIT:-${CODEX_TEXTGEN_TOOL_OUTPUT_TOKEN_LIMIT:-1200}}"
@@ -52,8 +61,9 @@ CODEX_GOAL_MODE="${LOCAL_QWEN_CODEX_GOAL_MODE:-guarded}"
 LOCAL_QWEN_GUARD_PROFILE="${LOCAL_QWEN_GUARD_PROFILE:-balanced}"
 LOCAL_QWEN_CODEX_MAX_WALL_TIME_SECONDS="${LOCAL_QWEN_CODEX_MAX_WALL_TIME_SECONDS:--1}"
 LOCAL_QWEN_CODEX_MAX_TOOL_CALLS="${LOCAL_QWEN_CODEX_MAX_TOOL_CALLS:--1}"
+LOCAL_QWEN_CODEX_SANDBOX_MODE="${LOCAL_QWEN_CODEX_SANDBOX_MODE:-workspace-write}"
 LOCAL_QWEN_CODEX_ADD_DIRS="${LOCAL_QWEN_CODEX_ADD_DIRS:-}"
-EXPECTED_BRIDGE_VERSION="${LOCAL_QWEN_EXPECTED_BRIDGE_VERSION:-tabby-responses-proxy-2026-06-30-qwen-self-analysis-preflight-64k}"
+EXPECTED_BRIDGE_VERSION="${LOCAL_QWEN_EXPECTED_BRIDGE_VERSION:-qwendex-local-qwen-responses-v2}"
 if [[ -n "${LOCAL_QWEN_CODEX_ENABLE_GOALS+x}" ]]; then
   case "$LOCAL_QWEN_CODEX_ENABLE_GOALS" in
     0|false|FALSE|no|NO) CODEX_GOAL_MODE="off" ;;
@@ -146,7 +156,7 @@ usage() {
 Usage:
   scripts/run_local_qwen_codex.sh
   scripts/run_local_qwen_codex.sh --cwd /path/to/project
-  scripts/run_local_qwen_codex.sh --exec 'Reply with exactly: LMSTUDIO_OK'
+  scripts/run_local_qwen_codex.sh --exec 'Reply exactly QWENDEX_OK'
   scripts/run_local_qwen_codex.sh --minimal --ephemeral --output-last-message out.md --exec 'Reply with one paragraph'
   scripts/run_local_qwen_codex.sh --fresh-home /tmp/codex-home --exec 'Reply OK'
   scripts/run_local_qwen_codex.sh --mcp-list
@@ -157,7 +167,7 @@ Behavior:
   - verifies the Codex-facing Responses bridge at 127.0.0.1:1234
   - does NOT point Codex directly at raw TextGen, raw LiteLLM, or raw GGUF loaders
   - launches Codex against the stable qwen-local bridge alias by default
-  - forces Codex sandbox mode to workspace-write for local-model tool runs
+  - uses Codex workspace-write sandboxing by default; --sandbox read-only is supported
 
 Environment overrides:
   LOCAL_QWEN_MODEL       default: qwen-local
@@ -174,17 +184,19 @@ Environment overrides:
   LOCAL_QWEN_GUARD_PROFILE default: balanced; set max_safety for stricter runtime guard behavior
   LOCAL_QWEN_CODEX_MAX_WALL_TIME_SECONDS default: -1 unlimited; positive integer wraps --exec in timeout
   LOCAL_QWEN_CODEX_MAX_TOOL_CALLS default: -1 unlimited; must match the already-running bridge status
+  LOCAL_QWEN_CODEX_SANDBOX_MODE default: workspace-write; read-only is also supported
   LOCAL_QWEN_CHECK_MCP_BINS default: 1; set 0 only for isolated bridge/model probes
   LOCAL_QWEN_MCP_BIN_ROOT default: ~/.codex/mcp-servers/node_modules/.bin
   LOCAL_QWEN_LOCAL_HARNESS_MCP default: scripts/artifact_queue_mcp.py in this repo
   --minimal             exec only: ignore user config/MCP for tiny packet checks
+  --sandbox MODE        Codex sandbox mode: workspace-write or read-only
   --ephemeral           exec only: do not persist the Codex session
   --json                exec only: emit Codex JSON event stream
   --output-schema FILE  exec only: request structured output validated by Codex
   --output-last-message FILE
                         exec only: write the final assistant message to FILE
   --fresh-home DIR      create/use a fresh CODEX_HOME A/B lane for this launch
-  CODEX_HOME             default: ~/.codex_lmstudio_safe
+  CODEX_HOME             default: ~/.codex_qwendex_local_safe
 
 Before running this script, start:
   scripts/llm start
@@ -228,7 +240,27 @@ check_mcp_bins() {
 
 bridge_status() {
   local base="$1"
-  curl -fsS "$base/__tabby_proxy_status" 2>/dev/null || return 1
+  local payload
+  payload="$(curl -fsS "$base/status" 2>/dev/null)" || return 1
+  if ! python3 -c '
+import json
+import sys
+
+try:
+    payload = json.load(sys.stdin)
+except (json.JSONDecodeError, UnicodeDecodeError):
+    raise SystemExit(1)
+raise SystemExit(
+    0
+    if isinstance(payload, dict)
+    and payload.get("schema_version") == "qwendex.responses_bridge.status.v1"
+    and payload.get("status") == "ok"
+    else 1
+)
+' <<<"$payload"; then
+    return 1
+  fi
+  printf '%s\n' "$payload"
 }
 
 ensure_backend() {
@@ -236,7 +268,7 @@ ensure_backend() {
 
   if ! check_base "$CODEX_BASE" 2>"$HEALTH_LOG"; then
     echo "Codex-facing endpoint is not healthy at $CODEX_BASE" >&2
-    echo "Start it in another WSL terminal:" >&2
+    echo "Start the local stack in another terminal:" >&2
     echo "  scripts/llm start" >&2
     echo "" >&2
     echo "Then test:" >&2
@@ -258,8 +290,18 @@ ensure_codex_bridge() {
     exit 1
   fi
   BRIDGE_STATUS_JSON="$status_json"
-  if ! printf '%s\n' "$status_json" | grep -q '"target_base": "http://127.0.0.1:4000"'; then
-    echo "Codex bridge is running, but not targeting LiteLLM at http://127.0.0.1:4000:" >&2
+  if ! BRIDGE_STATUS_JSON="$status_json" python3 - <<'PY'
+import json
+import os
+import urllib.parse
+
+payload = json.loads(os.environ["BRIDGE_STATUS_JSON"])
+target = urllib.parse.urlsplit(str(payload.get("target_base") or ""))
+if target.scheme not in {"http", "https"} or not target.hostname:
+    raise SystemExit(1)
+PY
+  then
+    echo "Codex bridge does not report a valid OpenAI-compatible target:" >&2
     printf '%s\n' "$status_json" >&2
     exit 1
   fi
@@ -290,7 +332,7 @@ run_check_only() {
   check_mcp_bins
   echo "Codex-facing endpoint ready: $CODEX_BASE"
   echo "Model visible as: $MODEL"
-  echo "Codex Responses bridge is active in front of LiteLLM."
+  echo "Codex Responses bridge is active in front of an OpenAI-compatible target."
   echo "Context window: $CODEX_CONTEXT_WINDOW"
   echo "Auto compact limit: $CODEX_AUTO_COMPACT_LIMIT"
   echo "Tool output token limit: $TOOL_OUTPUT_TOKEN_LIMIT"
@@ -305,11 +347,11 @@ run_check_only() {
   echo "Local harness MCP: $LOCAL_HARNESS_MCP"
   local codex_bin
   codex_bin="$(resolve_codex_bin)"
-  local mcp_trusted_roots="${LOCAL_QWEN_LOCAL_HARNESS_TRUSTED_ROOTS:-$ROOT:$CODEX_CWD}"
+  local mcp_trusted_roots="${LOCAL_QWEN_LOCAL_HARNESS_TRUSTED_ROOTS:-$CODEX_CWD}"
   (cd "$CODEX_CWD" && CODEX_HOME="$SAFE_HOME" "$codex_bin" \
     -c 'mcp_servers.local-harness.command="python3"' \
     -c "mcp_servers.local-harness.args=[\"$LOCAL_HARNESS_MCP\"]" \
-    -c "mcp_servers.local-harness.cwd=\"$ROOT\"" \
+    -c "mcp_servers.local-harness.cwd=\"$CODEX_CWD\"" \
     -c "mcp_servers.local-harness.env.ARTIFACT_QUEUE_MCP_TRUSTED_ROOTS=\"$mcp_trusted_roots\"" \
     -c 'mcp_servers.local-harness.env.SEARXNG_URL="http://127.0.0.1:6060"' \
     mcp list)
@@ -461,6 +503,13 @@ run_codex() {
   shift || true
 
   prepare_safe_home
+  case "$LOCAL_QWEN_CODEX_SANDBOX_MODE" in
+    workspace-write|read-only) ;;
+    *)
+      echo "Unsupported local Qwen Codex sandbox mode: $LOCAL_QWEN_CODEX_SANDBOX_MODE" >&2
+      exit 2
+      ;;
+  esac
   validate_runtime_budgets
   ensure_backend
   ensure_model_visible
@@ -479,6 +528,7 @@ run_codex() {
   export LOCAL_QWEN_GUARD_PROFILE
   export LOCAL_QWEN_CODEX_MAX_TOOL_CALLS
   export LOCAL_QWEN_CODEX_MAX_WALL_TIME_SECONDS
+  export CODEX_OSS_BASE_URL
   local codex_bin
   codex_bin="$(resolve_codex_bin)"
   local goal_args=()
@@ -509,22 +559,25 @@ run_codex() {
   if [[ -n "$MODEL_CATALOG_JSON" ]]; then
     catalog_args=(-c "model_catalog_json=\"$MODEL_CATALOG_JSON\"")
   fi
-  local mcp_trusted_roots="${LOCAL_QWEN_LOCAL_HARNESS_TRUSTED_ROOTS:-$ROOT:$CODEX_CWD}"
+  local mcp_trusted_roots="${LOCAL_QWEN_LOCAL_HARNESS_TRUSTED_ROOTS:-$CODEX_CWD}"
   local mcp_override_args=(
     -c 'mcp_servers.local-harness.command="python3"'
     -c "mcp_servers.local-harness.args=[\"$LOCAL_HARNESS_MCP\"]"
-    -c "mcp_servers.local-harness.cwd=\"$ROOT\""
+    -c "mcp_servers.local-harness.cwd=\"$CODEX_CWD\""
     -c "mcp_servers.local-harness.env.ARTIFACT_QUEUE_MCP_TRUSTED_ROOTS=\"$mcp_trusted_roots\""
     -c 'mcp_servers.local-harness.env.SEARXNG_URL="http://127.0.0.1:6060"'
   )
+  if [[ "$mode" == "exec" && "$CODEX_EXEC_MINIMAL" == "1" ]]; then
+    mcp_override_args=()
+  fi
 
   if [[ "$mode" == "exec" ]]; then
     local exec_args=()
     local timeout_prefix=()
     if [[ "$CODEX_EXEC_MINIMAL" == "1" ]]; then
-      exec_args+=(--ignore-user-config)
+      exec_args+=(--ignore-user-config -c 'mcp_servers={}')
     fi
-    exec_args+=(--sandbox workspace-write)
+    exec_args+=(--sandbox "$LOCAL_QWEN_CODEX_SANDBOX_MODE")
     case "$CODEX_EXEC_EPHEMERAL" in
       1|true|TRUE|yes|YES|on|ON) exec_args+=(--ephemeral) ;;
     esac
@@ -567,7 +620,7 @@ run_codex() {
     "${repo_check_args[@]}" \
     "${add_dir_args[@]}" \
     "${mcp_override_args[@]}" \
-    --sandbox workspace-write \
+    --sandbox "$LOCAL_QWEN_CODEX_SANDBOX_MODE" \
     --oss \
     --local-provider lmstudio \
     "${catalog_args[@]}" \
@@ -612,6 +665,15 @@ main() {
         ;;
       --minimal)
         CODEX_EXEC_MINIMAL=1
+        shift
+        ;;
+      --sandbox)
+        shift
+        if [[ "$#" -lt 1 ]]; then
+          echo "--sandbox requires workspace-write or read-only" >&2
+          exit 2
+        fi
+        LOCAL_QWEN_CODEX_SANDBOX_MODE="$1"
         shift
         ;;
       --json)

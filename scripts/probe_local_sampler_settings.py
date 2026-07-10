@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import time
 import urllib.request
@@ -11,7 +12,7 @@ from typing import Any
 
 
 DEFAULT_BASE = "http://127.0.0.1:4000/v1"
-DEFAULT_MODEL = "Qwopucode-full-v15-27B-FP8-Block-i1-Q4_K_M"
+DEFAULT_MODEL = os.environ.get("LOCAL_QWEN_MODEL", "qwen-local")
 
 
 PROBES = {

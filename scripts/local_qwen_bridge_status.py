@@ -43,6 +43,8 @@ def build_status_payload(
     synthetic_response_handlers: list[str],
 ) -> dict[str, Any]:
     return {
+        "schema_version": "qwendex.responses_bridge.status.v1",
+        "status": "ok",
         "version": version,
         "bridge_package_version": BRIDGE_PACKAGE_VERSION,
         **runtime_guard_status_payload(runtime_guard),

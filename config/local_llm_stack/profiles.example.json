@@ -26,7 +26,7 @@
       "notes": "Set LLAMACPP_MODEL_PATH to your local GGUF.",
       "service_overrides": {
         "textgen": {
-          "command": "LLAMACPP_MODEL_PATH='{home}/models/qwen-coder/example-model.gguf' LLAMACPP_MODEL_ALIAS='qwen-local' LLAMACPP_CTX_SIZE=32768 scripts/run_llamacpp_qwopucode_gguf.sh",
+          "command": "LLAMACPP_MODEL_PATH='{home}/models/qwen-coder/example-model.gguf' LLAMACPP_MODEL_ALIAS='qwen-local' LLAMACPP_CTX_SIZE=32768 scripts/run_llamacpp_qwen_gguf.sh",
           "health_url": "http://127.0.0.1:5000/v1/models",
           "models_url": "http://127.0.0.1:5000/v1/models",
           "port": 5000
@@ -42,7 +42,7 @@
       "notes": "Set VLLM_MODEL_PATH and VLLM_TOKENIZER for your local model.",
       "service_overrides": {
         "textgen": {
-          "command": "VLLM_MODEL_PATH='{home}/models/qwen-coder/example-model.gguf' VLLM_TOKENIZER='{home}/models/qwen-coder/tokenizer' VLLM_MODEL_ALIAS='qwen-local' VLLM_MAX_MODEL_LEN=32768 scripts/run_vllm_qwopucode_gguf.sh",
+          "command": "VLLM_MODEL_PATH='{home}/models/qwen-coder/example-model.gguf' VLLM_TOKENIZER='{home}/models/qwen-coder/tokenizer' VLLM_MODEL_ALIAS='qwen-local' VLLM_MAX_MODEL_LEN=32768 scripts/run_vllm_qwen_gguf.sh",
           "health_url": "http://127.0.0.1:5000/v1/models",
           "models_url": "http://127.0.0.1:5000/v1/models",
           "port": 5000

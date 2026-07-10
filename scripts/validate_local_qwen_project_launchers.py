@@ -22,7 +22,8 @@ REQUIRED_SNIPPETS = (
     "LOCAL_QWEN_CODEX_MAX_TOOL_CALLS",
     "ensure_bridge_runtime_guard_matches",
     "check_mcp_bins",
-    "--sandbox workspace-write",
+    'LOCAL_QWEN_CODEX_SANDBOX_MODE="${LOCAL_QWEN_CODEX_SANDBOX_MODE:-workspace-write}"',
+    '--sandbox "$LOCAL_QWEN_CODEX_SANDBOX_MODE"',
     "model_context_window=$CODEX_CONTEXT_WINDOW",
     "model_auto_compact_token_limit=$CODEX_AUTO_COMPACT_LIMIT",
 )

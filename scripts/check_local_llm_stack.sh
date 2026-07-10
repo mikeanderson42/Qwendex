@@ -37,8 +37,27 @@ else
 fi
 
 echo "=== Codex responses bridge status ==="
-if body="$(curl -fsS --max-time 3 "$CODEX_BASE/__tabby_proxy_status" 2>/dev/null)"; then
-  printf '%s\n' "$body" | python3 -m json.tool | head -80
+if body="$(curl -fsS --max-time 3 "$CODEX_BASE/status" 2>/dev/null)"; then
+  if printf '%s\n' "$body" | python3 -c '
+import json
+import sys
+
+try:
+    payload = json.load(sys.stdin)
+except (json.JSONDecodeError, UnicodeDecodeError):
+    raise SystemExit(1)
+raise SystemExit(
+    0
+    if isinstance(payload, dict)
+    and payload.get("schema_version") == "qwendex.responses_bridge.status.v1"
+    and payload.get("status") == "ok"
+    else 1
+)
+'; then
+    printf '%s\n' "$body" | python3 -m json.tool | head -80
+  else
+    echo "Codex bridge returned an invalid status contract at $CODEX_BASE/status"
+  fi
 else
   echo "Codex bridge status endpoint not available at $CODEX_BASE"
 fi

@@ -11,7 +11,7 @@ Qwendex has one public boundary and several internal parts.
 | Tool server | Delegates bounded MCP-backed workflows with trusted-root checks |
 | Guard | Detects duplicate-read, loop, malformed markup, and configured budget issues |
 | Evidence | Writes receipts, indexes ledger metadata, and exposes eval summaries |
-| Learn | Uses SkillOpt to harvest, dry-run, stage, and audit proposals |
+| Learn | Validates a built-in non-mutating mock contract, inspects staged proposals, and delegates explicit external runs to SkillOpt |
 | Manager | Coordinates subagent lanes, shortcut policy, and stale-agent cleanup |
 | Seats | Defines `primary`, `qwen`, `audit`, `release`, and `sandbox` authority |
 

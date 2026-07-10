@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-LOGDIR="$HOME/.codex_lmstudio_safe/logs"
+LOGDIR="$HOME/.codex_qwendex_local_safe/logs"
 mkdir -p "$LOGDIR"
 
 echo "=== listeners ==="

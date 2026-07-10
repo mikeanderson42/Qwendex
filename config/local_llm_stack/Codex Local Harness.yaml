@@ -78,10 +78,6 @@ context: |
   For local codebase tasks, prefer local files over web/search unless outside freshness is explicitly required.
   When the user asks for exact items only, output only those items and stop.
   Stop once the evidence is sufficient; do not continue exploring after the answer is already supported.
-  For STAR support-track work, treat live blocker state as operational routing, not scientific evidence.
-  Do not reopen frozen lanes unless the user explicitly asks.
-  When a named handoff packet exists, treat it as the primary context surface and preserve its move-class framing unless local evidence contradicts it.
-
   Qwendex local harness behavior:
   Keep local-Qwen work bounded and receipt-backed. Use the Qwendex CLI for routing,
   checks, offline evals, and guarded local execution.

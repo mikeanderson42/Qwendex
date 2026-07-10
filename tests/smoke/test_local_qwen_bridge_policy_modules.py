@@ -94,6 +94,8 @@ def test_bridge_status_payload_is_constructed_from_policy_module():
         synthetic_response_handlers=["exact_helper_completion"],
     )
 
+    assert payload["schema_version"] == "qwendex.responses_bridge.status.v1"
+    assert payload["status"] == "ok"
     assert payload["version"] == "test-version"
     assert payload["context_limit_tokens"] == 65536
     assert payload["effective_thinking_budget"] == 0
@@ -106,7 +108,7 @@ def test_document_section_recovery_parses_terminal_receipt_and_finalize_call():
     recovery = load_script_module("local_qwen_document_section_recovery")
 
     events = recovery.parse_section_upsert_progress_events(
-        "ITEM_10_ALREADY_PRESENT monetization_research/digital_products.md "
+        "ITEM_3_ALREADY_PRESENT docs/example.md "
         "bytes=13444 action=already_present next_item=None\n"
     )
     final_answer = recovery.terminal_section_upsert_final_answer(events)
@@ -117,8 +119,8 @@ def test_document_section_recovery_parses_terminal_receipt_and_finalize_call():
 
     assert events == [
         {
-            "marker": "ITEM_10_ALREADY_PRESENT",
-            "file": "monetization_research/digital_products.md",
+            "marker": "ITEM_3_ALREADY_PRESENT",
+            "file": "docs/example.md",
             "bytes": 13444,
             "action": "already_present",
             "next_item": None,

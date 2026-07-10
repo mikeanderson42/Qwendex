@@ -242,7 +242,7 @@ def case_bridge_status_contract_check(repo_root: Path, sandbox: Path, live: bool
         alternating_tool_call_pattern_cycles=3,
         shell_command_stagnation_threshold=8,
         upstream_timeout_seconds=600,
-        synthetic_response_handlers=["exact_helper_completion"],
+        synthetic_response_handlers=["runtime_guard"],
     )
     if payload.get("context_limit_tokens") >= 65536 and payload.get("runtime_guard_enabled") is True:
         return pass_result("bridge status payload satisfies offline contract")
@@ -286,7 +286,9 @@ def case_bridge_v2_package_contract(repo_root: Path, sandbox: Path, live: bool) 
     package = import_bridge_package("")
     responses = import_bridge_package("responses")
     parsing = import_bridge_package("tool_parsing")
-    proxy_text = (repo_root / "scripts" / "tabbyapi_responses_proxy.py").read_text(encoding="utf-8")
+    proxy_text = (repo_root / "scripts" / "qwendex_responses_bridge.py").read_text(
+        encoding="utf-8"
+    )
     calls, remaining = parsing.parse_tool_calls(
         "<function=exec_command><parameter=cmd>printf ok</parameter></function>"
     )
@@ -383,7 +385,9 @@ def case_hook_audit_output(repo_root: Path, sandbox: Path, live: bool) -> dict[s
 
 def case_fresh_home_ab_probe(repo_root: Path, sandbox: Path, live: bool) -> dict[str, Any]:
     fresh_home = sandbox / "fresh-codex-home"
-    primary_home = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex_lmstudio_safe")))
+    primary_home = Path(
+        os.environ.get("CODEX_HOME", str(Path.home() / ".codex_qwendex_local_safe"))
+    )
     fresh_home.mkdir()
     (fresh_home / "config.toml").write_text(
         'web_search = "disabled"\npersonality = "none"\n',
