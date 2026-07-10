@@ -1702,7 +1702,7 @@ def test_ci_workflow_emits_attestation_and_runs_actual_artifact_and_downstream_i
         "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1",
         "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10",
         "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1",
-        "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+        "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
     ]
     assert workflow.count("runs-on: ubuntu-24.04") == 2
     assert 'python-version: "3.11"' in workflow
