@@ -17,10 +17,9 @@ Read only the files named by the task or the smallest files needed to verify the
 current claim. Prefer Qwendex receipts and JSON summaries over long transcripts.
 After orientation, answer `STARTUP_READ_COMPACT_OK`.
 
-For goal/prompt generation, "the goal skill", or a pasted Codex closeout that
-needs the next goal, use `.codex/skills/operator-goal-compiler/` and the tracked
-Jarvis project guide at
-`/home/tweak/repohome/jarvis/docs/jarvis/CHATGPT_PROJECT_GUIDE.md`.
+For Qwendex goal/prompt generation, "the goal skill", or a pasted Codex
+closeout that needs the next goal, use
+`.codex/skills/operator-goal-compiler/`.
 
 ## Dev Worktree
 

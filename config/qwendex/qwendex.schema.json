@@ -3,26 +3,22 @@
   "$id": "https://qwendex.local/schema/qwendex.config.v1.json",
   "title": "Qwendex Config",
   "type": "object",
-  "required": ["schema_version", "version", "default_seat", "routing", "seats", "guard", "receipts", "state", "eval", "learning", "orchestration"],
+  "required": ["schema_version", "version", "default_seat", "routing", "context", "guard", "sandbox", "receipts", "state", "eval", "learning", "orchestration", "seats"],
+  "additionalProperties": false,
   "properties": {
-    "schema_version": {
-      "const": "qwendex.config.v1"
-    },
-    "version": {
-      "type": "string"
-    },
-    "default_seat": {
-      "enum": ["primary", "qwen", "audit", "release", "sandbox"]
-    },
+    "schema_version": {"const": "qwendex.config.v1"},
+    "version": {"type": "string"},
+    "default_seat": {"enum": ["primary", "qwen", "audit", "release", "sandbox"]},
     "routing": {
       "type": "object",
       "required": ["mode", "prefer_local_qwen_when_available", "local_probe_url", "local_model", "fallback_seat", "probe_timeout_seconds", "prefer_for_task_classes", "primary_required_for_task_classes"],
+      "additionalProperties": false,
       "properties": {
         "mode": {"enum": ["manual", "token_saver", "primary_only"]},
         "prefer_local_qwen_when_available": {"type": "boolean"},
         "local_probe_url": {"type": "string", "pattern": "^https?://"},
         "local_model": {"type": "string", "minLength": 1},
-        "fallback_seat": {"enum": ["primary", "qwen", "audit", "release", "sandbox"]},
+        "fallback_seat": {"enum": ["primary", "audit", "release"]},
         "probe_timeout_seconds": {"type": "number", "exclusiveMinimum": 0, "maximum": 30},
         "prefer_for_task_classes": {
           "type": "array",
@@ -36,6 +32,8 @@
     },
     "context": {
       "type": "object",
+      "required": ["compact_limit", "max_output_tokens", "tool_output_token_limit", "reminder_tool_call_threshold", "reminder_repeat_interval", "phase_boundary_labels"],
+      "additionalProperties": false,
       "properties": {
         "compact_limit": {"type": "integer", "minimum": 1024},
         "max_output_tokens": {"type": "integer", "minimum": 256},
@@ -50,104 +48,82 @@
     },
     "guard": {
       "type": "object",
-      "required": ["profile", "max_wall_time_seconds", "max_tool_calls"],
+      "required": ["max_wall_time_seconds", "max_tool_calls", "markers"],
+      "additionalProperties": false,
       "properties": {
-        "profile": {"enum": ["balanced", "max_safety"]},
-        "max_wall_time_seconds": {"type": "integer"},
-        "max_tool_calls": {"type": "integer"},
+        "max_wall_time_seconds": {"type": "integer", "minimum": -1},
+        "max_tool_calls": {"type": "integer", "minimum": -1},
         "markers": {
           "type": "array",
-          "items": {"type": "string"}
+          "items": {"type": "string", "minLength": 1}
         }
       }
     },
     "sandbox": {
       "type": "object",
+      "required": ["mode"],
+      "additionalProperties": false,
       "properties": {
-        "mode": {"enum": ["workspace-write", "read-only"]},
-        "trusted_roots": {
-          "type": "array",
-          "items": {"type": "string"}
-        }
+        "mode": {"enum": ["workspace-write", "read-only"]}
       }
     },
     "receipts": {
       "type": "object",
       "required": ["dir", "ledger"],
+      "additionalProperties": false,
       "properties": {
-        "dir": {"type": "string"},
-        "ledger": {"type": "string"}
+        "dir": {"type": "string", "minLength": 1},
+        "ledger": {"type": "string", "minLength": 1}
       }
     },
     "state": {
       "type": "object",
       "required": ["db"],
+      "additionalProperties": false,
       "properties": {
-        "db": {"type": "string"}
+        "db": {"type": "string", "minLength": 1}
       }
     },
     "eval": {
       "type": "object",
-      "required": ["mode", "default_case"],
+      "required": ["default_case"],
+      "additionalProperties": false,
       "properties": {
-        "mode": {"enum": ["offline-first", "live-required"]},
-        "default_case": {"type": "string"},
-        "live_requires_running_stack": {"type": "boolean"}
+        "default_case": {"type": "string", "minLength": 1}
       }
     },
     "learning": {
       "type": "object",
-      "required": ["mode", "default_backend", "codex_budget_requires_approval"],
+      "required": ["mode", "default_backend"],
+      "additionalProperties": false,
       "properties": {
-        "mode": {"enum": ["stage_only", "manual", "disabled"]},
-        "default_backend": {"enum": ["mock", "codex"]},
-        "auto_harvest": {"type": "boolean"},
-        "auto_stage_safe_proposals": {"type": "boolean"},
-        "codex_budget_requires_approval": {"type": "boolean"}
+        "mode": {"enum": ["stage_only", "disabled"]},
+        "default_backend": {"enum": ["mock", "codex"]}
       }
     },
     "orchestration": {
       "type": "object",
-      "required": ["mode", "manager_deploy_policy", "manager_only_available", "shortcut", "shortcut_command", "max_subagents", "stale_after_minutes", "local_subagents", "kaveman", "mode_order", "mode_profiles", "estimator", "local_qwen_eligibility", "escalation_thresholds", "stale_session_thresholds_minutes", "close_stale_policy"],
+      "required": ["mode", "manager_deploy_policy", "local_subagents", "kaveman", "mode_profiles", "local_qwen_eligibility", "escalation_thresholds", "stale_session_thresholds_minutes"],
+      "additionalProperties": false,
       "properties": {
         "mode": {"enum": ["manual", "off", "auto", "lite", "medium", "heavy", "manager", "manager_only"]},
         "manager_deploy_policy": {"enum": ["auto", "disabled"]},
-        "manager_only_available": {"type": "boolean"},
-        "shortcut": {"type": "string"},
-        "shortcut_command": {"type": "string"},
-        "max_subagents": {"type": "integer", "minimum": 1, "maximum": 10},
-        "stale_after_minutes": {"type": "integer", "minimum": 5, "maximum": 240},
         "local_subagents": {
           "type": "object",
-          "required": ["enabled", "shortcut", "shortcut_command"],
+          "required": ["enabled"],
+          "additionalProperties": false,
           "properties": {
-            "enabled": {"type": "boolean"},
-            "shortcut": {"type": "string"},
-            "shortcut_command": {"type": "string"}
+            "enabled": {"type": "boolean"}
           }
         },
         "kaveman": {
           "type": "object",
-          "required": ["enabled", "shortcut", "shortcut_command", "directive"],
+          "required": ["enabled", "directive"],
+          "additionalProperties": false,
           "properties": {
             "enabled": {"type": "boolean"},
-            "shortcut": {"type": "string"},
-            "shortcut_command": {"type": "string"},
             "directive": {"type": "string", "minLength": 1}
           }
-        },
-        "mode_order": {
-          "type": "array",
-          "prefixItems": [
-            {"const": "off"},
-            {"const": "auto"},
-            {"const": "lite"},
-            {"const": "medium"},
-            {"const": "heavy"},
-            {"const": "manager"}
-          ],
-          "minItems": 6,
-          "maxItems": 6
         },
         "mode_profiles": {
           "type": "object",
@@ -162,21 +138,10 @@
             "manager": {"$ref": "#/$defs/managerModeProfile"}
           }
         },
-        "estimator": {
-          "type": "object",
-          "required": ["enabled", "skill", "model", "reasoning", "max_input_tokens", "max_output_tokens"],
-          "properties": {
-            "enabled": {"type": "boolean"},
-            "skill": {"type": "string"},
-            "model": {"type": "string"},
-            "reasoning": {"enum": ["low", "medium", "high", "xhigh"]},
-            "max_input_tokens": {"type": "integer", "minimum": 64, "maximum": 20000},
-            "max_output_tokens": {"type": "integer", "minimum": 64, "maximum": 20000}
-          }
-        },
         "local_qwen_eligibility": {
           "type": "object",
           "required": ["allowed_task_classes", "denied_task_classes", "max_risk"],
+          "additionalProperties": false,
           "properties": {
             "allowed_task_classes": {
               "type": "array",
@@ -191,6 +156,8 @@
         },
         "escalation_thresholds": {
           "type": "object",
+          "required": ["high", "xhigh"],
+          "additionalProperties": false,
           "properties": {
             "high": {
               "type": "array",
@@ -204,62 +171,104 @@
         },
         "stale_session_thresholds_minutes": {
           "type": "object",
-          "required": ["auto", "lite", "medium", "heavy", "manager"],
+          "required": ["off", "auto", "lite", "medium", "heavy", "manager"],
+          "additionalProperties": false,
           "properties": {
+            "off": {"type": "integer", "minimum": 5, "maximum": 240},
             "auto": {"type": "integer", "minimum": 5, "maximum": 240},
             "lite": {"type": "integer", "minimum": 5, "maximum": 240},
             "medium": {"type": "integer", "minimum": 5, "maximum": 240},
             "heavy": {"type": "integer", "minimum": 5, "maximum": 240},
             "manager": {"type": "integer", "minimum": 5, "maximum": 240}
           }
-        },
-        "close_stale_policy": {"type": "string"},
-        "auto_deploy_when": {
-          "type": "array",
-          "items": {"type": "string"}
-        },
-        "manager_responsibilities": {
-          "type": "array",
-          "items": {"type": "string"}
-        },
-        "borrowed_patterns": {
-          "type": "array",
-          "items": {"type": "string"}
         }
       }
-    },
-    "mcp_tools": {
-      "type": "array",
-      "items": {"type": "string"}
     },
     "seats": {
       "type": "object",
       "required": ["primary", "qwen", "audit", "release", "sandbox"],
-      "additionalProperties": {
-        "type": "object",
-        "required": ["model", "authority", "backend", "context_window", "guard_profile"],
-        "properties": {
-          "model": {"type": "string"},
-          "authority": {"type": "string"},
-          "backend": {"type": "string"},
-          "context_window": {"type": "integer", "minimum": 1024},
-          "compact_limit": {"type": "integer", "minimum": 1024},
-          "guard_profile": {"enum": ["balanced", "max_safety"]},
-          "prompt_template": {"type": "string"}
-        }
+      "additionalProperties": false,
+      "properties": {
+        "primary": {"$ref": "#/$defs/primarySeat"},
+        "qwen": {"$ref": "#/$defs/qwenSeat"},
+        "audit": {"$ref": "#/$defs/auditSeat"},
+        "release": {"$ref": "#/$defs/releaseSeat"},
+        "sandbox": {"$ref": "#/$defs/sandboxSeat"}
       }
     }
   },
   "$defs": {
     "managerModeProfile": {
       "type": "object",
-      "required": ["label", "offload_target", "max_subagents"],
+      "required": ["label", "max_subagents"],
+      "additionalProperties": false,
       "properties": {
-        "label": {"type": "string"},
-        "offload_target": {"type": "string"},
+        "label": {"type": "string", "minLength": 1},
         "max_subagents": {"type": "integer", "minimum": 1, "maximum": 10}
       }
+    },
+    "primarySeat": {
+      "type": "object",
+      "required": ["model", "authority", "backend", "context_window", "guard_profile"],
+      "additionalProperties": false,
+      "properties": {
+        "model": {"type": "string", "minLength": 1},
+        "authority": {"const": "release_review"},
+        "backend": {"const": "codex"},
+        "context_window": {"type": "integer", "minimum": 1024},
+        "compact_limit": {"type": "integer", "minimum": 1024},
+        "guard_profile": {"enum": ["balanced", "max_safety"]}
+      }
+    },
+    "qwenSeat": {
+      "type": "object",
+      "required": ["authority", "backend", "context_window", "guard_profile"],
+      "additionalProperties": false,
+      "properties": {
+        "authority": {"const": "bounded_operator"},
+        "backend": {"const": "local-responses-adapter"},
+        "context_window": {"type": "integer", "minimum": 1024},
+        "compact_limit": {"type": "integer", "minimum": 1024},
+        "guard_profile": {"enum": ["balanced", "max_safety"]}
+      }
+    },
+    "auditSeat": {
+      "type": "object",
+      "required": ["model", "authority", "backend", "context_window", "guard_profile"],
+      "additionalProperties": false,
+      "properties": {
+        "model": {"type": "string", "minLength": 1},
+        "authority": {"const": "read_only_review"},
+        "backend": {"const": "codex"},
+        "context_window": {"type": "integer", "minimum": 1024},
+        "compact_limit": {"type": "integer", "minimum": 1024},
+        "guard_profile": {"enum": ["balanced", "max_safety"]}
+      }
+    },
+    "releaseSeat": {
+      "type": "object",
+      "required": ["model", "authority", "backend", "context_window", "guard_profile"],
+      "additionalProperties": false,
+      "properties": {
+        "model": {"type": "string", "minLength": 1},
+        "authority": {"const": "public_release_acceptance"},
+        "backend": {"const": "codex"},
+        "context_window": {"type": "integer", "minimum": 1024},
+        "compact_limit": {"type": "integer", "minimum": 1024},
+        "guard_profile": {"enum": ["balanced", "max_safety"]}
+      }
+    },
+    "sandboxSeat": {
+      "type": "object",
+      "required": ["authority", "backend", "context_window", "guard_profile"],
+      "additionalProperties": false,
+      "properties": {
+        "authority": {"const": "isolated_probe"},
+        "backend": {"const": "local-responses-adapter"},
+        "context_window": {"type": "integer", "minimum": 1024},
+        "compact_limit": {"type": "integer", "minimum": 1024},
+        "guard_profile": {"enum": ["balanced", "max_safety"]}
+      }
     }
-  },
-  "additionalProperties": false
+  }
 }

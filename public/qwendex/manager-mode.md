@@ -84,6 +84,15 @@ so it records a `direct_single_writer` exception with
 `interactive_prompt_unknown_prelaunch`; hooks and Stop/finalization update the
 same ledger when prompt and validation evidence are available.
 
+On each root `UserPromptSubmit`, Qwendex attaches the real prompt to a turn
+decision under the exported launch ledger (the Codex hook's own `session_id` is
+not used as a manager id), recomputes the estimate and team plan, and injects
+runtime-id registration templates. The first turn fills the preflight record;
+later turns get a fresh ledger id and `agent_task_id` keyed by Codex `turn_id`,
+so old verifier evidence cannot satisfy a new edit. Every spawned worker must
+be registered with the exact agent id returned by Codex so its `SubagentStop`
+event joins the current turn ledger.
+
 Missing or incomplete Qwendex Codex hooks block write-capable Manager Mode
 launches by default:
 
@@ -108,12 +117,12 @@ for the hook-status decision.
 ## Mode Meaning
 
 - `Off`: no manager delegation duty.
-- `Auto`: deterministic checks plus the bounded estimator pick a mode.
-- `Lite`: target 10-20% subagent offload.
-- `Medium`: target 25-45% subagent offload.
-- `Heavy`: target 50-75% subagent offload.
-- `Manager Mode`: target 85-95% offload; default `max_subagents` is 10, and
-  the main session coordinates, reviews, and validates.
+- `Auto`: deterministic checks recommend a mode; capacity is 4.
+- `Lite`: bounded coordination with capacity 2.
+- `Medium`: normal multi-lane coordination with capacity 4.
+- `Heavy`: verification-oriented coordination with capacity 6.
+- `Manager Mode`: full coordination capacity 10; the main session coordinates,
+  reviews, and validates.
 
 Legacy compatibility remains: the `manager_only` spelling maps to
 `Manager Mode`.
@@ -147,13 +156,13 @@ Local state also has two dimensions:
 `Local: [Unavailable]` means intent is on but availability was not proven, so
 routes fall back to primary.
 
-## Auto Estimator
+## Deterministic Estimate
 
-Auto uses deterministic signals first. If the task is ambiguous, it calls the
-`qwendex-auto-manager-estimator` skill with a small prompt. The estimator
-defaults to GPT-5.5 medium and returns bounded JSON: complexity, risk, likely
-file scope, validation depth, subagent usefulness, recommended mode, confidence,
-and any lane that needs high/xhigh reasoning.
+`manager estimate` uses only bounded, deterministic CLI rules. It does not call
+a model or skill. The JSON explicitly records `kind: deterministic_heuristic`,
+`model_invoked: false`, and `skill_invoked: false`, then reports complexity,
+risk, likely file scope, validation depth, subagent usefulness, recommended
+mode, confidence, and any lane that needs high/xhigh reasoning.
 
 High/xhigh is reserved for specific architecture, security, release, protocol,
 credential, or migration lanes. The main session is never escalated by Auto.
@@ -195,8 +204,11 @@ outcomes and artifact links, not full raw transcripts.
 
 Default manager settings:
 
-- `max_subagents`: mode-specific, 2 to 10. The Qwendex product ceiling is 10.
+- `max_subagents`: mode-specific, 1 to 10. The Qwendex product ceiling is 10;
+  the same value drives manager registration and `AgentPolicy.max_threads`.
 - `stale_after_minutes`: mode-specific, 15 to 45.
+- Active subagent limits and single-writer locks apply per canonical repository
+  root, so independent repositories do not consume or block each other's lanes.
 - Close completed agents after findings are integrated.
 - Status refreshes reconcile idle read-only agents after the stale window.
 - Do not close an active writer until its changes are integrated or stopped;
@@ -206,7 +218,7 @@ Default manager settings:
 Durable lifecycle commands:
 
 ```bash
-scripts/qwendex manager assign --agent-id reviewer-1 --lane review --task-id task_... --owner Rawls --write-surface read-only --stop-condition "return findings" --json
+scripts/qwendex manager assign --agent-id reviewer-1 --lane review --task-id task_... --owner reviewer --write-surface read-only --stop-condition "return findings" --json
 scripts/qwendex manager heartbeat --agent-id reviewer-1 --json
 scripts/qwendex manager status --json
 scripts/qwendex manager close --agent-id reviewer-1 --reason integrated --json
@@ -289,6 +301,12 @@ Reconcile classifies sessions as `validated`,
 `closed_without_validation_evidence`, `stale_pending_validation`,
 `orphaned_session`, or `needs_manual_review`. It does not mark stale historical
 sessions validated without evidence.
+
+Status and health use the full ledger for aggregate debt counts while returning
+bounded classification samples. Operational active/stale health is scoped to
+the current repository. Legacy rows without repository metadata remain visible
+as `legacy_unscoped_count`; Qwendex neither assigns them to a project nor marks
+them validated during migration.
 
 ## High-Value Add
 

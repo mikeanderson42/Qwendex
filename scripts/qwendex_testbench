@@ -3,13 +3,23 @@ set -euo pipefail
 
 QWENDEX_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEFAULT_PROJECT="$PWD"
-if [[ -d "$HOME/thehub" ]]; then
-  DEFAULT_PROJECT="$HOME/thehub"
-fi
 PROJECT_ROOT="${QWENDEX_BENCH_PROJECT:-$DEFAULT_PROJECT}"
 BENCH_ROOT="${QWENDEX_BENCH_ROOT:-$HOME/qwendex_testbench/current}"
 CODEX_HOME="$BENCH_ROOT/codex_home"
 SESSION="${QWENDEX_BENCH_SESSION:-qwendex-bench}"
+
+shell_quote() {
+  printf '%q' "$1"
+}
+
+toml_quote() {
+  python3 - "$1" <<'PY'
+import json
+import sys
+
+print(json.dumps(sys.argv[1], ensure_ascii=False))
+PY
+}
 
 export QWENDEX_BENCH_ROOT="$BENCH_ROOT"
 export QWENDEX_ROOT
@@ -24,12 +34,12 @@ else
   export QWENDEX_LLMSTACK_CONFIG="$QWENDEX_ROOT/config/local_llm_stack/stack_manager.json"
 fi
 export QWENDEX_EXEC_CWD="$PROJECT_ROOT"
-export QWENDEX_MCP_TRUSTED_ROOTS="$BENCH_ROOT:$QWENDEX_ROOT:$PROJECT_ROOT"
+export QWENDEX_MCP_TRUSTED_ROOTS="$BENCH_ROOT:$PROJECT_ROOT"
 export LOCAL_QWEN_CODEX_CWD="$PROJECT_ROOT"
-export LOCAL_QWEN_CODEX_ADD_DIRS="$BENCH_ROOT:$QWENDEX_ROOT"
+export LOCAL_QWEN_CODEX_ADD_DIRS="$BENCH_ROOT:$PROJECT_ROOT"
 export LOCAL_QWEN_MODEL_CATALOG_JSON="$QWENDEX_ROOT/config/local_llm_stack/qwen_local_model_catalog.json"
 export LOCAL_QWEN_LOCAL_HARNESS_MCP="$QWENDEX_ROOT/scripts/artifact_queue_mcp.py"
-export LOCAL_QWEN_LOCAL_HARNESS_TRUSTED_ROOTS="$BENCH_ROOT:$QWENDEX_ROOT:$PROJECT_ROOT"
+export LOCAL_QWEN_LOCAL_HARNESS_TRUSTED_ROOTS="$BENCH_ROOT:$PROJECT_ROOT"
 export PATH="$BENCH_ROOT/bin:$QWENDEX_ROOT:$QWENDEX_ROOT/scripts:$PATH"
 
 QWENDEX="$QWENDEX_ROOT/scripts/qwendex"
@@ -39,9 +49,9 @@ FULL_MODEL="${QWENDEX_BENCH_FULL_MODEL:-gpt-5.5}"
 FULL_REASONING="${QWENDEX_BENCH_FULL_REASONING:-high}"
 MCP_OVERRIDE_ARGS=(
   -c 'mcp_servers.local-harness.command="python3"'
-  -c "mcp_servers.local-harness.args=[\"$QWENDEX_ROOT/scripts/artifact_queue_mcp.py\"]"
-  -c "mcp_servers.local-harness.cwd=\"$QWENDEX_ROOT\""
-  -c "mcp_servers.local-harness.env.ARTIFACT_QUEUE_MCP_TRUSTED_ROOTS=\"$BENCH_ROOT:$QWENDEX_ROOT:$PROJECT_ROOT\""
+  -c "mcp_servers.local-harness.args=[$(toml_quote "$QWENDEX_ROOT/scripts/artifact_queue_mcp.py")]"
+  -c "mcp_servers.local-harness.cwd=$(toml_quote "$PROJECT_ROOT")"
+  -c "mcp_servers.local-harness.env.ARTIFACT_QUEUE_MCP_TRUSTED_ROOTS=$(toml_quote "$BENCH_ROOT:$PROJECT_ROOT")"
   -c 'mcp_servers.local-harness.env.SEARXNG_URL="http://127.0.0.1:6060"'
 )
 
@@ -54,26 +64,45 @@ require_project() {
   [[ -d "$PROJECT_ROOT" ]] || die "project folder does not exist: $PROJECT_ROOT"
 }
 
+write_exec_wrapper() {
+  local output="$1"
+  local target="$2"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'exec %s "$@"\n' "$(shell_quote "$target")"
+  } > "$output"
+}
+
+write_codex_config() {
+  local config_tmp="$CODEX_HOME/config.toml.tmp.$$"
+  {
+    cat <<'EOF'
+approval_policy = "never"
+sandbox_mode = "workspace-write"
+persistent_instructions = "Qwendex Test Bench active. QWENDEX_ROOT, QWENDEX_STATE_DB, QWENDEX_RESULTS_ROOT, QWENDEX_EXEC_CWD, and QWENDEX_BENCH_ROOT are set by the launcher. Use Qwendex CLI commands for status, routing, smoke checks, receipts, and manager state."
+
+[features]
+multi_agent = true
+EOF
+    printf '\n[projects.%s]\ntrust_level = "trusted"\n' "$(toml_quote "$PROJECT_ROOT")"
+    if [[ "$BENCH_ROOT" != "$PROJECT_ROOT" ]]; then
+      printf '\n[projects.%s]\ntrust_level = "trusted"\n' "$(toml_quote "$BENCH_ROOT")"
+    fi
+  } > "$config_tmp"
+  mv "$config_tmp" "$CODEX_HOME/config.toml"
+}
+
 prepare_bench_home() {
   mkdir -p "$BENCH_ROOT/state" "$QWENDEX_RESULTS_ROOT" "$QWENDEX_META_ROOT" "$CODEX_HOME/logs"
   mkdir -p "$BENCH_ROOT/bin"
-  cat > "$BENCH_ROOT/bin/qwendex-bench" <<EOF
-#!/usr/bin/env bash
-exec "$QWENDEX_ROOT/scripts/qwendex_testbench" "\$@"
-EOF
-  cat > "$BENCH_ROOT/bin/qwendex" <<EOF
-#!/usr/bin/env bash
-exec "$QWENDEX_ROOT/scripts/qwendex" "\$@"
-EOF
-  cat > "$BENCH_ROOT/bin/llmstack" <<EOF
-#!/usr/bin/env bash
-exec "$QWENDEX_ROOT/llmstack" "\$@"
-EOF
-  cat > "$BENCH_ROOT/bin/qwebdex-bench" <<EOF
-#!/usr/bin/env bash
-echo "qwebdex-bench is a typo; running qwendex-bench instead." >&2
-exec "$QWENDEX_ROOT/scripts/qwendex_testbench" "\$@"
-EOF
+  write_exec_wrapper "$BENCH_ROOT/bin/qwendex-bench" "$QWENDEX_ROOT/scripts/qwendex_testbench"
+  write_exec_wrapper "$BENCH_ROOT/bin/qwendex" "$QWENDEX_ROOT/scripts/qwendex"
+  write_exec_wrapper "$BENCH_ROOT/bin/llmstack" "$QWENDEX_ROOT/llmstack"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf '%s\n' 'echo "qwebdex-bench is a typo; running qwendex-bench instead." >&2'
+    printf 'exec %s "$@"\n' "$(shell_quote "$QWENDEX_ROOT/scripts/qwendex_testbench")"
+  } > "$BENCH_ROOT/bin/qwebdex-bench"
   chmod +x "$BENCH_ROOT/bin/qwendex-bench" "$BENCH_ROOT/bin/qwendex" "$BENCH_ROOT/bin/llmstack" "$BENCH_ROOT/bin/qwebdex-bench"
   if [[ -d "$HOME/.codex/mcp-servers" && ! -e "$CODEX_HOME/mcp-servers" ]]; then
     ln -s "$HOME/.codex/mcp-servers" "$CODEX_HOME/mcp-servers"
@@ -87,25 +116,7 @@ EOF
   if [[ -f "$HOME/.codex/installation_id" && ! -e "$CODEX_HOME/installation_id" ]]; then
     cp "$HOME/.codex/installation_id" "$CODEX_HOME/installation_id"
   fi
-  if [[ ! -f "$CODEX_HOME/config.toml" ]]; then
-    cat > "$CODEX_HOME/config.toml" <<EOF
-approval_policy = "never"
-sandbox_mode = "workspace-write"
-persistent_instructions = "Qwendex Test Bench active. QWENDEX_ROOT, QWENDEX_STATE_DB, QWENDEX_RESULTS_ROOT, QWENDEX_EXEC_CWD, and QWENDEX_BENCH_ROOT are set by the launcher. Use Qwendex CLI commands for status, routing, smoke checks, receipts, and manager state."
-
-[features]
-multi_agent = true
-
-[projects."$PROJECT_ROOT"]
-trust_level = "trusted"
-
-[projects."$QWENDEX_ROOT"]
-trust_level = "trusted"
-
-[projects."$BENCH_ROOT"]
-trust_level = "trusted"
-EOF
-  fi
+  write_codex_config
 }
 
 banner() {
@@ -177,7 +188,7 @@ Commands:
   qwendex_testbench tmux
 
 Environment:
-  QWENDEX_BENCH_PROJECT   project folder to test; default: ~/thehub if present, else cwd
+  QWENDEX_BENCH_PROJECT   project folder to test; default: current working directory
   QWENDEX_BENCH_ROOT      isolated bench root; default: ~/qwendex_testbench/current
   QWENDEX_BENCH_SESSION   tmux session name; default: qwendex-bench
 
@@ -224,24 +235,27 @@ PY
 }
 
 cmd_env() {
-  cat <<EOF
-export QWENDEX_BENCH_ROOT='$BENCH_ROOT'
-export QWENDEX_ROOT='$QWENDEX_ROOT'
-export CODEX_HOME='$CODEX_HOME'
-export QWENDEX_STATE_DB='$QWENDEX_STATE_DB'
-export QWENDEX_RESULTS_ROOT='$QWENDEX_RESULTS_ROOT'
-export QWENDEX_META_ROOT='$QWENDEX_META_ROOT'
-export QWENDEX_CODEX_STATUS_FILE='$QWENDEX_CODEX_STATUS_FILE'
-export QWENDEX_LLMSTACK_CONFIG='$QWENDEX_LLMSTACK_CONFIG'
-export QWENDEX_EXEC_CWD='$QWENDEX_EXEC_CWD'
-export QWENDEX_MCP_TRUSTED_ROOTS='$QWENDEX_MCP_TRUSTED_ROOTS'
-export LOCAL_QWEN_CODEX_CWD='$LOCAL_QWEN_CODEX_CWD'
-export LOCAL_QWEN_CODEX_ADD_DIRS='$LOCAL_QWEN_CODEX_ADD_DIRS'
-export LOCAL_QWEN_MODEL_CATALOG_JSON='$LOCAL_QWEN_MODEL_CATALOG_JSON'
-export LOCAL_QWEN_LOCAL_HARNESS_MCP='$LOCAL_QWEN_LOCAL_HARNESS_MCP'
-export LOCAL_QWEN_LOCAL_HARNESS_TRUSTED_ROOTS='$LOCAL_QWEN_LOCAL_HARNESS_TRUSTED_ROOTS'
-export PATH='$BENCH_ROOT/bin':'$QWENDEX_ROOT':'$QWENDEX_ROOT/scripts':"\$PATH"
-EOF
+  local name
+  for name in \
+    QWENDEX_BENCH_ROOT \
+    QWENDEX_ROOT \
+    CODEX_HOME \
+    QWENDEX_STATE_DB \
+    QWENDEX_RESULTS_ROOT \
+    QWENDEX_META_ROOT \
+    QWENDEX_CODEX_STATUS_FILE \
+    QWENDEX_LLMSTACK_CONFIG \
+    QWENDEX_EXEC_CWD \
+    QWENDEX_MCP_TRUSTED_ROOTS \
+    LOCAL_QWEN_CODEX_CWD \
+    LOCAL_QWEN_CODEX_ADD_DIRS \
+    LOCAL_QWEN_MODEL_CATALOG_JSON \
+    LOCAL_QWEN_LOCAL_HARNESS_MCP \
+    LOCAL_QWEN_LOCAL_HARNESS_TRUSTED_ROOTS \
+    PATH
+  do
+    printf 'export %s=%s\n' "$name" "$(shell_quote "${!name}")"
+  done
 }
 
 cmd_status() {
@@ -331,9 +345,9 @@ cmd_open_full() {
     --sandbox workspace-write \
     "${MCP_OVERRIDE_ARGS[@]}" \
     --add-dir "$BENCH_ROOT" \
-    --add-dir "$QWENDEX_ROOT" \
+    --add-dir "$PROJECT_ROOT" \
     -m "$FULL_MODEL" \
-    -c "model_reasoning_effort=\"$FULL_REASONING\"" \
+    -c "model_reasoning_effort=$(toml_quote "$FULL_REASONING")" \
     -c 'model_verbosity="low"' \
     -C "$PROJECT_ROOT" \
     "$@"
@@ -410,10 +424,12 @@ cmd_tmux() {
       tmux kill-window -t "$SESSION:$stale"
     fi
   done
-  tmux_new_or_reset_window bench "$BENCH_ROOT" "eval \"\$('$BENCH_CMD' env)\" && '$BENCH_CMD' console; exec bash"
-  tmux_new_or_reset_window qwendex-local "$PROJECT_ROOT" "eval \"\$('$BENCH_CMD' env)\" && '$BENCH_CMD' open-local; exec bash"
-  tmux_new_or_reset_window qwendex-full "$PROJECT_ROOT" "eval \"\$('$BENCH_CMD' env)\" && '$BENCH_CMD' open-full; exec bash"
-  tmux_new_or_reset_window receipts "$QWENDEX_ROOT" "eval \"\$('$BENCH_CMD' env)\" && '$BENCH_CMD' receipt latest || true; exec bash"
+  local bench_command
+  bench_command="$(shell_quote "$BENCH_CMD")"
+  tmux_new_or_reset_window bench "$BENCH_ROOT" "eval \"\$($bench_command env)\" && $bench_command console; exec bash"
+  tmux_new_or_reset_window qwendex-local "$PROJECT_ROOT" "eval \"\$($bench_command env)\" && $bench_command open-local; exec bash"
+  tmux_new_or_reset_window qwendex-full "$PROJECT_ROOT" "eval \"\$($bench_command env)\" && $bench_command open-full; exec bash"
+  tmux_new_or_reset_window receipts "$BENCH_ROOT" "eval \"\$($bench_command env)\" && $bench_command receipt latest || true; exec bash"
   tmux select-window -t "$SESSION:bench"
   printf 'tmux attach -t %s\n' "$SESSION"
 }

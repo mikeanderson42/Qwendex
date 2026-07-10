@@ -75,6 +75,12 @@ The canonical state source is the SQLite DB configured by `state.db` or
 `scripts/qwendex manager assign`, `heartbeat`, `close`, `close-stale`, and
 `repair --safe`; `agent` commands read or update the same rows.
 
+Agent sessions, active limits, and write locks carry a canonical repository
+root. Default status, wait, close, repair, and lock behavior is scoped to that
+repository; full-ledger validation debt remains visible separately. Legacy
+rows without scope are reported without being silently assigned or validated,
+and an active legacy write lock remains conservatively blocking until reviewed.
+
 ## Manager Decision Ledger
 
 Normal `qdex` launches in Manager Mode run `scripts/qwendex manager preflight`
@@ -118,7 +124,11 @@ scripts/qwendex agent locks --json
 
 Rules:
 
-- a read-only profile cannot write source files
+- a read-only profile cannot write source files; managed shell execution is
+  fail-closed to the inspection allowlist below
+- every non-allowlisted managed shell event is presumed write-capable for a
+  writer profile and must declare `agent_id` plus explicit target paths before
+  Qwendex acquires its file lock
 - a scribe can write only under `.qwendex/runs/`
 - a second writer is blocked while another agent owns an active write lock in
   the base worktree, even when the requested path differs
@@ -128,21 +138,63 @@ Rules:
 The status payload includes `write_safety.strategy`, active locks, and active
 writer counts.
 
+For the managed `PreToolUse` hook, read-only profiles may invoke only bare
+`pwd`, `ls`, `rg`, `grep`, `cat`, `head`, `tail`, `stat`, `jq`, `find`, and
+`wc` commands, plus `git status`, `git diff`, `git log`, `git show`, and
+`git rev-parse`. Git accepts only `-C` and `--no-pager` before the subcommand.
+Quote-aware lists and pipelines using newline, `;`, `&&`, `||`, and `|` are
+accepted only when every segment passes the same allowlist.
+
+The read-only shell grammar rejects executable paths, environment assignments,
+wrappers, interpreters, scripts, redirects, background jobs, command or
+variable substitution, control-flow syntax, comments, brace expansion, and
+unquoted glob characters. Quote glob and regular-expression metacharacters when
+they are intended as literal arguments. The command-specific denials are
+`rg --pre`, `rg --pre-glob`, `rg --hostname-bin`, mutating or command-running
+`find` actions (`-delete`, `-exec*`, `-ok*`, `-fls`, `-fprint*`, and
+`-fprintf`), and Git `--ext-diff`, `--textconv`, or `--output`. A rejected or
+unparseable shell event returns `agent.write_rejected`; it is never treated as
+read-only merely because no known mutator was recognized.
+
+Non-shell tool events are also fail-closed for read-only profiles. Qwendex
+allows explicit inspection actions such as read, get, list, search, view,
+inspect, and status, plus the managed collaboration reporting/wait lifecycle.
+Unknown actions and names containing mutating actions such as write, create,
+update, delete, upload, apply, execute, or `write_stdin` are rejected. For a
+writer profile, those mutating tool names require the same agent identity,
+target-path metadata, and repository lock as shell writes.
+
+The same classifier protects writer profiles from undeclared shell side
+effects. Only a command proven to be in the inspection allowlist runs without a
+write lock. Everything else—including tests, builds, interpreters, `awk`,
+network clients, Git mutations, archive tools, `make`, and package managers—is
+presumed write-capable. Its managed event must name the owning `agent_id` and
+every target path through `path`, `paths`, `file`, `files`, or the equivalent
+`tool_input` fields. Qwendex does not guess destinations from arbitrary shell
+syntax; missing identity or paths blocks before execution and lock acquisition.
+
+This is the Qwendex managed-hook classification boundary. It does not replace
+the host sandbox, filesystem permissions, or stock Codex tool filtering, and it
+applies only when the managed hook is installed and verified.
+
 ## Context Control
 
 `SubagentStop` gates preserve raw child output before marking a worker
 terminal. For a ledger-backed agent, Qwendex writes:
 
 ```text
-.qwendex/runs/<task-or-session>/<agent-id>/raw-output.md
-.qwendex/runs/<task-or-session>/<agent-id>/compact-report.json
-.qwendex/runs/<task-or-session>/raw-agent-output.md
+.qwendex/runs/repo-<scope-digest>-<task-or-session>/<agent-id>/raw-output.md
+.qwendex/runs/repo-<scope-digest>-<task-or-session>/<agent-id>/compact-report.json
+.qwendex/runs/repo-<scope-digest>-<task-or-session>/raw-agent-output.md
 ```
 
 `.qwendex/runs/` is ignored local runtime state. `agent inspect`, `agent logs`,
 `manager status`, `context compact-plan`, and `context pack` expose artifact
 paths and compact agent outcomes so the root session can preserve evidence
 without injecting full worker transcripts into context.
+The repository digest keeps reused task/session ids from sharing an aggregate
+index across repositories without exposing the repository path in the artifact
+name.
 
 ## Native Gates
 
@@ -171,10 +223,24 @@ The gates enforce the current CLI policy boundary:
 - Manager stop hooks require a preflight decision ledger, block unresolved
   required agents, missing verifier evidence after edits, missing direct-work
   validation evidence, or final messages that omit agent outcomes, validation,
-  and risks
+  and risks. Message evidence needs an explicit passing/successful outcome;
+  structured command evidence needs a passing status or zero return code, and
+  receipt paths must resolve to an existing digest-verified receipt under a
+  trusted results root.
 - pre-tool hooks deny recursive child `spawn_agent`, writes from read-only
   profiles, conflicting file locks, and release/publish commands without
-  explicit release approval
+  explicit release approval. Release approval must already be present as
+  `QWENDEX_RELEASE_APPROVED` in the managed hook process environment; command
+  text, inline `env`/`export` assignments, and agent-supplied event JSON cannot
+  mint that authority. Mutating `gh api` methods and body/field forms are
+  approval-gated for every endpoint, including GraphQL and Git refs/tags;
+  explicit GET requests remain read-only.
+
+Manager Stop resolves the current `turn_id` below the stable launch ledger and
+reads only agent sessions whose per-turn task id and repository scope match that
+decision. Historical agents from other tasks or earlier turns cannot satisfy
+the gate. Required failed or blocked lanes remain blocking, and verifier
+completion requires positive validation evidence plus captured artifacts.
 
 `agent policy --json`, `agent plan --json`, `manager status --json`,
 `codex-status --json`, and `manager preflight --json` all expose the same

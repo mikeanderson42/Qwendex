@@ -14,7 +14,7 @@ fi
 
 # shellcheck disable=SC1090
 source "$QWENDEX_ENV"
-if [[ -n "$caller_codex_home" ]]; then
+if [[ "${QWENDEX_QDEX_PRESERVE_CODEX_HOME:-0}" =~ ^(1|true|yes|on)$ && -n "$caller_codex_home" ]]; then
   export CODEX_HOME="$caller_codex_home"
 fi
 
@@ -63,6 +63,13 @@ if [[ -z "$target_repo" ]]; then
 fi
 
 target_repo="$(cd "$target_repo" && pwd)"
+export QWENDEX_MANAGER_TARGET_REPO="$target_repo"
+export QWENDEX_EXEC_CWD="$target_repo"
+export QWENDEX_MCP_TRUSTED_ROOTS="$target_repo"
+export LOCAL_QWEN_CODEX_CWD="$target_repo"
+export LOCAL_QWEN_CODEX_ADD_DIRS="$target_repo"
+export LOCAL_QWEN_LOCAL_HARNESS_TRUSTED_ROOTS="$target_repo"
+export ARTIFACT_QUEUE_MCP_TRUSTED_ROOTS="$target_repo"
 
 if [[ ! -x "$QWENDEX_DEV_ROOT/bin/codex" ]]; then
   printf 'qdex: missing Qwendex Codex wrapper: %s/bin/codex\n' "$QWENDEX_DEV_ROOT" >&2
@@ -74,7 +81,10 @@ fi
   --write "$QWENDEX_CODEX_STATUS_FILE" \
   --json > "$QWENDEX_META_ROOT/codex_status_write.json"
 
-mapfile -t qwendex_status_fields < <(python3 - "$QWENDEX_META_ROOT/codex_status_write.json" <<'PY'
+qwendex_status_fields=()
+while IFS= read -r status_field; do
+  qwendex_status_fields+=("$status_field")
+done < <(python3 - "$QWENDEX_META_ROOT/codex_status_write.json" <<'PY'
 import json
 import sys
 with open(sys.argv[1], encoding="utf-8") as handle:
@@ -122,6 +132,8 @@ with open(preflight_path, encoding="utf-8") as handle:
 print(json.dumps({
     "schema_version": "qwendex.qdex.dry_run.v1",
     "target_repo": target_repo,
+    "manager_target_repo": target_repo,
+    "codex_home": __import__("os").environ.get("CODEX_HOME", ""),
     "command": command,
     "manager_preflight": preflight,
 }, indent=2, sort_keys=True))
@@ -209,6 +221,8 @@ with open(status_path, encoding="utf-8") as handle:
 print(json.dumps({
     "schema_version": "qwendex.qdex.dry_run.v1",
     "target_repo": target_repo,
+    "manager_target_repo": target_repo,
+    "codex_home": __import__("os").environ.get("CODEX_HOME", ""),
     "command": command,
     "manager_preflight": {"skipped": True, "reason": "manager preflight is not required by selected or effective mode"},
     "codex_status": codex_status,
