@@ -9,7 +9,7 @@ Clone it directly at the default runtime root, then pin the current release:
 git clone https://github.com/mikeanderson42/Qwendex.git ~/qwendex-dev
 cd ~/qwendex-dev
 git fetch --tags origin
-git switch --detach v0.5.4
+git switch --detach v0.5.5
 git status --short
 ```
 
@@ -48,15 +48,14 @@ the Qwendex manager target, execution directory, Codex add-dir, local-harness
 trusted root, and MCP trusted root. This repo binding limits those Qwendex/MCP
 scopes and supplies a per-launch Codex trusted-project override for the exact
 canonical target, avoiding an interactive onboarding prompt. YOLO mode is
-deliberately not OS-level filesystem confinement. The
-generated isolated `CODEX_HOME` overrides an inherited caller value unless the
-operator explicitly sets `QWENDEX_QDEX_PRESERVE_CODEX_HOME=1`. The release tag
-pins the Qwendex source. Patched Codex footer/hotkey support remains a
-separately built, version-checked integration.
+deliberately not OS-level filesystem confinement. `qdex` sets the generated
+isolated `CODEX_HOME` only for its child process. Sourcing the environment
+leaves the caller's `CODEX_HOME` and ordinary upstream `codex` unchanged, so
+upstream Codex remains available for recovery; `codex-main` is an explicit
+captured-upstream alias. The release tag pins the Qwendex source. Patched Codex
+footer/hotkey support remains a separately built, version-checked integration.
 
-After the generated environment is sourced, bare `codex` resolves to the same
-Qwendex patched/dev wrapper; use `codex-main` when the upstream npm binary is
-required explicitly. A plain `qdex` inherits `$PWD` without synthesizing a
+A plain `qdex` inherits `$PWD` without synthesizing a
 directory option, while native `-C`/`--cd` is forwarded unchanged and also
 selects Manager scope. The older Qdex-only `--repo` option remains a
 compatibility alias. Other Codex CLI options, including `exec --json` and

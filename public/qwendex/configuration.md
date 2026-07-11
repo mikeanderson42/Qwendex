@@ -152,9 +152,9 @@ preflight.
 Run `qdex` from the desired directory or use Codex's native
 `qdex -C <project>` form. The selected directory becomes the manager target,
 execution working directory, Codex add-dir, local-harness trusted root, and MCP
-trusted root. The generated isolated `CODEX_HOME` remains authoritative by
-default; preserving a caller's `CODEX_HOME` requires the explicit
-`QWENDEX_QDEX_PRESERVE_CODEX_HOME=1` opt-in. `qdex` defaults to
+trusted root. `qdex` always sets the generated isolated `CODEX_HOME` for its
+child while the caller's environment and ordinary upstream `codex` remain
+unchanged. `qdex` defaults to
 `--dangerously-bypass-approvals-and-sandbox`; the repo binding is a
 Qwendex/MCP routing boundary, not OS-level filesystem confinement. Without an
 an explicit native directory option, Qdex inherits `$PWD` even outside git and

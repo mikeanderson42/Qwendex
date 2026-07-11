@@ -467,3 +467,26 @@ keeping non-Manager launches on Codex's normal trust behavior.
 The canonical target is also passed as a per-launch trusted project; this trust
 is bounded to the same explicit Qdex repository and prevents an automation
 primer's first Enter from being consumed by Codex onboarding.
+
+## Upstream Codex, Qdex, And Internal Runtime Trust Boundary
+
+Decision: ordinary `codex` remains the upstream installation and retains the
+caller's normal `CODEX_HOME`. Sourcing Qwendex exports neither a replacement
+`codex` command nor `CODEX_HOME`. `qdex` is the public, intentionally
+permissive launcher: it selects Qwendex's isolated home, runs exactly one
+Manager preflight when required, and invokes an ignored internal runtime that
+chooses the supported patched binary or emits a labelled upstream-fallback
+diagnostic. `codex-main` remains an explicit captured-upstream alias.
+
+Manager trust uses one canonical validator for prompt hooks, root writes, Stop,
+and `manager launch-status`. The binding includes live PID/start ticks,
+repository, preflight ledger/session, derived root identity, isolated Codex
+home, hook trust, decision state/route, and current policy. An invalid root
+`UserPromptSubmit` blocks before model work. An invalid Stop is allowed to
+terminate without attaching to or mutating a Manager decision.
+
+Reason: repository and state paths identify a scope, not a launching process.
+A direct internal-runtime process must not acquire Qdex authority merely by
+sharing that scope, and Stop cannot safely repair missing identity by guessing
+the latest repository decision. Keeping upstream Codex outside this boundary
+also preserves a recovery path when Qwendex runtime or Manager state is broken.

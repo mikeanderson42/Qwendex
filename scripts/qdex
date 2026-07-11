@@ -5,7 +5,6 @@ QWENDEX_DEV_ROOT="${QWENDEX_DEV_ROOT:-$HOME/qwendex-dev}"
 QWENDEX_ENV="$QWENDEX_DEV_ROOT/.qwendex-dev/env.sh"
 QWENDEX_YOLO_FLAG="${QWENDEX_YOLO_FLAG:---dangerously-bypass-approvals-and-sandbox}"
 QWENDEX_HOOK_TRUST_FLAG="${QWENDEX_HOOK_TRUST_FLAG:---dangerously-bypass-hook-trust}"
-caller_codex_home="${CODEX_HOME:-}"
 caller_cwd="$PWD"
 
 if [[ ! -f "$QWENDEX_ENV" ]]; then
@@ -16,9 +15,11 @@ fi
 
 # shellcheck disable=SC1090
 source "$QWENDEX_ENV"
-if [[ "${QWENDEX_QDEX_PRESERVE_CODEX_HOME:-0}" =~ ^(1|true|yes|on)$ && -n "$caller_codex_home" ]]; then
-  export CODEX_HOME="$caller_codex_home"
+if [[ -z "${QWENDEX_CODEX_HOME:-}" || -z "${QWENDEX_CODEX_RUNTIME:-}" ]]; then
+  printf 'qdex: generated environment is missing the isolated home or internal runtime.\n' >&2
+  exit 127
 fi
+export CODEX_HOME="$QWENDEX_CODEX_HOME"
 # Dynamic Manager identities belong to one qdex launch. Never let a caller's
 # stale child-process environment select or collide with a prior lease.
 unset \
@@ -61,16 +62,11 @@ codex_args=()
 codex_sets_cwd=0
 qdex_sets_repo=0
 parse_qdex_options=1
+permission_mode="yolo"
 
 if [[ "${QWENDEX_QDEX_DRY_RUN:-0}" == "1" ]]; then
   manager_preflight_dry_run=1
 fi
-for arg in "$@"; do
-  if [[ "$arg" == "--manager-preflight-dry-run" ]]; then
-    manager_preflight_dry_run=1
-    break
-  fi
-done
 
 while [[ $# -gt 0 ]]; do
   if [[ "$parse_qdex_options" == "0" ]]; then
@@ -80,10 +76,21 @@ while [[ $# -gt 0 ]]; do
   fi
   case "$1" in
     --)
+      codex_args+=("--")
       parse_qdex_options=0
       shift
       ;;
+    --qdex-permission-mode)
+      shift
+      if [[ $# -eq 0 || ( "$1" != "yolo" && "$1" != "workspace-write" ) ]]; then
+        printf 'qdex: --qdex-permission-mode requires yolo or workspace-write\n' >&2
+        exit 2
+      fi
+      permission_mode="$1"
+      shift
+      ;;
     --manager-preflight-dry-run)
+      manager_preflight_dry_run=1
       shift
       ;;
     --qdex-json)
@@ -136,6 +143,7 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+export QWENDEX_QDEX_PERMISSION_MODE="$permission_mode"
 
 if [[ -z "$target_repo" ]]; then
   target_repo="$PWD"
@@ -157,13 +165,9 @@ export LOCAL_QWEN_CODEX_ADD_DIRS="$target_repo"
 export LOCAL_QWEN_LOCAL_HARNESS_TRUSTED_ROOTS="$target_repo"
 export ARTIFACT_QUEUE_MCP_TRUSTED_ROOTS="$target_repo"
 
-if [[ ! -x "$QWENDEX_DEV_ROOT/bin/codex" ]]; then
-  printf 'qdex: missing Qwendex Codex wrapper: %s/bin/codex\n' "$QWENDEX_DEV_ROOT" >&2
+if [[ ! -x "$QWENDEX_CODEX_RUNTIME" ]]; then
+  printf 'qdex: missing Qwendex internal Codex runtime: %s\n' "$QWENDEX_CODEX_RUNTIME" >&2
   printf 'qdex: run qwendex-dev doctor from a shell that has sourced %s.\n' "$QWENDEX_ENV" >&2
-  exit 127
-fi
-if ! "$QWENDEX_DEV_ROOT/bin/codex" --version >/dev/null; then
-  printf 'qdex: Qwendex Codex runtime preflight failed.\n' >&2
   exit 127
 fi
 
@@ -188,7 +192,7 @@ if [[ "$informational_only" == "1" ]]; then
   else
     cd "$target_repo"
   fi
-  exec "$QWENDEX_DEV_ROOT/bin/codex" "${codex_args[@]}"
+  exec "$QWENDEX_CODEX_RUNTIME" "${codex_args[@]}"
 fi
 
 "$QWENDEX_DEV_ROOT/scripts/qwendex" codex-status \
@@ -212,14 +216,26 @@ agent_use="${qwendex_status_fields[0]:-}"
 manager_preflight_required="${qwendex_status_fields[1]:-0}"
 
 cmd=(
-  "$QWENDEX_DEV_ROOT/bin/codex"
+  "$QWENDEX_CODEX_RUNTIME"
   --no-alt-screen
-  "$QWENDEX_YOLO_FLAG"
 )
+if [[ "$permission_mode" == "yolo" ]]; then
+  yolo_present=0
+  for arg in "${codex_args[@]}"; do
+    [[ "$arg" == "$QWENDEX_YOLO_FLAG" ]] && yolo_present=1
+  done
+  [[ "$yolo_present" == "1" ]] || cmd+=("$QWENDEX_YOLO_FLAG")
+else
+  cmd+=(--sandbox workspace-write)
+fi
 if [[ "$manager_preflight_required" == "1" ]]; then
   # Manager preflight verifies the generated Qwendex hook set before launch;
   # tell Codex not to stop at a second interactive trust dialog.
-  cmd+=("$QWENDEX_HOOK_TRUST_FLAG")
+  hook_trust_present=0
+  for arg in "${codex_args[@]}"; do
+    [[ "$arg" == "$QWENDEX_HOOK_TRUST_FLAG" ]] && hook_trust_present=1
+  done
+  [[ "$hook_trust_present" == "1" ]] || cmd+=("$QWENDEX_HOOK_TRUST_FLAG")
 fi
 cmd+=(--config "projects={$target_repo_toml={trust_level=\"trusted\"}}")
 # Normal Qdex launches inherit the caller's working directory exactly like
@@ -256,6 +272,9 @@ print(json.dumps({
     "target_repo": target_repo,
     "manager_target_repo": target_repo,
     "codex_home": __import__("os").environ.get("CODEX_HOME", ""),
+    "internal_runtime": __import__("os").environ.get("QWENDEX_CODEX_RUNTIME", ""),
+    "permission_mode": __import__("os").environ.get("QWENDEX_QDEX_PERMISSION_MODE", "yolo"),
+    "selected_target": command[0] if command else "",
     "command": command,
     "manager_preflight": preflight,
 }, indent=2, sort_keys=True))
@@ -356,6 +375,9 @@ print(json.dumps({
     "target_repo": target_repo,
     "manager_target_repo": target_repo,
     "codex_home": __import__("os").environ.get("CODEX_HOME", ""),
+    "internal_runtime": __import__("os").environ.get("QWENDEX_CODEX_RUNTIME", ""),
+    "permission_mode": __import__("os").environ.get("QWENDEX_QDEX_PERMISSION_MODE", "yolo"),
+    "selected_target": command[0] if command else "",
     "command": command,
     "manager_preflight": {"skipped": True, "reason": "manager preflight is not required by selected or effective mode"},
     "codex_status": codex_status,

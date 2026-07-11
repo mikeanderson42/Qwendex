@@ -1,5 +1,18 @@
 # Troubleshooting
 
+## Manager Prompt Is Rejected As An Untrusted Launch
+
+Use `qdex -C <repo>` rather than invoking Qwendex's internal runtime directly.
+For a persistent process, inspect the generic binding with:
+
+```bash
+scripts/qwendex manager launch-status --pid "$PID" --repo-root "$REPO" --json
+```
+
+Reason codes distinguish missing or stale identity, repository mismatch,
+policy drift, and hook trust. An untrusted process is allowed to exit on its
+first Stop event; Qwendex does not attach it to a repository-matched decision.
+
 ## `check` Fails
 
 Run:
