@@ -2,6 +2,17 @@
 
 Qwendex has one public boundary and several internal parts.
 
+Codex launch identity is deliberately split three ways:
+
+- upstream `codex` is unchanged and uses the caller's normal Codex home;
+- public `qdex` selects Qwendex's isolated home, permissions, repository scope,
+  and Manager preflight;
+- the ignored `qwendex-codex-runtime` selects the supported patched build or a
+  labelled upstream fallback and is not a public launch entrypoint.
+
+Only Qdex creates Manager launch authority. The internal runtime and repository
+scope alone are insufficient.
+
 | Layer | Role |
 | --- | --- |
 | Runtime | Public CLI, JSON contract, config precedence, receipts |

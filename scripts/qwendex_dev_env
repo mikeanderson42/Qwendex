@@ -16,6 +16,7 @@ STATE_DB="$WORK_ROOT/state/qwendex.sqlite"
 RESULTS_ROOT="$WORK_ROOT/results/qwendex"
 META_ROOT="$WORK_ROOT/results/meta"
 CODEX_HOME_DIR="$WORK_ROOT/codex_home"
+QWENDEX_CODEX_RUNTIME="$WORK_ROOT/bin/qwendex-codex-runtime"
 STATUS_FILE="$WORK_ROOT/codex_status.json"
 LEDGER_DB="$WORK_ROOT/state/qwendex_ledger.sqlite"
 LOCAL_HARNESS_LEDGER_DB="$WORK_ROOT/state/local_qwen_harness.sqlite"
@@ -114,7 +115,7 @@ guard_dev_root() {
 
 ensure_layout() {
   guard_dev_root
-  mkdir -p "$WORK_ROOT/state" "$RESULTS_ROOT" "$META_ROOT" "$CODEX_HOME_DIR/logs"
+  mkdir -p "$WORK_ROOT/state" "$WORK_ROOT/bin" "$RESULTS_ROOT" "$META_ROOT" "$CODEX_HOME_DIR/logs"
   mkdir -p "$WORK_ROOT/codex-source" "$WORK_ROOT/codex-build/bin" "$DEV_ROOT/bin"
 }
 
@@ -232,8 +233,17 @@ if [[ ! -x "\$main_codex" ]]; then
 fi
 exec "\$main_codex" "\$@"
 EOF
-  cat > "$DEV_ROOT/bin/codex" <<EOF
+  local legacy_codex="$DEV_ROOT/bin/codex"
+  if [[ -e "$legacy_codex" ]]; then
+    if grep -qE 'QWENDEX-GENERATED-CODEX-WRAPPER|dev_codex_default=.*codex-build/bin/codex' "$legacy_codex" 2>/dev/null; then
+      rm -f "$legacy_codex"
+    else
+      die "refusing to replace unknown file at deprecated Qwendex wrapper path: $legacy_codex"
+    fi
+  fi
+  cat > "$QWENDEX_CODEX_RUNTIME" <<EOF
 #!/usr/bin/env bash
+# QWENDEX-GENERATED-CODEX-RUNTIME-V1
 dev_codex_default=$dev_codex_default_shell
 main_codex=$main_codex_shell
 dev_codex="\${QWENDEX_DEV_CODEX_BIN:-\$dev_codex_default}"
@@ -246,6 +256,7 @@ if [[ -x "\$dev_codex" ]]; then
   fi
   exec "\$dev_codex" "\$@"
 fi
+printf 'Qwendex internal runtime: patched build unavailable; using the configured upstream Codex fallback.\n' >&2
 if [[ ! -x "\$main_codex" ]]; then
   printf 'no dev Codex binary found and main fallback is not executable: %s\n' "\$main_codex" >&2
   exit 127
@@ -267,7 +278,7 @@ $ErrorActionPreference = "Stop"
 $script = Join-Path $PSScriptRoot "scripts/windows/open.ps1"
 & $script -RepoDir $PSScriptRoot @Args
 EOF
-  chmod +x "$DEV_ROOT/bin/qwendex" "$DEV_ROOT/bin/llmstack" "$DEV_ROOT/bin/qwendex-dev" "$DEV_ROOT/bin/codex-main" "$DEV_ROOT/bin/codex"
+  chmod +x "$DEV_ROOT/bin/qwendex" "$DEV_ROOT/bin/llmstack" "$DEV_ROOT/bin/qwendex-dev" "$DEV_ROOT/bin/codex-main" "$QWENDEX_CODEX_RUNTIME"
 }
 
 write_env_files() {
@@ -285,7 +296,8 @@ write_env_files() {
     printf 'export QWENDEX_MODELS_CACHE_FILE=%q\n' "$QWENDEX_MODELS_CACHE_FILE"
     printf 'export QWENDEX_EXEC_CWD=%q\n' "$DEV_ROOT"
     printf 'export QWENDEX_MCP_TRUSTED_ROOTS=%q\n' "$DEV_ROOT:$SOURCE_ROOT"
-    printf 'export CODEX_HOME=%q\n' "$CODEX_HOME_DIR"
+    printf 'export QWENDEX_CODEX_HOME=%q\n' "$CODEX_HOME_DIR"
+    printf 'export QWENDEX_CODEX_RUNTIME=%q\n' "$QWENDEX_CODEX_RUNTIME"
     printf 'export LOCAL_QWEN_CODEX_CWD=%q\n' "$DEV_ROOT"
     printf 'export LOCAL_QWEN_CODEX_ADD_DIRS=%q\n' "$DEV_ROOT:$SOURCE_ROOT"
     printf 'export LOCAL_QWEN_CANONICAL_LAUNCHER=%q\n' "$DEV_ROOT/scripts/run_local_qwen_codex.sh"
@@ -332,8 +344,10 @@ qwendex-dev stage
 qwendex-dev snapshot
 \`\`\`
 
-The \`codex\` wrapper first uses \`QWENDEX_DEV_CODEX_BIN\` or
-\`$DEV_CODEX_DEFAULT\` when present, then falls back to the main Codex binary.
+The internal Qwendex runtime first uses \`QWENDEX_DEV_CODEX_BIN\` or
+\`$DEV_CODEX_DEFAULT\` when present, then emits a boundary warning and falls
+back to the main Codex binary. It is launched only through \`qdex\`; ordinary
+\`codex\` remains the caller's upstream installation and normal Codex home.
 EOF
 }
 
@@ -1461,16 +1475,14 @@ cmd_open_with_mode() {
   prepare
   # shellcheck disable=SC1090
   source "$WORK_ROOT/env.sh"
-  "$DEV_ROOT/scripts/qwendex" codex-status --write "$STATUS_FILE" --json > "$META_ROOT/codex_status_write.json"
-  local codex_args=(--no-alt-screen)
+  local qdex_args=(-C "$DEV_ROOT")
   if [[ "$launch_mode" == "yolo" ]]; then
-    codex_args+=("$QWENDEX_CODEX_YOLO_FLAG")
+    :
   else
-    codex_args+=(--sandbox workspace-write)
+    qdex_args=(--qdex-permission-mode workspace-write "${qdex_args[@]}")
   fi
-  codex_args+=(-C "$DEV_ROOT")
   cd "$DEV_ROOT"
-  "$DEV_ROOT/bin/codex" "${codex_args[@]}" "$@"
+  "$HOME/.local/bin/qdex" "${qdex_args[@]}" "$@"
 }
 
 cmd_open() {
@@ -1485,7 +1497,7 @@ cmd_tools() {
   prepare
   "$HOME/.cargo/bin/cargo" --version
   "$HOME/.cargo/bin/rustfmt" --version
-  "$DEV_ROOT/bin/codex" --version
+  "$QWENDEX_CODEX_RUNTIME" --version
 }
 
 cmd_diff() {

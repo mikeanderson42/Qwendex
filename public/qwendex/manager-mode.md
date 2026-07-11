@@ -250,8 +250,23 @@ included in `agent`, `manager`, `check`, `doctor`, and `codex-status`
 diagnostics. Native
 `agent hook` stop gates read the same ledger and block Manager Mode finalization
 when required lanes remain active, verifier evidence is missing after edits, or
-the final response omits agent outcomes, validation, and risks. A Manager Stop
-event with no preflight ledger returns `STOP_MANAGER_UNATTACHED`.
+the final response omits agent outcomes, validation, and risks. A trusted Qdex
+launch continues to enforce those gates. A process without the complete live
+Qdex identity is rejected at `UserPromptSubmit` before model work. Its later
+`Stop` event is allowed to terminate without attaching to or mutating any
+Manager decision, preventing a validation loop.
+
+Generic process supervisors can check the same canonical binding without
+reading prompts, environment, or ledger contents:
+
+```bash
+scripts/qwendex manager launch-status --pid "$PID" --repo-root "$REPO" --json
+```
+
+The command succeeds only for a live PID/start-ticks match with the expected
+repository, preflight identity, trusted hooks, and current policy. Its data
+projection is limited to health booleans/state labels, a reason code, and the
+`qdex -C` recovery command.
 
 A direct single-writer exception closes only when it has a routing reason,
 verified hooks or recorded hook override, verifier requirement, validation

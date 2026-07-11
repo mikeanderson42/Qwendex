@@ -1,3 +1,20 @@
+# v0.5.5
+
+Qdex launch-boundary and Manager trust repair release.
+
+- Keeps ordinary upstream `codex` resolution and the caller's normal
+  `CODEX_HOME` unchanged when the Qwendex environment is sourced.
+- Moves the patched/upstream fallback selector to an ignored internal runtime
+  launched only by `qdex`; `qdex -C <project>` remains the canonical explicit
+  directory form and native arguments pass through unchanged.
+- Rejects Manager prompts before model work when the live PID/start identity,
+  repository, preflight ledger, root identity, or policy binding is absent or
+  mismatched.
+- Allows an untrusted process to stop without attaching to or mutating a
+  Manager decision, preventing repository-only Stop recovery loops.
+- Adds sanitized `manager launch-status --pid ... --repo-root ... --json`
+  health for generic downstream process supervisors.
+
 # v0.5.4
 
 Codex-native working-directory pass-through release.

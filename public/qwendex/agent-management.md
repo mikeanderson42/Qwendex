@@ -259,6 +259,18 @@ decision. Historical agents from other tasks or earlier turns cannot satisfy
 the gate. Required failed or blocked lanes remain blocking, and verifier
 completion requires positive validation evidence plus captured artifacts.
 
+Before a root `UserPromptSubmit`, Manager Mode validates the live launch PID and
+start ticks, repository, launch ledger/session, derived root identity, isolated
+Codex home, hook trust, and policy hash. Failure blocks the prompt with a
+`qdex -C <repo>` recovery command before tools or subagents can run. Stop uses
+the same validator. If the launch is untrusted, Stop returns a non-blocking,
+non-mutating diagnostic and never searches for a decision by repository alone.
+
+`manager launch-status --pid <pid> --repo-root <path> --json` exposes a stable,
+read-only health projection for generic supervisors. It does not return
+prompts, environment values, credentials, ledger identifiers, or raw decision
+records.
+
 `agent policy --json`, `agent plan --json`, `manager status --json`,
 `codex-status --json`, and `manager preflight --json` all expose the same
 `output_policy` object. When Kaveman is enabled, that policy requires terse
@@ -269,10 +281,10 @@ launches.
 Manual `agent hook ... --json` commands return the stable Qwendex diagnostic
 envelope. Managed Codex hook config uses `agent hook ... --codex-hook-output`
 so hook stdout contains only the raw Codex event schema accepted by the Codex
-hook parser. Generated hook commands also carry the active Qwendex state DB,
-ledger DB, receipt root, status file, and root hints so hook subprocesses stay
-attached to the intended manager ledger even if the host drops exported
-`QWENDEX_*` state variables.
+hook parser. Generated hook commands carry fixed Qwendex state DB, ledger DB,
+receipt root, status file, and root hints. Dynamic Qdex launch identity must
+still be inherited from the live process; fixed state paths cannot substitute
+for that identity.
 
 Generate Codex-compatible managed hook wiring with:
 

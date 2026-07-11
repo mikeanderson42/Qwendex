@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.5.4"
+VERSION = "0.5.5"
 CONFIG_DIR = ROOT / "config" / "qwendex"
 DEFAULT_PROJECT_CONFIG = CONFIG_DIR / "qwendex.json"
 DEFAULT_USER_CONFIG = Path.home() / ".config" / "qwendex" / "config.json"
@@ -7749,6 +7749,47 @@ def evaluate_agent_hook(
             }
         }, {}
     if canonical == "UserPromptSubmit":
+        selected_mode = selected_manager_mode_for_policy(config)
+        manager_enforced = (
+            str(agent_policy.get("mode") or "") == "manager"
+            or selected_mode == "manager"
+            or bool(os.environ.get("QWENDEX_MANAGER_LEDGER_ID") or os.environ.get("QWENDEX_MANAGER_SESSION_ID"))
+        )
+        if manager_enforced and not (event.get("agent_id") or event.get("agent_type")):
+            ledger_id, session_id = manager_decision_identity(event)
+            event_repo = canonical_manager_repo_root(event=event)
+            decision = None
+            if ledger_id or session_id:
+                with connect_state(config) as conn:
+                    decision = latest_manager_decision(
+                        conn,
+                        repo_root=event_repo,
+                        ledger_id=ledger_id,
+                        session_id=session_id,
+                    )
+            try:
+                launch_pid = int(os.environ.get(MANAGER_LAUNCH_PID_ENV) or 0)
+            except (TypeError, ValueError):
+                launch_pid = 0
+            launch_health = manager_launch_health(
+                config,
+                pid=launch_pid,
+                repo_root=event_repo,
+                decision=decision,
+                env=os.environ,
+                agent_policy=agent_policy,
+                require_environment_identity=True,
+            )
+            if not launch_health["trusted"]:
+                return "blocked", {
+                    "decision": "block",
+                    "event": "manager.launch_untrusted",
+                    "reason": (
+                        "Manager Mode prompt rejected before model work because this process lacks a trusted Qdex launch identity "
+                        f"({launch_health['reason']}). Restart with {launch_health['recovery_command']}"
+                    ),
+                    "stop_status": "STOP_MANAGER_LAUNCH_UNTRUSTED",
+                }, {"launch_health": launch_health}
         prompt_update = update_manager_decision_from_prompt(config, event, agent_policy)
         additional_context = agent_mode_context(agent_policy, config=config)
         if prompt_update is not None:
@@ -7879,6 +7920,38 @@ def evaluate_agent_hook(
             return "pass", {}, {}
         if str(agent_policy.get("mode")) != "manager":
             agent_policy = resolve_agent_policy(config, env={}, selected_manager_mode="manager")
+        trusted_decision = None
+        if ledger_id or session_id:
+            with connect_state(config) as conn:
+                trusted_decision = manager_decision_for_event(
+                    conn,
+                    event,
+                    ledger_id=ledger_id,
+                    session_id=session_id,
+                    repo_root=event_repo_root,
+                )
+        try:
+            launch_pid = int(os.environ.get(MANAGER_LAUNCH_PID_ENV) or 0)
+        except (TypeError, ValueError):
+            launch_pid = 0
+        launch_health = manager_launch_health(
+            config,
+            pid=launch_pid,
+            repo_root=event_repo_root,
+            decision=trusted_decision,
+            env=os.environ,
+            agent_policy=agent_policy,
+            require_environment_identity=True,
+        )
+        if not launch_health["trusted"]:
+            return "pass", {
+                "continue": True,
+                "event": "manager.untrusted_stop_allowed",
+                "systemMessage": (
+                    "Qwendex allowed this untrusted process to stop without attaching or mutating a Manager decision. "
+                    f"Recovery: {launch_health['recovery_command']}"
+                ),
+            }, {"launch_health": launch_health}
         with connect_state(config) as conn:
             decision = manager_decision_for_event(
                 conn,
@@ -8567,7 +8640,7 @@ def build_agent_team_plan(
             else "record run decisions and artifact paths under .qwendex/runs"
         )
         command = [
-            "scripts/qwendex",
+            "qwendex",
             "manager",
             "assign",
             "--agent-id",
@@ -9048,6 +9121,142 @@ def manager_decision_for_event(
     return row_to_manager_decision(row) if row is not None else launch
 
 
+def manager_launch_health(
+    config: Mapping[str, Any],
+    *,
+    pid: int,
+    repo_root: str,
+    decision: Mapping[str, Any] | None = None,
+    env: Mapping[str, str] | None = None,
+    agent_policy: Mapping[str, Any] | None = None,
+    require_environment_identity: bool = False,
+) -> dict[str, Any]:
+    """Validate the immutable Qdex process/preflight binding.
+
+    The returned projection is deliberately safe for generic downstream health
+    consumers: it contains no prompts, environment values, ledger identifiers,
+    credentials, or raw decision records.
+    """
+    source_env = os.environ if env is None else env
+    canonical_repo = canonical_manager_repo_root(repo_root, env=source_env)
+    candidate = dict(decision) if decision is not None else None
+    if candidate is None and pid > 0:
+        with connect_state(config) as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM qwendex_manager_decisions
+                WHERE launch_pid = ?
+                ORDER BY CASE final_status
+                    WHEN 'preflight_ready' THEN 0
+                    WHEN 'validation_pending' THEN 1
+                    WHEN 'closed' THEN 2
+                    ELSE 3 END,
+                    timestamp_updated DESC
+                LIMIT 2
+                """,
+                (pid,),
+            ).fetchall()
+        candidates = [item for row in rows if (item := row_to_manager_decision(row))]
+        matching = [item for item in candidates if str(item.get("repo_root") or "") == canonical_repo]
+        candidate = matching[0] if matching else (candidates[0] if candidates else None)
+
+    expected_pid = int(candidate.get("launch_pid") or 0) if candidate else 0
+    expected_start = str(candidate.get("launch_start_ticks") or "") if candidate else ""
+    pid_alive = process_identity_alive(pid, expected_start) if pid > 0 and expected_start else False
+    repo_match = bool(candidate) and str(candidate.get("repo_root") or "") == canonical_repo
+    pid_match = bool(candidate) and expected_pid == pid and pid > 0
+    start_ticks_match = pid_match and bool(expected_start) and process_start_ticks(pid) == expected_start
+    decision_state = str(candidate.get("final_status") or "missing") if candidate else "missing"
+    active_state = decision_state in {"preflight_ready", "validation_pending", "closed"}
+    route_trusted = bool(candidate) and str(candidate.get("selected_route") or "") in {
+        "direct_single_writer",
+        "manager_subagents",
+    }
+    hook_trusted = bool(candidate) and bool(candidate.get("hook_verified") or candidate.get("hook_override"))
+
+    configured_policy = str((agent_policy or {}).get("policy_hash") or "")
+    recorded_policy = str(candidate.get("policy_hash") or "") if candidate else ""
+    policy_match = bool(recorded_policy) and (not configured_policy or configured_policy == recorded_policy)
+
+    launch_ledger = str(candidate.get("launch_ledger_id") or candidate.get("ledger_id") or "") if candidate else ""
+    recorded_session = str(candidate.get("session_id") or "") if candidate else ""
+    expected_root = manager_decision_root_agent_id(candidate or {}) if candidate else ""
+    identity_present = bool(launch_ledger and recorded_session and expected_root)
+    ledger_match = True
+    session_match = True
+    root_match = True
+    environment_pid_match = True
+    environment_start_match = True
+    codex_home_match = True
+    if require_environment_identity:
+        configured_ledger = str(source_env.get("QWENDEX_MANAGER_LEDGER_ID") or "").strip()
+        configured_session = str(source_env.get("QWENDEX_MANAGER_SESSION_ID") or "").strip()
+        configured_root = str(source_env.get(MANAGER_ROOT_AGENT_ID_ENV) or "").strip()
+        configured_pid = str(source_env.get(MANAGER_LAUNCH_PID_ENV) or "").strip()
+        configured_start = str(source_env.get(MANAGER_LAUNCH_START_TICKS_ENV) or "").strip()
+        configured_home = str(source_env.get("CODEX_HOME") or "").strip()
+        ledger_match = bool(configured_ledger) and configured_ledger == launch_ledger
+        session_match = bool(configured_session) and configured_session == recorded_session
+        root_match = bool(configured_root) and configured_root == expected_root
+        environment_pid_match = bool(configured_pid) and configured_pid == str(expected_pid)
+        environment_start_match = bool(configured_start) and configured_start == expected_start
+        recorded_home = str(candidate.get("codex_home_digest_or_path_policy") or "") if candidate else ""
+        codex_home_match = bool(configured_home and recorded_home) and path_digest_policy(Path(configured_home)) == recorded_home
+        identity_present = identity_present and all(
+            (configured_ledger, configured_session, configured_root, configured_pid, configured_start)
+        )
+
+    checks = {
+        "decision_found": candidate is not None,
+        "identity_present": identity_present,
+        "pid_alive": pid_alive,
+        "pid_match": pid_match,
+        "start_ticks_match": start_ticks_match,
+        "repo_match": repo_match,
+        "decision_active": active_state,
+        "route_trusted": route_trusted,
+        "hook_trusted": hook_trusted,
+        "policy_match": policy_match,
+        "ledger_match": ledger_match,
+        "session_match": session_match,
+        "root_match": root_match,
+        "environment_pid_match": environment_pid_match,
+        "environment_start_match": environment_start_match,
+        "codex_home_match": codex_home_match,
+    }
+    trusted = all(checks.values())
+    reason_map = (
+        ("decision_found", "qwendex_identity_missing"),
+        ("identity_present", "qwendex_identity_missing"),
+        ("pid_alive", "qwendex_identity_stale"),
+        ("pid_match", "qwendex_identity_stale"),
+        ("start_ticks_match", "qwendex_identity_stale"),
+        ("repo_match", "qwendex_repo_mismatch"),
+        ("decision_active", "qwendex_decision_inactive"),
+        ("route_trusted", "qwendex_route_untrusted"),
+        ("hook_trusted", "qwendex_hooks_untrusted"),
+        ("policy_match", "qwendex_policy_mismatch"),
+        ("ledger_match", "qwendex_ledger_mismatch"),
+        ("session_match", "qwendex_session_mismatch"),
+        ("root_match", "qwendex_root_mismatch"),
+        ("environment_pid_match", "qwendex_identity_stale"),
+        ("environment_start_match", "qwendex_identity_stale"),
+        ("codex_home_match", "qwendex_codex_home_mismatch"),
+    )
+    reason = "trusted" if trusted else next(code for key, code in reason_map if not checks[key])
+    return {
+        "trusted": trusted,
+        "pid_alive": pid_alive,
+        "repo_match": repo_match,
+        "decision_state": decision_state,
+        "reason": reason,
+        "recovery_command": f"qdex -C {shlex.quote(canonical_repo)}",
+        "identity_present": identity_present,
+        "policy_match": policy_match,
+        "hook_trusted": hook_trusted,
+    }
+
+
 def manager_decision_for_agent_task(
     conn: sqlite3.Connection,
     *,
@@ -9114,6 +9323,29 @@ def manager_root_ownership_for_event(
         )
     if decision is None:
         return "", None, "Manager Mode root write could not attach to its qdex preflight decision."
+    launch_health = manager_launch_health(
+        config,
+        pid=int(decision.get("launch_pid") or 0),
+        repo_root=repo_root,
+        decision=decision,
+        env=os.environ,
+        agent_policy=agent_policy,
+        require_environment_identity=True,
+    )
+    if not launch_health["trusted"]:
+        reason = str(launch_health.get("reason") or "qwendex_identity_missing")
+        messages = {
+            "qwendex_identity_missing": "Manager Mode root writes require a qdex preflight root identity. Restart this repository through qdex.",
+            "qwendex_identity_stale": "Manager Mode launcher process is no longer active. Restart this repository through qdex.",
+            "qwendex_repo_mismatch": "Manager Mode root write repository does not match the attached qdex preflight decision.",
+            "qwendex_policy_mismatch": "Manager Mode root write policy does not match the attached preflight decision.",
+            "qwendex_codex_home_mismatch": "Manager Mode root write Codex home does not match the attached preflight decision.",
+            "qwendex_hooks_untrusted": "Manager Mode root write requires verified hooks or the recorded launch override.",
+        }
+        return "", decision, messages.get(
+            reason,
+            "Manager Mode launcher identity does not match the attached qdex preflight decision.",
+        )
     expected_root_id = manager_decision_root_agent_id(decision)
     if configured_root_id != expected_root_id:
         return "", decision, "Manager Mode root identity does not match the attached qdex preflight decision."
@@ -9140,13 +9372,6 @@ def manager_root_ownership_for_event(
     actual_policy = str(decision.get("policy_hash") or "")
     if expected_policy and actual_policy and expected_policy != actual_policy:
         return "", decision, "Manager Mode root write policy does not match the attached preflight decision."
-    timestamp = str(decision.get("timestamp_updated") or decision.get("timestamp_created") or "")
-    try:
-        age_seconds = (datetime.now(UTC) - parse_utc(timestamp)).total_seconds()
-    except (TypeError, ValueError):
-        return "", decision, "Manager Mode root write preflight timestamp is invalid."
-    if age_seconds > MANAGER_DECISION_ATTACH_WINDOW_MINUTES * 60:
-        return "", decision, "Manager Mode root write preflight decision is stale."
     if not bool(decision.get("hook_verified")) and not bool(decision.get("hook_override")):
         return "", decision, "Manager Mode root write requires verified hooks or the recorded launch override."
     return configured_root_id, decision, ""
@@ -10131,13 +10356,33 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
             errors=override_errors,
         )
     now = utc_now()
-    repo_root = canonical_manager_repo_root()
+    repo_root = canonical_manager_repo_root(args.repo_root or None)
     with connect_state(config) as conn:
         mode = current_manager_mode(config, conn)
         selected_manager_mode = mode
         agent_policy = resolve_agent_policy(config, cli_agent_use=getattr(args, "agent_use", ""), selected_manager_mode=mode)
         if agent_policy["errors"]:
             return stable_envelope(command="manager", status="blocked", summary="Invalid Qwendex agent policy.", errors=list(agent_policy["errors"]), data={"agent_policy": agent_policy})
+        if args.action == "launch-status":
+            launch_repo = canonical_manager_repo_root(args.repo_root or os.getcwd())
+            health = manager_launch_health(
+                config,
+                pid=max(0, int(args.pid or 0)),
+                repo_root=launch_repo,
+                agent_policy=agent_policy,
+            )
+            return stable_envelope(
+                command="manager",
+                status="pass" if health["trusted"] else "blocked",
+                summary=(
+                    "Qwendex launch identity is trusted."
+                    if health["trusted"]
+                    else f"Qwendex launch identity is not trusted: {health['reason']}."
+                ),
+                next_actions=[] if health["trusted"] else [health["recovery_command"]],
+                errors=[] if health["trusted"] else [health["reason"]],
+                data=health,
+            )
         if args.action not in {"mode"}:
             mode = policy_mode_for_manager(args, config, mode)
         stale_after = mode_stale_after_minutes(config, mode, args.stale_after_minutes)
@@ -11078,7 +11323,7 @@ def command_manager(args: argparse.Namespace, config: dict[str, Any]) -> dict[st
             summary="Qwendex manager override values are outside configured bounds.",
             errors=override_errors,
         )
-    repo_root = canonical_manager_repo_root()
+    repo_root = canonical_manager_repo_root(args.repo_root or None)
     with connect_state(config) as conn:
         mode = current_manager_mode(config, conn, explicit=args.mode)
         agent_policy = resolve_agent_policy(config, cli_agent_use=getattr(args, "agent_use", ""), selected_manager_mode=mode)
@@ -11367,7 +11612,7 @@ def command_line() -> argparse.ArgumentParser:
     learn.add_argument("--json", action="store_true")
 
     manager = sub.add_parser("manager")
-    manager.add_argument("action", nargs="?", choices=["status", "assign", "heartbeat", "close", "close-stale", "repair", "reconcile", "mode", "estimate", "preflight", "decision", "kaveman", "local"])
+    manager.add_argument("action", nargs="?", choices=["status", "assign", "heartbeat", "close", "close-stale", "repair", "reconcile", "mode", "estimate", "preflight", "decision", "launch-status", "kaveman", "local"])
     manager.add_argument("--mode", choices=["manual", "off", "auto", "lite", "medium", "heavy", "manager", "manager_only"], default="")
     manager.add_argument("--set", default="")
     manager.add_argument("--cycle", action="store_true")
@@ -11386,6 +11631,7 @@ def command_line() -> argparse.ArgumentParser:
     manager.add_argument("--lane", default="")
     manager.add_argument("--task-id", default="")
     manager.add_argument("--repo-root", default="")
+    manager.add_argument("--pid", type=int, default=0)
     manager.add_argument("--objective", default="")
     manager.add_argument("--task-class", default="")
     manager.add_argument("--file", action="append")

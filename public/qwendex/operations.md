@@ -26,6 +26,14 @@ reports whether PEP 668 required pip's externally-managed override.
 select a release tag with git first, stop on a dirty checkout, then rerun sync,
 bootstrap/doctor, and offline evals.
 
+Sourcing the generated environment leaves ordinary upstream `codex` and the
+caller's `CODEX_HOME` unchanged. Start managed work with `qdex` or
+`qdex -C <repo>`. For a supervised live process, verify the trust binding with:
+
+```bash
+scripts/qwendex manager launch-status --pid "$PID" --repo-root "$REPO" --json
+```
+
 For manual operator navigation, `fd` + `fzf` can be configured in the user's
 interactive shell:
 

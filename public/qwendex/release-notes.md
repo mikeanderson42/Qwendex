@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## 0.5.5
+
+- Preserved ordinary upstream `codex` resolution and the caller's normal
+  `CODEX_HOME` after sourcing the Qwendex environment.
+- Moved Qwendex's patched-binary selector and labelled upstream fallback into
+  an ignored internal runtime that is invoked only through `qdex`.
+- Kept canonical `qdex -C <project>` and native Codex argument pass-through,
+  including arguments after `--`, while adding yolo and hook-trust flags at
+  most once.
+- Added fail-fast Manager prompt validation for the live process/start,
+  repository, preflight ledger, root identity, Codex home, hooks, and policy.
+- Made untrusted Stop events non-blocking and non-mutating instead of attaching
+  to a decision by repository.
+- Added a sanitized generic `manager launch-status` process-health interface.
+
 ## 0.5.4
 
 - Made plain `qdex` inherit the caller's working directory without adding a

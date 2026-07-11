@@ -81,3 +81,10 @@ providing turn-boundary cleanup. An aborted tool remains locked rather than
 weakening the single-writer boundary. After an abrupt launcher exit, orphan
 reclamation requires the recorded PID/process-start identity to be dead; a
 still-live prior launcher remains blocking.
+
+Manager prompt trust is established only by Qdex's live PID/start-ticks,
+repository-scoped preflight ledger/session, derived root identity, isolated
+Codex home, verified hooks, and policy hash. A direct internal-runtime process
+cannot become trusted by selecting the same repository or state database.
+Untrusted `UserPromptSubmit` fails before model work; untrusted `Stop` is
+non-blocking and cannot attach to or mutate a decision.

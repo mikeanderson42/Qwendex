@@ -94,17 +94,19 @@ The dev environment exposes these wrappers in `~/qwendex-dev/bin`:
 - `qwendex`
 - `qwendex-dev`
 - `llmstack`
-- `codex`
 - `codex-main`
 
-Sourcing `.qwendex-dev/env.sh` places this `bin` directory before the user npm
-bin directory, so ordinary `codex` invocations use the Qwendex wrapper.
-`codex-main` is the explicit path back to the captured upstream CLI.
+Sourcing `.qwendex-dev/env.sh` places this `bin` directory on `PATH` without
+installing a `codex` command or exporting `CODEX_HOME`. Ordinary `codex`
+therefore remains the upstream CLI with its normal home. `codex-main` is an
+explicit alias for the captured upstream CLI.
 
-The `codex` wrapper first uses `QWENDEX_DEV_CODEX_BIN` when set, then
+The ignored internal `QWENDEX_CODEX_RUNTIME` first uses
+`QWENDEX_DEV_CODEX_BIN` when set, then
 `~/qwendex-dev/.qwendex-dev/codex-build/bin/codex` when present, and finally the
-current system Codex binary. This keeps the larger main Codex install available
-while a patched/dev Codex build is being prepared. A selected dev binary must
+captured upstream Codex binary with an explicit fallback diagnostic. Only
+`qdex` invokes this runtime and sets `QWENDEX_CODEX_HOME` as its child's
+`CODEX_HOME`. A selected dev binary must
 have an executable `codex-code-mode-host` companion in the same directory; the
 wrapper blocks before launch when that Codex 0.144.0 runtime contract is
 incomplete.
@@ -117,7 +119,7 @@ ignores this extension; the patch preflight names the boundary. Release builds
 strip unneeded symbols from both native binaries and record their unstripped
 and packaged sizes in `codex_build.json`.
 
-The dev launcher uses an isolated `CODEX_HOME` at
+Qdex uses an isolated `CODEX_HOME` at
 `~/qwendex-dev/.qwendex-dev/codex_home`. `qwendex-dev status-json` records the
 active hook source count for that home and also reports whether global
 `~/.codex/hooks.json` exists. If global hooks exist but the isolated dev home has
