@@ -1769,7 +1769,9 @@ def test_ci_workflow_emits_attestation_and_runs_actual_artifact_and_downstream_i
     assert '"workflow_sha": os.environ["GITHUB_WORKFLOW_SHA"]' in workflow
     assert workflow.count("scripts/qwendex_dev_env sync") == 2
     assert "import tomllib" in workflow
-    assert '(Path(os.environ["CODEX_HOME"]) / "config.toml")' in workflow
+    assert 'before_codex_home=${CODEX_HOME-__unset__}' in workflow
+    assert 'test "${CODEX_HOME-__unset__}" = "$before_codex_home"' in workflow
+    assert '(Path(os.environ["QWENDEX_CODEX_HOME"]) / "config.toml")' in workflow
     assert "codex features list >/dev/null" in workflow
 
 
