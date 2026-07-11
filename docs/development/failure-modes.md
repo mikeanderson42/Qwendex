@@ -20,6 +20,16 @@ Use this file when diagnosing Qwendex, local-Qwen, or patched Codex behavior.
   release verification.
 - Codex version unsupported by patch manifest: patched-TUI claim is blocked
   until anchors are refreshed.
+- Bare `qdex` resolves to a shell function that injects `-C`: native argv
+  parity failure; remove the shadow before diagnosing the installed launcher.
+- One immutable Manager launch candidate exists but its root turn is empty:
+  `turn_unattached`; bind only through the canonical resolver at the first
+  trusted root event, never by newest row or repository.
+- A live launch policy hash changes after an Agent Manager toggle: current-
+  launch policy drift; hooks must use the preflight-exported effective policy
+  and leave the toggle for the next launch.
+- Missing or ambiguous Manager attachment blocks Stop: recovery failure; Stop
+  must exit without guessed decision or lease mutation.
 
 ## Debug Order
 

@@ -92,6 +92,11 @@ route, routing reason, direct-work exception flag, verifier requirement,
 validation plan, receipt paths, launcher-derived root ownership id, and STOP
 status.
 
+The launch record also carries a stable idempotency key plus state-DB,
+ledger-DB, Codex-home, runtime, PID, and process-start identities. Repeating
+preflight for the same not-yet-admitted Qdex process reuses that launch record;
+it does not create a newest-row fallback that later hooks must guess.
+
 Inspect the latest decision or a specific ledger:
 
 ```bash
@@ -265,6 +270,19 @@ Codex home, hook trust, and policy hash. Failure blocks the prompt with a
 `qdex -C <repo>` recovery command before tools or subagents can run. Stop uses
 the same validator. If the launch is untrusted, Stop returns a non-blocking,
 non-mutating diagnostic and never searches for a decision by repository alone.
+
+The canonical resolver reports `status`, an exact reason code, candidate count,
+and sanitized match details. It selects a decision only when one trusted match
+exists. Native `UserPromptSubmit` normally binds the Codex root session and turn
+atomically. A Codex goal continuation can begin directly with `PreToolUse`
+without emitting that prompt hook; in that case the same resolver performs the
+one-time binding before a root write or `spawn_agent` is admitted. Repeating the
+same session/turn is idempotent, while a different claimant or multiple exact
+candidates is rejected.
+
+The effective AgentPolicy exported by preflight is pinned for that live launch.
+Changing Agent Manager mode updates the next launch but does not change the
+policy hash used by hooks in an already-running Qdex process.
 
 `manager launch-status --pid <pid> --repo-root <path> --json` exposes a stable,
 read-only health projection for generic supervisors. It does not return

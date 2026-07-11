@@ -504,6 +504,11 @@ MANAGER_UNHOOKED_REASON_ENV = "QWENDEX_MANAGER_UNHOOKED_REASON"
 MANAGER_ROOT_AGENT_ID_ENV = "QWENDEX_MANAGER_ROOT_AGENT_ID"
 MANAGER_LAUNCH_PID_ENV = "QWENDEX_MANAGER_LAUNCH_PID"
 MANAGER_LAUNCH_START_TICKS_ENV = "QWENDEX_MANAGER_LAUNCH_START_TICKS"
+MANAGER_LAUNCH_NONCE_ENV = "QWENDEX_MANAGER_LAUNCH_NONCE"
+MANAGER_LAUNCH_KEY_ENV = "QWENDEX_MANAGER_LAUNCH_KEY"
+MANAGER_STATE_DB_IDENTITY_ENV = "QWENDEX_MANAGER_STATE_DB_IDENTITY"
+MANAGER_LEDGER_DB_IDENTITY_ENV = "QWENDEX_MANAGER_LEDGER_DB_IDENTITY"
+MANAGER_RUNTIME_IDENTITY_ENV = "QWENDEX_MANAGER_RUNTIME_IDENTITY"
 MANAGER_ROOT_LOCK_PATH = "<repo-root>"
 MANAGER_ROOT_TOOL_SEPARATOR = "--tool-"
 QWENDEX_CODEX_PATCH_MARKER = "QWENDEX_CODEX_TUI_PATCH_V1"
@@ -1048,6 +1053,7 @@ def resolve_agent_policy(
     env: Mapping[str, str] | None = None,
     selected_manager_mode: str = "",
     kaveman_enabled: bool | None = None,
+    selector_source_override: str = "",
 ) -> dict[str, Any]:
     source_env = os.environ if env is None else env
     selector_source = "default"
@@ -1064,6 +1070,8 @@ def resolve_agent_policy(
     elif selected_manager_mode:
         selector_source = "manager-mode"
         selector = selected_manager_mode
+    if selector_source_override:
+        selector_source = selector_source_override
     mode = normalize_agent_use_mode(selector)
     warnings: list[str] = []
     errors: list[str] = []
@@ -2063,6 +2071,39 @@ def path_digest_policy(path: Path) -> str:
     return "sha256:" + sha256_text(str(path.expanduser().resolve(strict=False)))
 
 
+def manager_runtime_identity() -> str:
+    return "sha256:" + sha256_file(Path(__file__).resolve())
+
+
+def manager_store_identities(config: Mapping[str, Any]) -> tuple[str, str]:
+    return (
+        path_digest_policy(state_db_path(config)),
+        path_digest_policy(configured_ledger_path(config)),
+    )
+
+
+def manager_launch_key(
+    *,
+    repo_root: str,
+    launch_pid: int,
+    launch_start_ticks: str,
+    launch_nonce: str,
+    codex_home_identity: str,
+    state_db_identity: str,
+    runtime_identity: str,
+) -> str:
+    material = {
+        "repo_root": repo_root,
+        "launch_pid": launch_pid,
+        "launch_start_ticks": launch_start_ticks,
+        "launch_nonce": launch_nonce,
+        "codex_home_identity": codex_home_identity,
+        "state_db_identity": state_db_identity,
+        "runtime_identity": runtime_identity,
+    }
+    return "sha256:" + sha256_text(json.dumps(material, sort_keys=True, separators=(",", ":")))
+
+
 def prompt_digest_and_summary(prompt: str, *, known: bool) -> tuple[str, str]:
     if not known:
         return "", MANAGER_PROMPT_UNKNOWN_SUMMARY
@@ -2327,6 +2368,19 @@ def ensure_state_schema(conn: sqlite3.Connection) -> None:
     ensure_table_column(conn, "qwendex_manager_decisions", "agent_task_id", "TEXT NOT NULL DEFAULT ''")
     ensure_table_column(conn, "qwendex_manager_decisions", "launch_pid", "INTEGER NOT NULL DEFAULT 0")
     ensure_table_column(conn, "qwendex_manager_decisions", "launch_start_ticks", "TEXT NOT NULL DEFAULT ''")
+    ensure_table_column(conn, "qwendex_manager_decisions", "launch_nonce", "TEXT NOT NULL DEFAULT ''")
+    ensure_table_column(conn, "qwendex_manager_decisions", "launch_key", "TEXT NOT NULL DEFAULT ''")
+    ensure_table_column(conn, "qwendex_manager_decisions", "root_session_id", "TEXT NOT NULL DEFAULT ''")
+    ensure_table_column(conn, "qwendex_manager_decisions", "state_db_identity", "TEXT NOT NULL DEFAULT ''")
+    ensure_table_column(conn, "qwendex_manager_decisions", "ledger_db_identity", "TEXT NOT NULL DEFAULT ''")
+    ensure_table_column(conn, "qwendex_manager_decisions", "runtime_identity", "TEXT NOT NULL DEFAULT ''")
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS qwendex_manager_decisions_launch_key
+        ON qwendex_manager_decisions(launch_key)
+        WHERE launch_key <> '' AND ledger_id = launch_ledger_id
+        """
+    )
     ensure_table_column(conn, "qwendex_agent_file_locks", "repo_root", "TEXT NOT NULL DEFAULT ''")
     ensure_table_column(conn, "qwendex_context_snapshots", "repo_root", "TEXT NOT NULL DEFAULT ''")
     ensure_table_column(conn, "qwendex_handoffs", "repo_root", "TEXT NOT NULL DEFAULT ''")
@@ -7501,6 +7555,22 @@ def pre_tool_gate(config: Mapping[str, Any], event: Mapping[str, Any], agent_pol
             "event": "agent.identity_malformed",
             "reason": "Manager Mode native hooks must provide both agent_id and agent_type for a child, or neither for root.",
         }
+    if manager_mode_active and codex_root and tool_key == "spawn_agent":
+        spawn_resolution = resolve_manager_decision(
+            config,
+            event,
+            agent_policy,
+            allow_turn_binding=True,
+        )
+        if spawn_resolution.get("status") != "attached":
+            reason_code = str(spawn_resolution.get("reason") or "decision_not_found")
+            return {
+                "decision": "block",
+                "event": "manager.subagent_admission_rejected",
+                "reason": f"Manager Mode subagent admission failed ({reason_code}); no child was authorized.",
+                "reason_code": reason_code,
+                "manager_resolution": manager_resolution_diagnostic(spawn_resolution),
+            }
     if (codex_subagent or depth > 0) and tool_key in ROOT_ONLY_AGENT_TOOLS:
         return {
             "decision": "block",
@@ -7640,21 +7710,24 @@ def pre_tool_gate(config: Mapping[str, Any], event: Mapping[str, Any], agent_pol
                     else event_repo_root
                 )
             if codex_subagent and manager_mode_active:
-                ledger_id, manager_session_id = manager_decision_identity(event)
-                decision = manager_decision_for_agent_task(
-                    conn,
-                    ledger_id=ledger_id,
-                    session_id=manager_session_id,
-                    repo_root=event_repo_root,
+                task_resolution = resolve_manager_decision(
+                    config,
+                    event,
+                    agent_policy,
+                    require_turn=False,
                     agent_task_id=str(session.get("task_id") or ""),
-                ) if (ledger_id or manager_session_id) else None
-                if str(agent_policy.get("mode") or "") == "manager" and decision is None:
+                )
+                decision = task_resolution.get("decision")
+                if task_resolution.get("status") != "attached" or not isinstance(decision, Mapping):
+                    reason_code = str(task_resolution.get("reason") or "decision_not_found")
                     return {
                         "decision": "block",
                         "event": "agent.unattached",
-                        "reason": "Manager Mode subagent write could not attach to the active qdex preflight decision.",
+                        "reason": f"Manager Mode subagent admission failed ({reason_code}).",
+                        "reason_code": reason_code,
+                        "manager_resolution": manager_resolution_diagnostic(task_resolution),
                     }
-                if decision is not None:
+                if isinstance(decision, Mapping):
                     expected_task_id = str(
                         decision.get("agent_task_id")
                         or decision.get("session_id")
@@ -7755,42 +7828,33 @@ def evaluate_agent_hook(
             or selected_mode == "manager"
             or bool(os.environ.get("QWENDEX_MANAGER_LEDGER_ID") or os.environ.get("QWENDEX_MANAGER_SESSION_ID"))
         )
+        manager_resolution: dict[str, Any] | None = None
         if manager_enforced and not (event.get("agent_id") or event.get("agent_type")):
-            ledger_id, session_id = manager_decision_identity(event)
             event_repo = canonical_manager_repo_root(event=event)
-            decision = None
-            if ledger_id or session_id:
-                with connect_state(config) as conn:
-                    decision = latest_manager_decision(
-                        conn,
-                        repo_root=event_repo,
-                        ledger_id=ledger_id,
-                        session_id=session_id,
-                    )
-            try:
-                launch_pid = int(os.environ.get(MANAGER_LAUNCH_PID_ENV) or 0)
-            except (TypeError, ValueError):
-                launch_pid = 0
-            launch_health = manager_launch_health(
+            manager_resolution = resolve_manager_decision(
                 config,
-                pid=launch_pid,
-                repo_root=event_repo,
-                decision=decision,
-                env=os.environ,
-                agent_policy=agent_policy,
-                require_environment_identity=True,
+                event,
+                agent_policy,
+                allow_turn_binding=True,
             )
-            if not launch_health["trusted"]:
+            if manager_resolution["status"] != "attached":
+                reason_code = str(manager_resolution.get("reason") or "decision_not_found")
                 return "blocked", {
                     "decision": "block",
                     "event": "manager.launch_untrusted",
                     "reason": (
-                        "Manager Mode prompt rejected before model work because this process lacks a trusted Qdex launch identity "
-                        f"({launch_health['reason']}). Restart with {launch_health['recovery_command']}"
+                        f"Manager Mode prompt admission failed ({reason_code}). "
+                        f"Exit this session, then run from an external shell: qdex -C {shlex.quote(event_repo)}"
                     ),
+                    "reason_code": reason_code,
                     "stop_status": "STOP_MANAGER_LAUNCH_UNTRUSTED",
-                }, {"launch_health": launch_health}
-        prompt_update = update_manager_decision_from_prompt(config, event, agent_policy)
+                }, {"manager_resolution": manager_resolution_diagnostic(manager_resolution)}
+        prompt_update = update_manager_decision_from_prompt(
+            config,
+            event,
+            agent_policy,
+            resolved_decision=(manager_resolution or {}).get("decision"),
+        )
         additional_context = agent_mode_context(agent_policy, config=config)
         if prompt_update is not None:
             decision = prompt_update["manager_decision"]
@@ -7821,7 +7885,14 @@ def evaluate_agent_hook(
                 "hookEventName": canonical,
                 "additionalContext": additional_context,
             }
-        }, prompt_update or {}
+        }, {
+            **(prompt_update or {}),
+            **(
+                {"manager_resolution": manager_resolution_diagnostic(manager_resolution)}
+                if manager_resolution is not None
+                else {}
+            ),
+        }
     if canonical == "SubagentStart":
         return "pass", {
             "hookSpecificOutput": {
@@ -7918,85 +7989,44 @@ def evaluate_agent_hook(
         )
         if not manager_enforced:
             return "pass", {}, {}
-        if str(agent_policy.get("mode")) != "manager":
-            agent_policy = resolve_agent_policy(config, env={}, selected_manager_mode="manager")
-        trusted_decision = None
-        if ledger_id or session_id:
-            with connect_state(config) as conn:
-                trusted_decision = manager_decision_for_event(
-                    conn,
-                    event,
-                    ledger_id=ledger_id,
-                    session_id=session_id,
-                    repo_root=event_repo_root,
-                )
-        try:
-            launch_pid = int(os.environ.get(MANAGER_LAUNCH_PID_ENV) or 0)
-        except (TypeError, ValueError):
-            launch_pid = 0
-        launch_health = manager_launch_health(
+        manager_resolution = resolve_manager_decision(
             config,
-            pid=launch_pid,
-            repo_root=event_repo_root,
-            decision=trusted_decision,
-            env=os.environ,
-            agent_policy=agent_policy,
-            require_environment_identity=True,
+            event,
+            agent_policy,
+            allow_turn_binding=False,
         )
-        if not launch_health["trusted"]:
+        resolved_decision = manager_resolution.get("decision")
+        if manager_resolution.get("status") != "attached" or not isinstance(resolved_decision, Mapping):
+            reason_code = str(manager_resolution.get("reason") or "decision_not_found")
             return "pass", {
                 "continue": True,
                 "event": "manager.untrusted_stop_allowed",
+                "reason_code": reason_code,
                 "systemMessage": (
-                    "Qwendex allowed this untrusted process to stop without attaching or mutating a Manager decision. "
-                    f"Recovery: {launch_health['recovery_command']}"
+                    f"Qwendex allowed this untrusted process to stop without attaching or mutating a Manager decision ({reason_code}). "
+                    f"For recovery, exit this session and run from an external shell: qdex -C {shlex.quote(event_repo_root)}"
                 ),
-            }, {"launch_health": launch_health}
+            }, {
+                "manager_resolution": manager_resolution_diagnostic(manager_resolution),
+                "launch_health": {"trusted": False, "reason": reason_code},
+            }
+        decision = dict(resolved_decision)
         with connect_state(config) as conn:
-            decision = manager_decision_for_event(
-                conn,
-                event,
-                ledger_id=ledger_id,
-                session_id=session_id,
-                repo_root=event_repo_root,
+            decision_session_id = str(
+                decision.get("agent_task_id")
+                or decision.get("session_id")
+                or ""
             )
-            if not (ledger_id or session_id) and not manager_decision_attachable(decision, agent_policy, env=os.environ):
-                decision = None
-            if decision is not None and not decision.get("repo_root"):
-                decision = None
-            if decision is not None and str(decision.get("repo_root") or "") != event_repo_root:
-                decision = None
-            if decision is not None:
-                decision_session_id = str(
-                    decision.get("agent_task_id")
-                    or decision.get("session_id")
-                    or ""
-                )
-                decision_repo_root = str(decision.get("repo_root") or "")
-                if decision_repo_root:
-                    rows = conn.execute(
-                        """
-                        SELECT * FROM qwendex_agent_sessions
-                        WHERE task_id = ? AND repo_root = ?
-                        ORDER BY updated_at DESC
-                        """,
-                        (decision_session_id, decision_repo_root),
-                    ).fetchall()
-                else:
-                    rows = conn.execute(
-                        "SELECT * FROM qwendex_agent_sessions WHERE task_id = ? ORDER BY updated_at DESC",
-                        (decision_session_id,),
-                    ).fetchall()
-            else:
-                rows = []
+            decision_repo_root = str(decision.get("repo_root") or "")
+            rows = conn.execute(
+                """
+                SELECT * FROM qwendex_agent_sessions
+                WHERE task_id = ? AND repo_root = ?
+                ORDER BY updated_at DESC
+                """,
+                (decision_session_id, decision_repo_root),
+            ).fetchall()
         sessions = [session for row in rows if (session := row_to_agent_session(row))]
-        if decision is None:
-            return "blocked", {
-                "decision": "block",
-                "event": "manager.unattached",
-                "reason": "Manager Mode stop requires a preflight manager_decision ledger record.",
-                "stop_status": "STOP_MANAGER_UNATTACHED",
-            }, {"agent_sessions": sessions}
         selected_route = str(decision.get("selected_route") or "")
         if selected_route == "blocked" or decision.get("stop_status") == "STOP_MANAGER_BLOCKED_UNHOOKED":
             return "blocked", {
@@ -8808,7 +8838,9 @@ def persist_manager_decision(conn: sqlite3.Connection, decision: Mapping[str, An
         """
         UPDATE qwendex_manager_decisions
         SET launch_ledger_id = ?, turn_id = ?, agent_task_id = ?,
-            launch_pid = ?, launch_start_ticks = ?
+            launch_pid = ?, launch_start_ticks = ?, launch_nonce = ?, launch_key = ?,
+            root_session_id = ?, state_db_identity = ?,
+            ledger_db_identity = ?, runtime_identity = ?
         WHERE ledger_id = ?
         """,
         (
@@ -8817,6 +8849,12 @@ def persist_manager_decision(conn: sqlite3.Connection, decision: Mapping[str, An
             str(decision.get("agent_task_id") or decision.get("session_id") or ""),
             int(decision.get("launch_pid") or 0),
             str(decision.get("launch_start_ticks") or ""),
+            str(decision.get("launch_nonce") or ""),
+            str(decision.get("launch_key") or ""),
+            str(decision.get("root_session_id") or ""),
+            str(decision.get("state_db_identity") or ""),
+            str(decision.get("ledger_db_identity") or ""),
+            str(decision.get("runtime_identity") or ""),
             ledger_id,
         ),
     )
@@ -8853,14 +8891,52 @@ def manager_preflight_payload(
     hook_status["override"] = override
     hook_status["override_reason"] = requested_override_reason if override else None
     timestamp = utc_now()
-    session_id = str(source_env.get("QWENDEX_MANAGER_SESSION_ID") or make_id("mgrsess"))
-    ledger_id = str(source_env.get("QWENDEX_MANAGER_LEDGER_ID") or make_id("mgrldg"))
-    root_agent_id = manager_root_agent_id(ledger_id, session_id)
     try:
         launch_pid = max(0, int(source_env.get(MANAGER_LAUNCH_PID_ENV) or 0))
     except (TypeError, ValueError):
         launch_pid = 0
     launch_start_ticks = str(source_env.get(MANAGER_LAUNCH_START_TICKS_ENV) or "").strip()
+    launch_nonce = str(source_env.get(MANAGER_LAUNCH_NONCE_ENV) or make_id("launch")).strip()
+    codex_home_identity = path_digest_policy(codex_home)
+    state_db_identity, ledger_db_identity = manager_store_identities(config)
+    runtime_identity = manager_runtime_identity()
+    launch_key = (
+        manager_launch_key(
+            repo_root=repo_root,
+            launch_pid=launch_pid,
+            launch_start_ticks=launch_start_ticks,
+            launch_nonce=launch_nonce,
+            codex_home_identity=codex_home_identity,
+            state_db_identity=state_db_identity,
+            runtime_identity=runtime_identity,
+        )
+        if launch_pid and launch_start_ticks
+        else ""
+    )
+    existing_launch: dict[str, Any] | None = None
+    if launch_key and not dry_run:
+        with connect_state(config) as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM qwendex_manager_decisions
+                WHERE launch_key = ? AND ledger_id = launch_ledger_id
+                LIMIT 2
+                """,
+                (launch_key,),
+            ).fetchall()
+        if len(rows) == 1:
+            existing_launch = row_to_manager_decision(rows[0])
+    session_id = str(
+        source_env.get("QWENDEX_MANAGER_SESSION_ID")
+        or (existing_launch or {}).get("session_id")
+        or make_id("mgrsess")
+    )
+    ledger_id = str(
+        source_env.get("QWENDEX_MANAGER_LEDGER_ID")
+        or (existing_launch or {}).get("ledger_id")
+        or make_id("mgrldg")
+    )
+    root_agent_id = manager_root_agent_id(ledger_id, session_id)
     prompt_digest, prompt_summary = prompt_digest_and_summary(prompt, known=prompt_known)
     estimate_id = ""
     estimate: dict[str, Any] | None = None
@@ -8872,7 +8948,34 @@ def manager_preflight_payload(
         validation_plan = str(estimate.get("validation_depth") or validation_plan)
     manager_required = mode == "manager" or str(agent_policy.get("mode") or "") == "manager"
     hook_blocked = manager_required and not bool(hook_status["verified"]) and not override
-    if hook_blocked:
+    existing_policy_drift = bool(
+        existing_launch
+        and str(existing_launch.get("policy_hash") or "")
+        and str(existing_launch.get("policy_hash") or "") != str(agent_policy.get("policy_hash") or "")
+    )
+    launch_already_consumed = bool(
+        existing_launch
+        and (
+            existing_launch.get("turn_id")
+            or existing_launch.get("root_session_id")
+            or existing_launch.get("prompt_known")
+            or str(existing_launch.get("final_status") or "") != "preflight_ready"
+            or existing_policy_drift
+        )
+    )
+    if launch_already_consumed:
+        selected_route = "blocked"
+        routing_reason = (
+            "This Qdex launch identity is pinned to a different Manager policy."
+            if existing_policy_drift
+            else "This Qdex launch identity already belongs to an admitted or terminal root turn."
+        )
+        stop_status = "STOP_MANAGER_UNATTACHED"
+        direct_work_exception = False
+        subagents_allowed = False
+        final_status = str((existing_launch or {}).get("final_status") or "blocked")
+        ok = False
+    elif hook_blocked:
         selected_route = "blocked"
         routing_reason = "Manager Mode requires Qwendex Codex hooks or explicit unhooked override."
         stop_status = "STOP_MANAGER_BLOCKED_UNHOOKED"
@@ -8927,10 +9030,16 @@ def manager_preflight_payload(
         "root_agent_id": root_agent_id,
         "launch_pid": launch_pid,
         "launch_start_ticks": launch_start_ticks,
+        "launch_nonce": launch_nonce,
+        "launch_key": launch_key,
+        "root_session_id": "",
+        "state_db_identity": state_db_identity,
+        "ledger_db_identity": ledger_db_identity,
+        "runtime_identity": runtime_identity,
         "turn_id": "",
         "agent_task_id": session_id,
         "timestamp": timestamp,
-        "timestamp_created": timestamp,
+        "timestamp_created": str((existing_launch or {}).get("timestamp_created") or timestamp),
         "timestamp_updated": timestamp,
         "mode": "manager" if manager_required else str(agent_policy.get("mode") or mode),
         "selected_manager_mode": mode,
@@ -8940,7 +9049,7 @@ def manager_preflight_payload(
         "policy_hash": str(agent_policy.get("policy_hash") or ""),
         "output_policy": agent_policy.get("output_policy", {}),
         "codex_home": str(codex_home),
-        "codex_home_digest_or_path_policy": path_digest_policy(codex_home),
+        "codex_home_digest_or_path_policy": codex_home_identity,
         "repo_root": repo_root,
         "hook_status": hook_status,
         "agent_availability": {
@@ -8984,6 +9093,7 @@ def manager_preflight_payload(
             else []
         ),
         "dry_run": dry_run,
+        "idempotent_reuse": bool(existing_launch and not launch_already_consumed),
         "manager_required": manager_required,
         "exports": {
             **{
@@ -8995,6 +9105,11 @@ def manager_preflight_payload(
             MANAGER_ROOT_AGENT_ID_ENV: root_agent_id,
             MANAGER_LAUNCH_PID_ENV: str(launch_pid) if launch_pid else "",
             MANAGER_LAUNCH_START_TICKS_ENV: launch_start_ticks,
+            MANAGER_LAUNCH_NONCE_ENV: launch_nonce,
+            MANAGER_LAUNCH_KEY_ENV: launch_key,
+            MANAGER_STATE_DB_IDENTITY_ENV: state_db_identity,
+            MANAGER_LEDGER_DB_IDENTITY_ENV: ledger_db_identity,
+            MANAGER_RUNTIME_IDENTITY_ENV: runtime_identity,
             "QWENDEX_MANAGER_POLICY_HASH": str(agent_policy.get("policy_hash") or ""),
             "QWENDEX_MANAGER_STOP_STATUS": stop_status,
             "QWENDEX_OUTPUT_POLICY": str(agent_policy.get("env", {}).get("QWENDEX_OUTPUT_POLICY") or "standard"),
@@ -9002,123 +9117,527 @@ def manager_preflight_payload(
             "QWENDEX_KAVEMAN_DIRECTIVE": str(agent_policy.get("env", {}).get("QWENDEX_KAVEMAN_DIRECTIVE") or ""),
         },
     }
-    if not dry_run:
+    if not dry_run and not launch_already_consumed:
         with connect_state(config) as conn:
+            if launch_key:
+                if busy_error := begin_immediate(conn):
+                    raise sqlite3.OperationalError(busy_error)
+                row = conn.execute(
+                    """
+                    SELECT * FROM qwendex_manager_decisions
+                    WHERE launch_key = ? AND ledger_id = launch_ledger_id
+                    """,
+                    (launch_key,),
+                ).fetchone()
+                concurrent_launch = row_to_manager_decision(row)
+                if concurrent_launch is not None:
+                    concurrent_ledger = str(concurrent_launch.get("ledger_id") or "")
+                    concurrent_session = str(concurrent_launch.get("session_id") or "")
+                    payload["ledger_id"] = concurrent_ledger
+                    payload["launch_ledger_id"] = concurrent_ledger
+                    payload["session_id"] = concurrent_session
+                    payload["agent_task_id"] = concurrent_session
+                    payload["root_agent_id"] = manager_root_agent_id(concurrent_ledger, concurrent_session)
+                    payload["timestamp_created"] = str(concurrent_launch.get("timestamp_created") or timestamp)
+                    payload["idempotent_reuse"] = True
+                    concurrent_receipt = str(manager_receipt_path(config, concurrent_ledger))
+                    try:
+                        concurrent_receipt = str(Path(concurrent_receipt).relative_to(ROOT))
+                    except ValueError:
+                        pass
+                    payload["receipt_paths"] = [concurrent_receipt]
+                    payload["exports"]["QWENDEX_MANAGER_LEDGER_ID"] = concurrent_ledger
+                    payload["exports"]["QWENDEX_MANAGER_SESSION_ID"] = concurrent_session
+                    payload["exports"][MANAGER_ROOT_AGENT_ID_ENV] = payload["root_agent_id"]
             persisted = persist_manager_decision(conn, payload)
         payload["decision_ledger"] = persisted
         write_manager_decision_receipt(config, payload)
     return payload
 
 
-def manager_decision_attachable(
-    decision: Mapping[str, Any] | None,
-    agent_policy: Mapping[str, Any],
+def manager_decision_identity(
+    event: Mapping[str, Any],
     *,
     env: Mapping[str, str] | None = None,
-) -> bool:
-    if not decision or str(decision.get("final_status") or "") not in {"preflight_ready", "closed"}:
-        return False
-    expected_home = path_digest_policy(codex_home_from_env(env))
-    actual_home = str(decision.get("codex_home_digest_or_path_policy") or "")
-    if actual_home and actual_home != expected_home:
-        return False
-    expected_policy = str(agent_policy.get("policy_hash") or "")
-    actual_policy = str(decision.get("policy_hash") or "")
-    if expected_policy and actual_policy and expected_policy != actual_policy:
-        return False
-    timestamp = str(decision.get("timestamp_updated") or decision.get("timestamp_created") or "")
-    try:
-        age_seconds = (datetime.now(UTC) - parse_utc(timestamp)).total_seconds()
-    except (TypeError, ValueError):
-        return False
-    return age_seconds <= MANAGER_DECISION_ATTACH_WINDOW_MINUTES * 60
-
-
-def manager_decision_identity(event: Mapping[str, Any]) -> tuple[str, str]:
+) -> tuple[str, str]:
+    source_env = os.environ if env is None else env
     ledger_id = str(
-        event.get("manager_ledger_id")
-        or os.environ.get("QWENDEX_MANAGER_LEDGER_ID")
+        source_env.get("QWENDEX_MANAGER_LEDGER_ID")
+        or event.get("manager_ledger_id")
         or event.get("ledger_id")
         or ""
     ).strip()
     session_id = str(
-        event.get("manager_session_id")
-        or os.environ.get("QWENDEX_MANAGER_SESSION_ID")
+        source_env.get("QWENDEX_MANAGER_SESSION_ID")
+        or event.get("manager_session_id")
         or ""
     ).strip()
     return ledger_id, session_id
 
 
-def manager_decision_for_event(
-    conn: sqlite3.Connection,
-    event: Mapping[str, Any],
+def manager_resolution_result(
     *,
-    ledger_id: str,
-    session_id: str,
-    repo_root: str,
-) -> dict[str, Any] | None:
-    turn_id = str(event.get("turn_id") or "").strip()
-    if turn_id:
-        params: list[Any] = [turn_id, repo_root]
-        identity_clauses: list[str] = []
-        if ledger_id:
-            identity_clauses.extend(["launch_ledger_id = ?", "ledger_id = ?"])
-            params.extend([ledger_id, ledger_id])
-        if session_id:
-            identity_clauses.append("session_id = ?")
-            params.append(session_id)
-        identity_filter = (
-            f" AND ({' OR '.join(identity_clauses)})"
-            if identity_clauses
-            else ""
-        )
-        rows = conn.execute(
-            f"""
-            SELECT * FROM qwendex_manager_decisions
-            WHERE turn_id = ? AND repo_root = ?{identity_filter}
-            ORDER BY timestamp_updated DESC LIMIT 2
-            """,
-            tuple(params),
-        ).fetchall()
-        return row_to_manager_decision(rows[0]) if len(rows) == 1 else None
-    if ledger_id:
-        row = conn.execute(
-            "SELECT * FROM qwendex_manager_decisions WHERE ledger_id = ? AND repo_root = ?",
-            (ledger_id, repo_root),
-        ).fetchone()
-    elif session_id:
-        row = conn.execute(
-            """
-            SELECT * FROM qwendex_manager_decisions
-            WHERE session_id = ? AND repo_root = ?
-            ORDER BY timestamp_updated DESC LIMIT 1
-            """,
-            (session_id, repo_root),
-        ).fetchone()
-    else:
-        row = conn.execute(
-            """
-            SELECT * FROM qwendex_manager_decisions
-            WHERE repo_root = ?
-            ORDER BY timestamp_updated DESC LIMIT 1
-            """,
-            (repo_root,),
-        ).fetchone()
-    launch = row_to_manager_decision(row)
-    if launch is None:
-        return None
-    launch_id = str(launch.get("launch_ledger_id") or launch.get("ledger_id") or ledger_id)
+    status: str,
+    reason: str,
+    candidate_count: int = 0,
+    decision: Mapping[str, Any] | None = None,
+    mismatch_details: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "status": status,
+        "reason": reason,
+        "candidate_count": max(0, int(candidate_count)),
+        "decision": dict(decision) if decision is not None and status == "attached" else None,
+        "mismatch_details": dict(mismatch_details or {}),
+    }
+
+
+def manager_resolution_diagnostic(resolution: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "status": str(resolution.get("status") or "unattached"),
+        "reason": str(resolution.get("reason") or "decision_not_found"),
+        "candidate_count": int(resolution.get("candidate_count") or 0),
+        "mismatch_details": dict(resolution.get("mismatch_details") or {}),
+    }
+
+
+def manager_health_resolution_reason(reason: str) -> str:
+    return {
+        "qwendex_identity_missing": "missing_launch_identity",
+        "qwendex_identity_stale": "process_identity_mismatch",
+        "qwendex_repo_mismatch": "repo_mismatch",
+        "qwendex_decision_inactive": "decision_inactive",
+        "qwendex_route_untrusted": "route_untrusted",
+        "qwendex_hooks_untrusted": "hook_untrusted",
+        "qwendex_policy_mismatch": "policy_mismatch",
+        "qwendex_ledger_mismatch": "decision_not_found",
+        "qwendex_session_mismatch": "session_mismatch",
+        "qwendex_root_mismatch": "session_mismatch",
+        "qwendex_codex_home_mismatch": "codex_home_mismatch",
+        "qwendex_decision_ambiguous": "decision_ambiguous",
+    }.get(reason, reason or "decision_not_found")
+
+
+def manager_decision_static_mismatch(
+    config: Mapping[str, Any],
+    decision: Mapping[str, Any],
+    *,
+    env: Mapping[str, str],
+) -> tuple[str, dict[str, Any]]:
+    state_identity, ledger_identity = manager_store_identities(config)
+    runtime_identity = manager_runtime_identity()
+    expected_state = str(env.get(MANAGER_STATE_DB_IDENTITY_ENV) or "").strip()
+    expected_ledger = str(env.get(MANAGER_LEDGER_DB_IDENTITY_ENV) or "").strip()
+    expected_runtime = str(env.get(MANAGER_RUNTIME_IDENTITY_ENV) or "").strip()
+    expected_launch_key = str(env.get(MANAGER_LAUNCH_KEY_ENV) or "").strip()
+    expected_launch_nonce = str(env.get(MANAGER_LAUNCH_NONCE_ENV) or "").strip()
+    recorded_state = str(decision.get("state_db_identity") or "").strip()
+    recorded_ledger = str(decision.get("ledger_db_identity") or "").strip()
+    recorded_runtime = str(decision.get("runtime_identity") or "").strip()
+    recorded_launch_key = str(decision.get("launch_key") or "").strip()
+    recorded_launch_nonce = str(decision.get("launch_nonce") or "").strip()
+    details = {
+        "state_db_match": bool(expected_state and expected_state == state_identity and (not recorded_state or recorded_state == state_identity)),
+        "ledger_db_match": bool(expected_ledger and expected_ledger == ledger_identity and (not recorded_ledger or recorded_ledger == ledger_identity)),
+        "runtime_match": bool(expected_runtime and expected_runtime == runtime_identity and (not recorded_runtime or recorded_runtime == runtime_identity)),
+        "launch_key_match": bool(expected_launch_key and expected_launch_key == recorded_launch_key),
+        "launch_nonce_match": bool(expected_launch_nonce and expected_launch_nonce == recorded_launch_nonce),
+    }
+    if not details["state_db_match"]:
+        return "state_db_mismatch", details
+    if not details["ledger_db_match"]:
+        return "ledger_db_mismatch", details
+    if not details["runtime_match"]:
+        return "runtime_mismatch", details
+    if not details["launch_key_match"] or not details["launch_nonce_match"]:
+        return "missing_launch_identity", details
+    return "", details
+
+
+def bind_manager_decision_turn(
+    conn: sqlite3.Connection,
+    decision: Mapping[str, Any],
+    *,
+    root_session_id: str,
+    turn_id: str,
+) -> tuple[str, dict[str, Any] | None]:
+    if not root_session_id or not turn_id:
+        return "turn_unattached", None
+    ledger_id = str(decision.get("ledger_id") or "")
+    if begin_immediate(conn):
+        return "state_db_busy", None
     row = conn.execute(
-        """
-        SELECT * FROM qwendex_manager_decisions
-        WHERE repo_root = ?
-          AND (launch_ledger_id = ? OR ledger_id = ?)
-          AND final_status IN ('preflight_ready', 'validation_pending')
-        ORDER BY timestamp_updated DESC LIMIT 1
-        """,
-        (repo_root, launch_id, launch_id),
+        "SELECT * FROM qwendex_manager_decisions WHERE ledger_id = ?",
+        (ledger_id,),
     ).fetchone()
-    return row_to_manager_decision(row) if row is not None else launch
+    current = row_to_manager_decision(row)
+    if current is None:
+        conn.rollback()
+        return "decision_not_found", None
+    current_session = str(current.get("root_session_id") or "")
+    current_turn = str(current.get("turn_id") or "")
+    if current_session and current_session != root_session_id:
+        conn.rollback()
+        return "session_mismatch", None
+    if current_turn and current_turn != turn_id:
+        conn.rollback()
+        return "turn_mismatch", None
+    if current_session == root_session_id and current_turn == turn_id:
+        conn.commit()
+        return "attached", current
+    conn.execute(
+        """
+        UPDATE qwendex_manager_decisions
+        SET root_session_id = ?, turn_id = ?, timestamp_updated = ?
+        WHERE ledger_id = ?
+          AND root_session_id IN ('', ?)
+          AND turn_id IN ('', ?)
+        """,
+        (root_session_id, turn_id, utc_now(), ledger_id, root_session_id, turn_id),
+    )
+    row = conn.execute(
+        "SELECT * FROM qwendex_manager_decisions WHERE ledger_id = ?",
+        (ledger_id,),
+    ).fetchone()
+    updated = row_to_manager_decision(row)
+    if (
+        updated is None
+        or str(updated.get("root_session_id") or "") != root_session_id
+        or str(updated.get("turn_id") or "") != turn_id
+    ):
+        conn.rollback()
+        return "turn_mismatch", None
+    conn.commit()
+    return "attached", updated
+
+
+def resolve_manager_decision(
+    config: Mapping[str, Any],
+    event: Mapping[str, Any],
+    agent_policy: Mapping[str, Any],
+    *,
+    allow_turn_binding: bool = False,
+    require_turn: bool = True,
+    agent_task_id: str = "",
+    env: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    source_env = os.environ if env is None else env
+    ledger_id, session_id = manager_decision_identity(event, env=source_env)
+    root_session_id = str(event.get("session_id") or "").strip()
+    turn_id = str(event.get("turn_id") or "").strip()
+    repo_root = canonical_manager_repo_root(event=event, env=source_env)
+    required_identity = (
+        ledger_id,
+        session_id,
+        str(source_env.get(MANAGER_ROOT_AGENT_ID_ENV) or "").strip(),
+        str(source_env.get(MANAGER_LAUNCH_PID_ENV) or "").strip(),
+        str(source_env.get(MANAGER_LAUNCH_START_TICKS_ENV) or "").strip(),
+        str(source_env.get(MANAGER_LAUNCH_NONCE_ENV) or "").strip(),
+        str(source_env.get(MANAGER_LAUNCH_KEY_ENV) or "").strip(),
+        str(source_env.get(MANAGER_STATE_DB_IDENTITY_ENV) or "").strip(),
+        str(source_env.get(MANAGER_LEDGER_DB_IDENTITY_ENV) or "").strip(),
+        str(source_env.get(MANAGER_RUNTIME_IDENTITY_ENV) or "").strip(),
+    )
+    if not all(required_identity):
+        return manager_resolution_result(
+            status="unattached",
+            reason="missing_launch_identity",
+            mismatch_details={"turn_present": bool(turn_id), "root_session_present": bool(root_session_id)},
+        )
+    current_state_identity, current_ledger_identity = manager_store_identities(config)
+    configured_state_identity = str(source_env.get(MANAGER_STATE_DB_IDENTITY_ENV) or "").strip()
+    configured_ledger_identity = str(source_env.get(MANAGER_LEDGER_DB_IDENTITY_ENV) or "").strip()
+    configured_runtime_identity = str(source_env.get(MANAGER_RUNTIME_IDENTITY_ENV) or "").strip()
+    current_runtime_identity = manager_runtime_identity()
+    if configured_state_identity != current_state_identity:
+        return manager_resolution_result(
+            status="unattached",
+            reason="state_db_mismatch",
+            mismatch_details={"state_db_match": False},
+        )
+    if configured_ledger_identity != current_ledger_identity:
+        return manager_resolution_result(
+            status="unattached",
+            reason="ledger_db_mismatch",
+            mismatch_details={"state_db_match": True, "ledger_db_match": False},
+        )
+    if configured_runtime_identity != current_runtime_identity:
+        return manager_resolution_result(
+            status="unattached",
+            reason="runtime_mismatch",
+            mismatch_details={"state_db_match": True, "ledger_db_match": True, "runtime_match": False},
+        )
+    if require_turn and not agent_task_id and (not turn_id or not root_session_id):
+        return manager_resolution_result(
+            status="unattached",
+            reason="turn_unattached",
+            mismatch_details={"turn_present": bool(turn_id), "root_session_present": bool(root_session_id)},
+        )
+    try:
+        launch_pid = int(source_env.get(MANAGER_LAUNCH_PID_ENV) or 0)
+    except (TypeError, ValueError):
+        launch_pid = 0
+    with connect_state(config) as conn:
+        identity_rows = conn.execute(
+            """
+            SELECT * FROM qwendex_manager_decisions
+            WHERE ledger_id = ? OR launch_ledger_id = ?
+            ORDER BY timestamp_created ASC
+            """,
+            (ledger_id, ledger_id),
+        ).fetchall()
+        identity_candidates = [
+            item for row in identity_rows
+            if (item := row_to_manager_decision(row)) is not None
+        ]
+        repo_candidates = [
+            item for item in identity_candidates
+            if str(item.get("repo_root") or "") == repo_root
+        ]
+        session_candidates = [
+            item for item in repo_candidates
+            if str(item.get("session_id") or "") == session_id
+        ]
+        if not identity_candidates:
+            return manager_resolution_result(status="unattached", reason="decision_not_found")
+        if not repo_candidates:
+            return manager_resolution_result(
+                status="unattached",
+                reason="repo_mismatch",
+                candidate_count=len(identity_candidates),
+                mismatch_details={"repo_match": False},
+            )
+        if not session_candidates:
+            return manager_resolution_result(
+                status="unattached",
+                reason="session_mismatch",
+                candidate_count=len(repo_candidates),
+                mismatch_details={"repo_match": True, "manager_session_match": False},
+            )
+        if agent_task_id:
+            task_candidates = [
+                item for item in session_candidates
+                if str(item.get("agent_task_id") or item.get("session_id") or "") == agent_task_id
+                and str(item.get("final_status") or "") in {"preflight_ready", "validation_pending"}
+            ]
+            if len(task_candidates) > 1:
+                return manager_resolution_result(
+                    status="ambiguous",
+                    reason="decision_ambiguous",
+                    candidate_count=len(task_candidates),
+                    mismatch_details={"agent_task_match": True},
+                )
+            if not task_candidates:
+                return manager_resolution_result(
+                    status="unattached",
+                    reason="decision_not_found",
+                    mismatch_details={"agent_task_match": False},
+                )
+            task_candidate = task_candidates[0]
+            static_reason, static_details = manager_decision_static_mismatch(
+                config,
+                task_candidate,
+                env=source_env,
+            )
+            if static_reason:
+                return manager_resolution_result(
+                    status="unattached",
+                    reason=static_reason,
+                    candidate_count=1,
+                    mismatch_details=static_details,
+                )
+            task_health = manager_launch_health(
+                config,
+                pid=launch_pid,
+                repo_root=repo_root,
+                decision=task_candidate,
+                env=source_env,
+                agent_policy=agent_policy,
+                require_environment_identity=True,
+            )
+            if not task_health["trusted"]:
+                return manager_resolution_result(
+                    status="unattached",
+                    reason=manager_health_resolution_reason(str(task_health.get("reason") or "")),
+                    candidate_count=1,
+                    mismatch_details={
+                        **static_details,
+                        "pid_alive": bool(task_health.get("pid_alive")),
+                        "repo_match": bool(task_health.get("repo_match")),
+                        "policy_match": bool(task_health.get("policy_match")),
+                        "hook_trusted": bool(task_health.get("hook_trusted")),
+                    },
+                )
+            return manager_resolution_result(
+                status="attached",
+                reason="attached",
+                candidate_count=1,
+                decision=task_candidate,
+                mismatch_details={**static_details, "agent_task_match": True},
+            )
+        exact_turn = [item for item in session_candidates if turn_id and str(item.get("turn_id") or "") == turn_id]
+        if len(exact_turn) > 1:
+            return manager_resolution_result(
+                status="ambiguous",
+                reason="decision_ambiguous",
+                candidate_count=len(exact_turn),
+                mismatch_details={"turn_match": True},
+            )
+        candidate = exact_turn[0] if exact_turn else None
+        clone_for_turn = False
+        unbound = [
+            item for item in session_candidates
+            if not str(item.get("turn_id") or "")
+            and not str(item.get("root_session_id") or "")
+            and str(item.get("final_status") or "") == "preflight_ready"
+            and str(item.get("ledger_id") or "") == str(item.get("launch_ledger_id") or "")
+        ]
+        if candidate is None and len(unbound) > 1:
+            return manager_resolution_result(
+                status="ambiguous",
+                reason="decision_ambiguous",
+                candidate_count=len(unbound),
+                mismatch_details={"turn_match": False, "unbound_launches": len(unbound)},
+            )
+        if candidate is None and len(unbound) == 1:
+            candidate = unbound[0]
+        elif candidate is None:
+            open_other_turn = [
+                item for item in session_candidates
+                if str(item.get("final_status") or "") in {"preflight_ready", "validation_pending"}
+            ]
+            launch_rows = [
+                item for item in session_candidates
+                if str(item.get("ledger_id") or "") == str(item.get("launch_ledger_id") or "")
+            ]
+            if allow_turn_binding and not open_other_turn and len(launch_rows) == 1:
+                candidate = launch_rows[0]
+                clone_for_turn = True
+            else:
+                return manager_resolution_result(
+                    status="unattached",
+                    reason="turn_mismatch" if open_other_turn else "decision_not_found",
+                    candidate_count=len(open_other_turn) or len(launch_rows),
+                    mismatch_details={"turn_match": False, "open_turn_count": len(open_other_turn)},
+                )
+
+        static_reason, static_details = manager_decision_static_mismatch(
+            config,
+            candidate,
+            env=source_env,
+        )
+        if static_reason:
+            return manager_resolution_result(
+                status="unattached",
+                reason=static_reason,
+                candidate_count=1,
+                mismatch_details=static_details,
+            )
+        launch_health = manager_launch_health(
+            config,
+            pid=launch_pid,
+            repo_root=repo_root,
+            decision=candidate,
+            env=source_env,
+            agent_policy=agent_policy,
+            require_environment_identity=True,
+        )
+        if not launch_health["trusted"]:
+            return manager_resolution_result(
+                status="unattached",
+                reason=manager_health_resolution_reason(str(launch_health.get("reason") or "")),
+                candidate_count=1,
+                mismatch_details={
+                    **static_details,
+                    "pid_alive": bool(launch_health.get("pid_alive")),
+                    "repo_match": bool(launch_health.get("repo_match")),
+                    "policy_match": bool(launch_health.get("policy_match")),
+                    "hook_trusted": bool(launch_health.get("hook_trusted")),
+                },
+            )
+        if clone_for_turn:
+            suffix = sha256_text(f"{root_session_id}\0{turn_id}")[:16]
+            turn_ledger_id = f"{ledger_id}.turn.{suffix}"
+            turn_task_id = f"{session_id}:turn:{suffix}"
+            receipt_path = str(manager_receipt_path(config, turn_ledger_id))
+            try:
+                receipt_ref = str(Path(receipt_path).relative_to(ROOT))
+            except ValueError:
+                receipt_ref = receipt_path
+            try:
+                candidate = clone_manager_decision_for_turn(
+                    conn,
+                    candidate,
+                    ledger_id=turn_ledger_id,
+                    turn_id=turn_id,
+                    root_session_id=root_session_id,
+                    agent_task_id=turn_task_id,
+                    receipt_path=receipt_ref,
+                    now=utc_now(),
+                )
+            except sqlite3.IntegrityError:
+                row = conn.execute(
+                    "SELECT * FROM qwendex_manager_decisions WHERE ledger_id = ?",
+                    (turn_ledger_id,),
+                ).fetchone()
+                candidate = row_to_manager_decision(row)
+            if candidate is None:
+                return manager_resolution_result(
+                    status="unattached",
+                    reason="decision_not_found",
+                    candidate_count=1,
+                    mismatch_details={**static_details, "turn_bound": False},
+                )
+            static_details = {**static_details, "turn_bound": True, "turn_binding": "created"}
+
+        candidate_session = str(candidate.get("root_session_id") or "")
+        candidate_turn = str(candidate.get("turn_id") or "")
+        if candidate_session and candidate_session != root_session_id:
+            return manager_resolution_result(
+                status="unattached",
+                reason="session_mismatch",
+                candidate_count=1,
+                mismatch_details={**static_details, "root_session_match": False},
+            )
+        if candidate_turn and candidate_turn != turn_id:
+            return manager_resolution_result(
+                status="unattached",
+                reason="turn_mismatch",
+                candidate_count=1,
+                mismatch_details={**static_details, "turn_match": False},
+            )
+        if (not candidate_session or not candidate_turn) and not allow_turn_binding:
+            return manager_resolution_result(
+                status="unattached",
+                reason="turn_unattached",
+                candidate_count=1,
+                mismatch_details={**static_details, "turn_bound": False},
+            )
+        if not candidate_session or not candidate_turn:
+            bind_status, bound = bind_manager_decision_turn(
+                conn,
+                candidate,
+                root_session_id=root_session_id,
+                turn_id=turn_id,
+            )
+            if bind_status != "attached" or bound is None:
+                return manager_resolution_result(
+                    status="unattached" if bind_status != "decision_ambiguous" else "ambiguous",
+                    reason=bind_status,
+                    candidate_count=1,
+                    mismatch_details={**static_details, "turn_bound": False},
+                )
+            candidate = bound
+            static_details = {**static_details, "turn_bound": True, "turn_binding": "created"}
+        else:
+            static_details = {**static_details, "turn_bound": True, "turn_binding": "reused"}
+    return manager_resolution_result(
+        status="attached",
+        reason="attached",
+        candidate_count=1,
+        decision=candidate,
+        mismatch_details=static_details,
+    )
 
 
 def manager_launch_health(
@@ -9140,12 +9659,13 @@ def manager_launch_health(
     source_env = os.environ if env is None else env
     canonical_repo = canonical_manager_repo_root(repo_root, env=source_env)
     candidate = dict(decision) if decision is not None else None
+    ambiguous = False
     if candidate is None and pid > 0:
         with connect_state(config) as conn:
             rows = conn.execute(
                 """
                 SELECT * FROM qwendex_manager_decisions
-                WHERE launch_pid = ?
+                WHERE launch_pid = ? AND ledger_id = launch_ledger_id
                 ORDER BY CASE final_status
                     WHEN 'preflight_ready' THEN 0
                     WHEN 'validation_pending' THEN 1
@@ -9158,7 +9678,9 @@ def manager_launch_health(
             ).fetchall()
         candidates = [item for row in rows if (item := row_to_manager_decision(row))]
         matching = [item for item in candidates if str(item.get("repo_root") or "") == canonical_repo]
-        candidate = matching[0] if matching else (candidates[0] if candidates else None)
+        selected = matching if matching else candidates
+        ambiguous = len(selected) > 1
+        candidate = selected[0] if len(selected) == 1 else None
 
     expected_pid = int(candidate.get("launch_pid") or 0) if candidate else 0
     expected_start = str(candidate.get("launch_start_ticks") or "") if candidate else ""
@@ -9243,7 +9765,13 @@ def manager_launch_health(
         ("environment_start_match", "qwendex_identity_stale"),
         ("codex_home_match", "qwendex_codex_home_mismatch"),
     )
-    reason = "trusted" if trusted else next(code for key, code in reason_map if not checks[key])
+    reason = (
+        "trusted"
+        if trusted
+        else "qwendex_decision_ambiguous"
+        if ambiguous
+        else next(code for key, code in reason_map if not checks[key])
+    )
     return {
         "trusted": trusted,
         "pid_alive": pid_alive,
@@ -9255,46 +9783,6 @@ def manager_launch_health(
         "policy_match": policy_match,
         "hook_trusted": hook_trusted,
     }
-
-
-def manager_decision_for_agent_task(
-    conn: sqlite3.Connection,
-    *,
-    ledger_id: str,
-    session_id: str,
-    repo_root: str,
-    agent_task_id: str,
-) -> dict[str, Any] | None:
-    """Resolve a worker registration to its parent Manager task.
-
-    Native child hooks carry the child thread's turn_id, not the root turn_id
-    that created the assignment. The registered task id is therefore the
-    trusted join key beneath the launcher ledger.
-    """
-    if not agent_task_id:
-        return None
-    identity_clauses: list[str] = []
-    params: list[Any] = [repo_root, agent_task_id, agent_task_id]
-    if ledger_id:
-        identity_clauses.extend(["launch_ledger_id = ?", "ledger_id = ?"])
-        params.extend([ledger_id, ledger_id])
-    if session_id:
-        identity_clauses.append("session_id = ?")
-        params.append(session_id)
-    if not identity_clauses:
-        return None
-    rows = conn.execute(
-        f"""
-        SELECT * FROM qwendex_manager_decisions
-        WHERE repo_root = ?
-          AND (agent_task_id = ? OR (agent_task_id = '' AND session_id = ?))
-          AND final_status IN ('preflight_ready', 'validation_pending')
-          AND ({' OR '.join(identity_clauses)})
-        ORDER BY timestamp_updated DESC LIMIT 2
-        """,
-        tuple(params),
-    ).fetchall()
-    return row_to_manager_decision(rows[0]) if len(rows) == 1 else None
 
 
 def manager_root_ownership_for_event(
@@ -9309,20 +9797,21 @@ def manager_root_ownership_for_event(
     manager decision from the same Codex home and policy.
     """
     configured_root_id = str(os.environ.get(MANAGER_ROOT_AGENT_ID_ENV) or "").strip()
-    ledger_id, session_id = manager_decision_identity(event)
     repo_root = canonical_manager_repo_root(event=event)
-    if not configured_root_id or not (ledger_id or session_id):
-        return "", None, "Manager Mode root writes require a qdex preflight root identity. Restart this repository through qdex."
-    with connect_state(config) as conn:
-        decision = manager_decision_for_event(
-            conn,
-            event,
-            ledger_id=ledger_id,
-            session_id=session_id,
-            repo_root=repo_root,
+    resolution = resolve_manager_decision(
+        config,
+        event,
+        agent_policy,
+        allow_turn_binding=True,
+    )
+    decision = resolution.get("decision")
+    if resolution.get("status") != "attached" or not isinstance(decision, Mapping):
+        reason = str(resolution.get("reason") or "decision_not_found")
+        return "", None, (
+            f"Manager Mode root admission failed ({reason}). "
+            f"Exit this session, then run from an external shell: qdex -C {shlex.quote(repo_root)}"
         )
-    if decision is None:
-        return "", None, "Manager Mode root write could not attach to its qdex preflight decision."
+    decision = dict(decision)
     launch_health = manager_launch_health(
         config,
         pid=int(decision.get("launch_pid") or 0),
@@ -9503,6 +9992,7 @@ def clone_manager_decision_for_turn(
     *,
     ledger_id: str,
     turn_id: str,
+    root_session_id: str,
     agent_task_id: str,
     receipt_path: str,
     now: str,
@@ -9514,6 +10004,7 @@ def clone_manager_decision_for_turn(
         "timestamp_updated": now,
         "launch_ledger_id": str(decision.get("launch_ledger_id") or decision.get("ledger_id") or ""),
         "turn_id": turn_id,
+        "root_session_id": root_session_id,
         "agent_task_id": agent_task_id,
         "prompt_known": 0,
         "prompt_digest": "",
@@ -9536,9 +10027,11 @@ def clone_manager_decision_for_turn(
             select_parts.append(f'"{column}"')
     quoted_columns = ", ".join(f'"{column}"' for column in columns)
     source_ledger_id = str(decision.get("ledger_id") or "")
+    if busy_error := begin_immediate(conn):
+        raise sqlite3.OperationalError(busy_error)
     conn.execute(
         f"""
-        INSERT INTO qwendex_manager_decisions ({quoted_columns})
+        INSERT OR IGNORE INTO qwendex_manager_decisions ({quoted_columns})
         SELECT {', '.join(select_parts)}
         FROM qwendex_manager_decisions WHERE ledger_id = ?
         """,
@@ -9556,83 +10049,38 @@ def update_manager_decision_from_prompt(
     config: Mapping[str, Any],
     event: Mapping[str, Any],
     agent_policy: Mapping[str, Any],
+    *,
+    resolved_decision: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
-    """Attach a root prompt to a fresh or open turn under the launch ledger."""
+    """Update only the root turn already selected by the canonical resolver."""
     if event.get("agent_id") or event.get("agent_type"):
         return None
     prompt = str(event.get("prompt") or "").strip()
     if not prompt:
         return None
-    ledger_id, session_id = manager_decision_identity(event)
-    if not (ledger_id or session_id):
+    if resolved_decision is None:
         return None
     event_repo = canonical_manager_repo_root(event=event)
     with connect_state(config) as conn:
-        launch = latest_manager_decision(
-            conn,
-            repo_root=event_repo,
-            ledger_id=ledger_id,
-            session_id=session_id,
-        )
-        if launch is None or str(launch.get("selected_route") or "") == "blocked":
-            return None
-        turn_id = str(event.get("turn_id") or "").strip()
-        launch_id = str(launch.get("launch_ledger_id") or launch.get("ledger_id") or ledger_id)
-        decision = None
-        if turn_id:
-            row = conn.execute(
-                """
-                SELECT * FROM qwendex_manager_decisions
-                WHERE turn_id = ? AND repo_root = ?
-                  AND (launch_ledger_id = ? OR ledger_id = ?)
-                ORDER BY timestamp_updated DESC LIMIT 1
-                """,
-                (turn_id, event_repo, launch_id, launch_id),
-            ).fetchone()
-            decision = row_to_manager_decision(row)
-            if decision is not None and decision.get("prompt_known"):
-                return None
-        if decision is None:
-            if (
-                str(launch.get("final_status") or "") == "preflight_ready"
-                and not launch.get("turn_id")
-            ):
-                decision = launch
-            elif str(launch.get("final_status") or "") == "closed":
-                open_row = conn.execute(
-                    """
-                    SELECT ledger_id FROM qwendex_manager_decisions
-                    WHERE launch_ledger_id = ? AND repo_root = ?
-                      AND final_status IN ('preflight_ready', 'validation_pending')
-                    ORDER BY timestamp_updated DESC LIMIT 1
-                    """,
-                    (launch_id, event_repo),
-                ).fetchone()
-                if open_row is not None:
-                    return None
-                if not turn_id:
-                    turn_id = make_id("synthetic_turn")
-                suffix = sha256_text(turn_id)[:16]
-                turn_ledger_id = f"{launch_id}.turn.{suffix}"
-                turn_task_id = f"{launch.get('session_id')}:turn:{suffix}"
-                receipt_path = str(manager_receipt_path(config, turn_ledger_id))
-                try:
-                    receipt_ref = str(Path(receipt_path).relative_to(ROOT))
-                except ValueError:
-                    receipt_ref = receipt_path
-                decision = clone_manager_decision_for_turn(
-                    conn,
-                    launch,
-                    ledger_id=turn_ledger_id,
-                    turn_id=turn_id,
-                    agent_task_id=turn_task_id,
-                    receipt_path=receipt_ref,
-                    now=utc_now(),
-                )
-            else:
-                return None
+        row = conn.execute(
+            "SELECT * FROM qwendex_manager_decisions WHERE ledger_id = ? AND repo_root = ?",
+            (str(resolved_decision.get("ledger_id") or ""), event_repo),
+        ).fetchone()
+        decision = row_to_manager_decision(row)
         if decision is None or str(decision.get("final_status") or "") != "preflight_ready":
             return None
+        if decision.get("prompt_known"):
+            return None
+        turn_id = str(event.get("turn_id") or "").strip()
+        root_session_id = str(event.get("session_id") or "").strip()
+        if (
+            not turn_id
+            or not root_session_id
+            or str(decision.get("turn_id") or "") != turn_id
+            or str(decision.get("root_session_id") or "") != root_session_id
+        ):
+            return None
+        launch_id = str(decision.get("launch_ledger_id") or decision.get("ledger_id") or "")
         decision_repo = str(decision.get("repo_root") or "")
         if decision_repo and event_repo != decision_repo:
             return None
@@ -9643,11 +10091,11 @@ def update_manager_decision_from_prompt(
             probe=True,
         )
         estimate = estimate_task(config, prompt=prompt, local_status=local_status)
-        effective_turn_id = turn_id or str(decision.get("turn_id") or "")
+        effective_turn_id = turn_id
         agent_task_id = str(
             decision.get("agent_task_id")
             or decision.get("session_id")
-            or session_id
+            or ""
         )
         plan = build_agent_team_plan(
             config,
@@ -9768,6 +10216,12 @@ def manager_decision_receipt_payload(decision: Mapping[str, Any]) -> dict[str, A
         "root_agent_id": manager_decision_root_agent_id(decision),
         "launch_pid": int(decision.get("launch_pid") or 0),
         "launch_start_ticks": decision.get("launch_start_ticks") or "",
+        "launch_nonce": decision.get("launch_nonce") or "",
+        "launch_key": decision.get("launch_key") or "",
+        "root_session_id": decision.get("root_session_id") or "",
+        "state_db_identity": decision.get("state_db_identity") or "",
+        "ledger_db_identity": decision.get("ledger_db_identity") or "",
+        "runtime_identity": decision.get("runtime_identity") or "",
         "turn_id": decision.get("turn_id") or "",
         "agent_task_id": decision.get("agent_task_id") or decision.get("session_id"),
         "timestamp": decision.get("timestamp_updated"),
@@ -10009,14 +10463,36 @@ def command_agent(args: argparse.Namespace, config: dict[str, Any]) -> dict[str,
             summary="Qwendex agent override values are outside configured bounds.",
             errors=override_errors,
         )
+    action = args.action or "status"
+    launch_policy_active = bool(
+        action == "hook"
+        and os.environ.get("QWENDEX_MANAGER_LEDGER_ID")
+        and os.environ.get("QWENDEX_MANAGER_SESSION_ID")
+    )
+    launch_agent_use = (
+        str(os.environ.get("QWENDEX_EFFECTIVE_AGENT_USE") or "").strip()
+        if launch_policy_active
+        else ""
+    )
+    launch_policy_source = (
+        str(os.environ.get("QWENDEX_AGENT_POLICY_SOURCE") or "").strip()
+        if launch_policy_active
+        else ""
+    )
+    launch_kaveman = (
+        env_flag(os.environ.get("QWENDEX_KAVEMAN_ENABLED"))
+        if launch_policy_active
+        else None
+    )
     agent_policy = resolve_agent_policy(
         config,
-        cli_agent_use=getattr(args, "agent_use", ""),
+        cli_agent_use=launch_agent_use or getattr(args, "agent_use", ""),
         selected_manager_mode=selected_manager_mode_for_policy(config),
+        kaveman_enabled=launch_kaveman,
+        selector_source_override=launch_policy_source,
     )
     if agent_policy["errors"]:
         return stable_envelope(command="agent", status="blocked", summary="Invalid Qwendex agent policy.", errors=list(agent_policy["errors"]), data={"agent_policy": agent_policy})
-    action = args.action or "status"
     if action == "hook":
         event = read_hook_event(args)
         status, hook_result, extra = evaluate_agent_hook(
@@ -11681,13 +12157,36 @@ def human_print(data: dict[str, Any]) -> None:
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
     config = load_qwendex_config(project_config=args.config)
+    manager_hook_launch = bool(
+        getattr(args, "command", "") == "agent"
+        and getattr(args, "action", "") == "hook"
+        and os.environ.get("QWENDEX_MANAGER_LEDGER_ID")
+        and os.environ.get("QWENDEX_MANAGER_SESSION_ID")
+    )
+    launch_agent_use = (
+        str(os.environ.get("QWENDEX_EFFECTIVE_AGENT_USE") or "").strip()
+        if manager_hook_launch
+        else ""
+    )
+    launch_policy_source = (
+        str(os.environ.get("QWENDEX_AGENT_POLICY_SOURCE") or "").strip()
+        if manager_hook_launch
+        else ""
+    )
+    launch_kaveman = (
+        env_flag(os.environ.get("QWENDEX_KAVEMAN_ENABLED"))
+        if manager_hook_launch
+        else None
+    )
     agent_policy = resolve_agent_policy(
         config,
-        cli_agent_use=getattr(args, "agent_use", ""),
+        cli_agent_use=launch_agent_use or getattr(args, "agent_use", ""),
         selected_manager_mode=selected_manager_mode_for_policy(
             config,
             explicit=getattr(args, "mode", "") if getattr(args, "command", "") == "manager" else "",
         ),
+        kaveman_enabled=launch_kaveman,
+        selector_source_override=launch_policy_source,
     )
     if agent_policy["errors"]:
         return stable_envelope(
