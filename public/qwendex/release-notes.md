@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.5.6
+
+- Fixed upgrades where an older generated environment supplied the removed
+  Qwendex `bin/codex` wrapper as `QWENDEX_MAIN_CODEX_BIN`, leaving the installed
+  Qdex launcher with a dead internal fallback.
+- Made sync rediscover the real upstream Codex before regenerating the isolated
+  runtime and reinstalling `~/.local/bin/qdex`.
+- Added an installed-launcher smoke that runs `qdex -C <other-repo>` after the
+  legacy migration.
+
 ## 0.5.5
 
 - Preserved ordinary upstream `codex` resolution and the caller's normal

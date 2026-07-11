@@ -490,3 +490,18 @@ A direct internal-runtime process must not acquire Qdex authority merely by
 sharing that scope, and Stop cannot safely repair missing identity by guessing
 the latest repository decision. Keeping upstream Codex outside this boundary
 also preserves a recovery path when Qwendex runtime or Manager state is broken.
+
+## Installed Qdex Upgrade Trust Anchor
+
+Decision: `qwendex-dev sync` never accepts the deprecated generated
+`$QWENDEX_DEV_ROOT/bin/codex` path as `QWENDEX_MAIN_CODEX_BIN`. This applies
+even when that value is inherited explicitly from an older generated
+environment or wrapper. Sync instead rediscovers upstream Codex from `PATH`,
+regenerates the ignored internal runtime, and reinstalls the public
+`~/.local/bin/qdex` launcher. The release smoke invokes that installed launcher
+from a different repository with native `-C` syntax.
+
+Reason: an upgrade can execute new source through an older generated wrapper.
+Environment inheritance must not let a removed Qwendex wrapper masquerade as
+the upstream recovery binary, because sync would delete the wrapper after
+embedding its path and leave installed Qdex unable to start.

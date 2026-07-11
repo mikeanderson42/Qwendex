@@ -9,7 +9,7 @@ Clone it directly at the default runtime root, then pin the current release:
 git clone https://github.com/mikeanderson42/Qwendex.git ~/qwendex-dev
 cd ~/qwendex-dev
 git fetch --tags origin
-git switch --detach v0.5.5
+git switch --detach v0.5.6
 git status --short
 ```
 
@@ -38,7 +38,10 @@ release's native-patch contract, and installs that version when the active
 binary differs. For intentional compatibility testing, set both
 `QWENDEX_CODEX_NPM_SPEC` and `QWENDEX_CODEX_REQUIRED_VERSION`.
 
-`sync` installs the tracked `scripts/qdex` wrapper into `~/.local/bin/qdex`.
+`sync` installs the tracked `scripts/qdex` wrapper into `~/.local/bin/qdex` and
+regenerates its isolated runtime. During upgrades it ignores the removed
+Qwendex `bin/codex` wrapper even if an older generated environment still
+exports that path, then rediscovers the real upstream Codex.
 Ensure `~/.local/bin` is on `PATH`; then run `qdex` from the selected project or
 use Codex's native `qdex -C <project>` form. By default `qdex` supplies
 `--dangerously-bypass-approvals-and-sandbox` (YOLO mode). In Manager Mode it
@@ -80,6 +83,10 @@ qwendex-dev bootstrap --check
 qwendex-dev doctor
 scripts/qwendex eval --all --json
 ```
+
+Always run `scripts/qwendex_dev_env sync` from the newly selected tag before
+invoking `qdex`; this replaces an older installed launcher and its generated
+runtime together.
 
 For rollback between `0.5.x` and newer compatible releases, repeat the same
 sequence with the prior tag. Do not reuse newer runtime state with an older

@@ -89,7 +89,7 @@ Clone the current tagged release into the default Qwendex root:
 git clone https://github.com/mikeanderson42/Qwendex.git ~/qwendex-dev
 cd ~/qwendex-dev
 git fetch --tags origin
-git switch --detach v0.5.5
+git switch --detach v0.5.6
 ```
 
 Qwendex is currently distributed as source; GitHub source archives and the
@@ -132,6 +132,10 @@ scripts/qwendex_dev_env sync
 source ~/qwendex-dev/.qwendex-dev/env.sh
 qwendex-dev doctor
 ```
+
+Run sync again after selecting a newer release tag. It replaces the installed
+Qdex launcher, regenerates the internal runtime, and rejects the removed
+Qwendex `bin/codex` wrapper as an upstream fallback during migration.
 
 Sourcing the environment does not replace bare `codex` or the caller's normal
 `CODEX_HOME`; upstream Codex remains the recovery path. `codex-main` is an
@@ -311,7 +315,7 @@ claims require GPT/Codex review and the appropriate Qwendex verification tier.
 
 ## Current Release / Known Limits
 
-This checkout is seeded as `v0.5.5`. The latest captured max-depth
+This checkout is seeded as `v0.5.6`. The latest captured max-depth
 validation summary in this repository is still
 [`docs/validation/v0.1.0-rc.1-validation_summary.json`](docs/validation/v0.1.0-rc.1-validation_summary.json)
 until a newer release validation run is recorded.

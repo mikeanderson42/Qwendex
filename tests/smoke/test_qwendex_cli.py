@@ -196,7 +196,7 @@ def test_qwendex_version_and_config_are_in_sync():
     sample_config = json.loads((ROOT / "config" / "qwendex" / "qwendex.sample.json").read_text(encoding="utf-8"))
     version = json_result("version", "--json")
 
-    assert qwendex.VERSION == "0.5.5"
+    assert qwendex.VERSION == "0.5.6"
     assert version["data"]["version"] == qwendex.VERSION
     assert project_config["version"] == qwendex.VERSION
     assert sample_config["version"] == qwendex.VERSION
@@ -1327,6 +1327,80 @@ def test_qwendex_dev_env_second_same_root_sync_skips_its_codex_wrapper(tmp_path)
     assert dry_run["command"][0] == str(checkout / ".qwendex-dev" / "bin" / "qwendex-codex-runtime")
 
 
+def test_qwendex_upgrade_ignores_stale_main_codex_and_installed_qdex_opens_other_repo(tmp_path):
+    fake_home, checkout, fake_codex, env = same_root_dev_env_fixture(tmp_path)
+    args_file = tmp_path / "installed-qdex-args.txt"
+    fake_codex.write_text(
+        """#!/usr/bin/env bash
+printf '%s\\n' "$@" > "$QWENDEX_FAKE_CODEX_ARGS"
+for arg in "$@"; do
+  if [[ "$arg" == "--version" ]]; then
+    printf 'codex-cli 0.144.0\\n'
+    break
+  fi
+done
+""",
+        encoding="utf-8",
+    )
+    fake_codex.chmod(0o755)
+    legacy_codex = checkout / "bin" / "codex"
+    legacy_codex.parent.mkdir(exist_ok=True)
+    legacy_codex.write_text(
+        "#!/usr/bin/env bash\n# QWENDEX-GENERATED-CODEX-WRAPPER\nexec /missing/legacy-codex \"$@\"\n",
+        encoding="utf-8",
+    )
+    legacy_codex.chmod(0o755)
+    upgrade_env = {
+        **env,
+        "PATH": f"{checkout / 'bin'}:{fake_codex.parent}:{os.environ['PATH']}",
+        "QWENDEX_MAIN_CODEX_BIN": str(legacy_codex),
+        "QWENDEX_FAKE_CODEX_ARGS": str(args_file),
+    }
+
+    sync = subprocess.run(
+        [str(checkout / "scripts" / "qwendex_dev_env"), "sync"],
+        cwd=checkout,
+        env=upgrade_env,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=60,
+    )
+    downstream_repo = tmp_path / "downstream-repo"
+    downstream_repo.mkdir()
+    subprocess.run(
+        ["git", "init", "-b", "main"],
+        cwd=downstream_repo,
+        text=True,
+        capture_output=True,
+        check=True,
+        timeout=30,
+    )
+    installed_qdex = fake_home / ".local" / "bin" / "qdex"
+    launched = subprocess.run(
+        [str(installed_qdex), "-C", str(downstream_repo), "--version"],
+        cwd=downstream_repo,
+        env=upgrade_env,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=60,
+    )
+
+    assert sync.returncode == 0, sync.stderr or sync.stdout
+    assert not legacy_codex.exists()
+    assert installed_qdex.is_file()
+    assert launched.returncode == 0, launched.stderr or launched.stdout
+    assert launched.stdout.strip() == "codex-cli 0.144.0"
+    launched_args = args_file.read_text(encoding="utf-8").splitlines()
+    assert launched_args[launched_args.index("-C") + 1] == str(downstream_repo)
+    runtime = (checkout / ".qwendex-dev" / "bin" / "qwendex-codex-runtime").read_text(
+        encoding="utf-8"
+    )
+    assert str(fake_codex) in runtime
+    assert str(legacy_codex) not in runtime
+
+
 def test_qwendex_dev_env_removes_only_known_legacy_codex_wrapper(tmp_path):
     _, checkout, _, env = same_root_dev_env_fixture(tmp_path)
     dev_env = checkout / "scripts" / "qwendex_dev_env"
@@ -1543,7 +1617,7 @@ def assert_same_root_supports_quoted_path(tmp_path, path_fragment):
 
     assert config["projects"] == {str(checkout): {"trust_level": "trusted"}}
     assert qwendex.returncode == 0, qwendex.stderr or qwendex.stdout
-    assert json.loads(qwendex.stdout)["data"]["version"] == "0.5.5"
+    assert json.loads(qwendex.stdout)["data"]["version"] == "0.5.6"
     assert qwendex_dev.returncode == 0, qwendex_dev.stderr or qwendex_dev.stdout
     assert sourced_env.returncode == 0, sourced_env.stderr or sourced_env.stdout
     assert sourced_env.stdout.strip() == str(checkout)
