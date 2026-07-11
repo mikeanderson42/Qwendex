@@ -38,13 +38,19 @@ QWENDEX_CODEX_SOURCE_REF="${QWENDEX_CODEX_SOURCE_REF:-rust-v$QWENDEX_RELEASE_COD
 QWENDEX_MODELS_CACHE_FILE="models_cache.qwendex-$QWENDEX_RELEASE_CODEX_VERSION.json"
 
 resolve_main_codex_bin() {
-  if [[ -n "${QWENDEX_MAIN_CODEX_BIN:-}" ]]; then
-    printf '%s\n' "$QWENDEX_MAIN_CODEX_BIN"
-    return
-  fi
   local dev_wrapper=""
   if [[ -d "$DEV_ROOT/bin" ]]; then
     dev_wrapper="$(cd -P "$DEV_ROOT/bin" && pwd)/codex"
+  fi
+  if [[ -n "${QWENDEX_MAIN_CODEX_BIN:-}" ]]; then
+    local configured_dir
+    local configured_path
+    configured_dir="$(cd -P "$(dirname "$QWENDEX_MAIN_CODEX_BIN")" 2>/dev/null && pwd || true)"
+    configured_path="${configured_dir:+$configured_dir/$(basename "$QWENDEX_MAIN_CODEX_BIN")}"
+    if [[ -z "$dev_wrapper" || "$configured_path" != "$dev_wrapper" ]]; then
+      printf '%s\n' "$QWENDEX_MAIN_CODEX_BIN"
+      return
+    fi
   fi
   local candidate
   local candidate_dir

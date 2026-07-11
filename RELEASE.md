@@ -1,3 +1,14 @@
+# v0.5.6
+
+Installed Qdex upgrade-path repair release.
+
+- Rejects the removed Qwendex `bin/codex` wrapper as an upstream Codex
+  fallback even when an older generated environment exports that path.
+- Regenerates the isolated internal runtime with the real upstream Codex and
+  reinstalls `~/.local/bin/qdex` during `qwendex-dev sync`.
+- Adds a cross-repository regression that launches the installed `qdex -C`
+  command after migrating a legacy wrapper environment.
+
 # v0.5.5
 
 Qdex launch-boundary and Manager trust repair release.
