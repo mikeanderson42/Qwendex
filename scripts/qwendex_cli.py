@@ -6646,6 +6646,8 @@ def agent_mode_context(
         )
         if output_context := agent_output_policy_context(agent_policy, config=config):
             parts.append(output_context)
+    if search_context := experimental_search_candidate_context():
+        parts.append(search_context)
     return " ".join(parts)
 
 
@@ -7451,6 +7453,14 @@ def qwendex_search_module() -> Any:
     if _QWENDEX_SEARCH_MODULE is None:
         _QWENDEX_SEARCH_MODULE = script_module("qwendex_search")
     return _QWENDEX_SEARCH_MODULE
+
+
+def experimental_search_candidate_context() -> str:
+    module = qwendex_search_module()
+    enabled = str(os.environ.get(module.SEARCH_CANDIDATE_ENV) or "").strip().lower()
+    if enabled not in {"1", "true", "yes", "on"}:
+        return ""
+    return str(module.SEARCH_CANDIDATE_MANAGED_INSTRUCTION)
 
 
 def capture_performance_hook_event(

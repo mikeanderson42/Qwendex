@@ -56,9 +56,19 @@ as `not_observed`, and a controlled-only result cannot promote a candidate.
 ## First Candidate: `search_evidence_compaction_v1`
 
 The candidate remains default-off. Nothing changes normal Codex search behavior
-and no hook automatically substitutes this command. It is active only when an
-evaluation selects it or an operator explicitly invokes one of these
-experimental commands:
+and no hook automatically substitutes this command. A scoped Qdex launch can
+opt in to one short managed instruction without persisting the setting:
+
+```bash
+QWENDEX_SEARCH_EVIDENCE_COMPACTION=1 qdex -C <repo>
+```
+
+That instruction tells the agent to use compact content search for broad
+discovery, retain direct `rg -F` for narrow exact checks, and avoid repeated
+unchanged broad searches. The registry records its byte cost; the controlled
+runner reports that cost but does not claim it was delivered to a live model.
+An evaluation can also select the candidate, and an operator can explicitly
+invoke one of these experimental commands:
 
 ```bash
 scripts/qwendex search content <pattern> --root <repo-or-subtree> --literal --json

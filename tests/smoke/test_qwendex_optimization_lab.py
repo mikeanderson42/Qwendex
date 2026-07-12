@@ -295,3 +295,37 @@ def test_cli_exposes_only_explicit_default_off_compact_search(tmp_path: Path) ->
     assert content_payload["data"]["search"]["result"]["model_evidence"]
     assert paths.returncode == 0
     assert paths_payload["data"]["search"]["paths"] == ["tracked.txt"]
+
+
+def test_scoped_candidate_environment_injects_only_the_bounded_instruction() -> None:
+    environment = dict(os.environ)
+    for key in tuple(environment):
+        if key.startswith(("QWENDEX_AGENT_", "QWENDEX_MANAGER_")):
+            environment.pop(key)
+    disabled = subprocess.run(
+        [str(QWENDEX), "agent", "hook", "SessionStart", "--event-json", "{}", "--json"],
+        cwd=ROOT,
+        env=environment,
+        check=False,
+        text=True,
+        capture_output=True,
+        timeout=60,
+    )
+    enabled_environment = {**environment, "QWENDEX_SEARCH_EVIDENCE_COMPACTION": "1"}
+    enabled = subprocess.run(
+        [str(QWENDEX), "agent", "hook", "SessionStart", "--event-json", "{}", "--json"],
+        cwd=ROOT,
+        env=enabled_environment,
+        check=False,
+        text=True,
+        capture_output=True,
+        timeout=60,
+    )
+    disabled_context = json.loads(disabled.stdout)["data"]["hook_result"]["hookSpecificOutput"]["additionalContext"]
+    enabled_context = json.loads(enabled.stdout)["data"]["hook_result"]["hookSpecificOutput"]["additionalContext"]
+
+    assert disabled.returncode == 0
+    assert enabled.returncode == 0
+    assert "Experimental search compaction is enabled" not in disabled_context
+    assert "Experimental search compaction is enabled" in enabled_context
+    assert len(enabled_context.encode("utf-8")) - len(disabled_context.encode("utf-8")) < 400

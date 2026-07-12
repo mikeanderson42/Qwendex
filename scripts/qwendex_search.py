@@ -28,6 +28,12 @@ PATH_SEARCH_SCHEMA_VERSION = "qwendex.search_path_result.v1"
 FRESHNESS_SCHEMA_VERSION = "qwendex.search_freshness_matrix.v1"
 SEARCH_CANDIDATE_ID = "search_evidence_compaction_v1"
 SEARCH_CANDIDATE_VERSION = "1"
+SEARCH_CANDIDATE_ENV = "QWENDEX_SEARCH_EVIDENCE_COMPACTION"
+SEARCH_CANDIDATE_MANAGED_INSTRUCTION = (
+    "Experimental search compaction is enabled for this launch. For broad repository discovery likely to return many matches, "
+    "use `scripts/qwendex search content <pattern> --root <repo-or-subtree> --literal|--regex --json`; "
+    "use direct `rg -F` for a narrow exact check, and do not repeat unchanged broad searches."
+)
 
 _MAX_SAFE_FILES = 100_000
 _MAX_TIMEOUT_SECONDS = 300
@@ -329,8 +335,10 @@ def candidate_registry() -> dict[str, Any]:
             {
                 "candidate_id": SEARCH_CANDIDATE_ID,
                 "candidate_version": SEARCH_CANDIDATE_VERSION,
-                "activation_mechanism": "explicit `performance lab run --candidate search_evidence_compaction_v1` or direct experimental `search` command",
+                "activation_mechanism": "scoped `QWENDEX_SEARCH_EVIDENCE_COMPACTION=1` Qdex launch, explicit `performance lab run --candidate search_evidence_compaction_v1`, or direct experimental `search` command",
                 "default_state": "off",
+                "managed_instruction": SEARCH_CANDIDATE_MANAGED_INSTRUCTION,
+                "managed_instruction_bytes": len(SEARCH_CANDIDATE_MANAGED_INSTRUCTION.encode("utf-8")),
                 "expected_affected_tool_families": ["search", "read", "context"],
                 "required_metrics": [
                     "raw_output_bytes",

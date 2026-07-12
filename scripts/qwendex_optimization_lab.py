@@ -1202,6 +1202,11 @@ def _performance_summary(baselines: list[Mapping[str, Any]], candidates: list[Ma
         if isinstance(incomplete, Mapping) and isinstance(incomplete.get("rate"), int | float):
             incomplete_rates.append(float(incomplete["rate"]))
     expected_adoptions = [row for row in candidates if bool(row.get("candidate_invoked"))]
+    registry = search_module().candidate_registry()
+    candidate = next(
+        (item for item in registry.get("candidates", []) if isinstance(item, Mapping) and item.get("candidate_id") == "search_evidence_compaction_v1"),
+        {},
+    )
     return {
         "schema_version": "qwendex.optimization_lab.performance_summary.v1",
         "pair_count": len(pairs),
@@ -1215,6 +1220,10 @@ def _performance_summary(baselines: list[Mapping[str, Any]], candidates: list[Ma
             "rate": round(sum(1 for row in expected_adoptions if row.get("candidate_adopted")) / len(expected_adoptions), 6) if expected_adoptions else "not_observed",
         },
         "candidate_processing_ms": {"p50": _percentile(candidate_processing, 0.5), "p95": _percentile(candidate_processing, 0.95)},
+        "candidate_instruction_context": {
+            "bytes": int(candidate.get("managed_instruction_bytes") or 0),
+            "delivery": "not_observed_controlled_runner",
+        },
         "telemetry_instrumentation_p95_ms": _percentile(telemetry_overheads, 0.95),
         "incomplete_telemetry_rate": _median(incomplete_rates),
         "context_compaction_events": "not_observed_controlled_runner",
