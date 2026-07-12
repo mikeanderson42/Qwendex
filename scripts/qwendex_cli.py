@@ -6396,11 +6396,134 @@ def command_performance(args: argparse.Namespace, config: dict[str, Any]) -> dic
             summary="Ran isolated Qwendex exploration telemetry benchmark.",
             data={"benchmark": payload},
         )
+    if action == "lab":
+        lab_action = str(getattr(args, "lab_action", "") or "")
+        module = optimization_lab_module()
+        if lab_action == "validate":
+            payload = module.validate_workload(Path(getattr(args, "manifest", "")))
+            return stable_envelope(
+                command="performance",
+                status=str(payload.get("status") or "fail"),
+                summary="Validated the frozen Qwendex optimization-lab workload manifest.",
+                errors=list(payload.get("errors") or []),
+                data={"lab": payload},
+            )
+        if lab_action == "baseline":
+            try:
+                payload = module.baseline_capture(
+                    Path(getattr(args, "manifest", "")),
+                    output_root=(Path(args.output_root) if str(getattr(args, "output_root", "") or "") else None),
+                )
+            except (OSError, ValueError) as exc:
+                return stable_envelope(
+                    command="performance",
+                    status="fail",
+                    summary="Could not capture the Qwendex optimization-lab baseline.",
+                    errors=[str(exc)],
+                )
+            return stable_envelope(
+                command="performance",
+                status=str(payload.get("status") or "fail"),
+                summary=str(payload.get("summary") or "Captured Qwendex optimization-lab baseline."),
+                data={"lab": payload.get("data", {})},
+            )
+        if lab_action == "run":
+            try:
+                payload = module.paired_run(
+                    Path(getattr(args, "manifest", "")),
+                    candidate_id=str(getattr(args, "candidate", "") or ""),
+                    output_root=(Path(args.output_root) if str(getattr(args, "output_root", "") or "") else None),
+                )
+            except (OSError, ValueError) as exc:
+                return stable_envelope(
+                    command="performance",
+                    status="fail",
+                    summary="Could not run the Qwendex optimization-lab paired evaluation.",
+                    errors=[str(exc)],
+                )
+            return stable_envelope(
+                command="performance",
+                status=str(payload.get("status") or "fail"),
+                summary=str(payload.get("summary") or "Ran Qwendex optimization-lab paired evaluation."),
+                data={"lab": payload.get("data", {})},
+            )
+        if lab_action == "compare":
+            payload = module.compare_run(Path(getattr(args, "run_dir", "")))
+            return stable_envelope(
+                command="performance",
+                status=str(payload.get("status") or "fail"),
+                summary=str(payload.get("summary") or "Compared Qwendex optimization-lab paired evaluation artifacts."),
+                errors=list(payload.get("errors") or []),
+                data={"lab": payload.get("data", {})},
+            )
+        return stable_envelope(
+            command="performance",
+            status="blocked",
+            summary=f"Unknown Qwendex optimization-lab action: {lab_action}",
+            errors=[lab_action or "missing lab action"],
+        )
     return stable_envelope(
         command="performance",
         status="blocked",
         summary=f"Unknown Qwendex performance action: {action}",
         errors=[action],
+    )
+
+
+def command_search(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, Any]:
+    """Expose explicit, default-off experimental search evidence compaction."""
+    _ = config
+    action = str(getattr(args, "action", "") or "")
+    mode = "literal" if bool(getattr(args, "literal", False)) else "regex"
+    module = qwendex_search_module()
+    try:
+        if action == "content":
+            payload = module.content_search_payload(
+                str(getattr(args, "pattern", "") or ""),
+                root=Path(getattr(args, "root", "")),
+                mode=mode,
+                include_ignored=bool(getattr(args, "include_ignored", False)),
+                max_files=max(1, int(getattr(args, "max_files", 100_000) or 100_000)),
+                per_file_ranges=max(1, int(getattr(args, "per_file_ranges", 12) or 12)),
+                total_ranges=max(1, int(getattr(args, "total_ranges", 96) or 96)),
+                max_files_evidence=max(1, int(getattr(args, "max_evidence_files", 64) or 64)),
+                page_size=max(1, int(getattr(args, "page_size", 96) or 96)),
+                page_token=str(getattr(args, "page_token", "") or ""),
+            )
+            return stable_envelope(
+                command="search",
+                status="pass",
+                summary="Ran explicit experimental Qwendex compact content search.",
+                data={"search": payload},
+            )
+        if action == "paths":
+            payload = module.path_search_payload(
+                str(getattr(args, "pattern", "") or ""),
+                root=Path(getattr(args, "root", "")),
+                mode=mode,
+                include_ignored=bool(getattr(args, "include_ignored", False)),
+                max_files=max(1, int(getattr(args, "max_files", 100_000) or 100_000)),
+                page_size=max(1, int(getattr(args, "page_size", 100) or 100)),
+                page_token=str(getattr(args, "page_token", "") or ""),
+            )
+            return stable_envelope(
+                command="search",
+                status="pass",
+                summary="Ran explicit experimental Qwendex repository-bounded path search.",
+                data={"search": payload},
+            )
+    except (OSError, ValueError) as exc:
+        return stable_envelope(
+            command="search",
+            status="blocked",
+            summary="Experimental Qwendex search request was rejected.",
+            errors=[str(exc)],
+        )
+    return stable_envelope(
+        command="search",
+        status="blocked",
+        summary=f"Unknown Qwendex search action: {action}",
+        errors=[action or "missing search action"],
     )
 
 
@@ -7305,6 +7428,8 @@ def _performance_event_key_material(event: Mapping[str, Any], canonical: str) ->
 
 
 _PERFORMANCE_MODULE: Any | None = None
+_OPTIMIZATION_LAB_MODULE: Any | None = None
+_QWENDEX_SEARCH_MODULE: Any | None = None
 
 
 def performance_module() -> Any:
@@ -7312,6 +7437,20 @@ def performance_module() -> Any:
     if _PERFORMANCE_MODULE is None:
         _PERFORMANCE_MODULE = script_module("qwendex_performance")
     return _PERFORMANCE_MODULE
+
+
+def optimization_lab_module() -> Any:
+    global _OPTIMIZATION_LAB_MODULE
+    if _OPTIMIZATION_LAB_MODULE is None:
+        _OPTIMIZATION_LAB_MODULE = script_module("qwendex_optimization_lab")
+    return _OPTIMIZATION_LAB_MODULE
+
+
+def qwendex_search_module() -> Any:
+    global _QWENDEX_SEARCH_MODULE
+    if _QWENDEX_SEARCH_MODULE is None:
+        _QWENDEX_SEARCH_MODULE = script_module("qwendex_search")
+    return _QWENDEX_SEARCH_MODULE
 
 
 def capture_performance_hook_event(
@@ -12556,6 +12695,51 @@ def command_line() -> argparse.ArgumentParser:
     performance_benchmark = performance_sub.add_parser("benchmark")
     performance_benchmark.add_argument("--suite", choices=["exploration"], required=True)
     performance_benchmark.add_argument("--json", action="store_true")
+    performance_lab = performance_sub.add_parser("lab")
+    performance_lab_sub = performance_lab.add_subparsers(dest="lab_action", required=True)
+    performance_lab_validate = performance_lab_sub.add_parser("validate")
+    performance_lab_validate.add_argument("--manifest", type=Path, required=True)
+    performance_lab_validate.add_argument("--json", action="store_true")
+    performance_lab_baseline = performance_lab_sub.add_parser("baseline")
+    performance_lab_baseline.add_argument("--manifest", type=Path, required=True)
+    performance_lab_baseline.add_argument("--output-root", default="")
+    performance_lab_baseline.add_argument("--json", action="store_true")
+    performance_lab_run = performance_lab_sub.add_parser("run")
+    performance_lab_run.add_argument("--manifest", type=Path, required=True)
+    performance_lab_run.add_argument("--candidate", required=True)
+    performance_lab_run.add_argument("--output-root", default="")
+    performance_lab_run.add_argument("--json", action="store_true")
+    performance_lab_compare = performance_lab_sub.add_parser("compare")
+    performance_lab_compare.add_argument("--run-dir", type=Path, required=True)
+    performance_lab_compare.add_argument("--json", action="store_true")
+
+    search = sub.add_parser("search")
+    search_sub = search.add_subparsers(dest="action", required=True)
+    search_content = search_sub.add_parser("content")
+    search_content.add_argument("pattern")
+    search_content.add_argument("--root", type=Path, required=True)
+    search_content_mode = search_content.add_mutually_exclusive_group(required=True)
+    search_content_mode.add_argument("--literal", action="store_true")
+    search_content_mode.add_argument("--regex", action="store_true")
+    search_content.add_argument("--include-ignored", action="store_true")
+    search_content.add_argument("--max-files", type=int, default=100_000)
+    search_content.add_argument("--per-file-ranges", type=int, default=12)
+    search_content.add_argument("--total-ranges", type=int, default=96)
+    search_content.add_argument("--max-evidence-files", type=int, default=64)
+    search_content.add_argument("--page-size", type=int, default=96)
+    search_content.add_argument("--page-token", default="")
+    search_content.add_argument("--json", action="store_true")
+    search_paths = search_sub.add_parser("paths")
+    search_paths.add_argument("pattern")
+    search_paths.add_argument("--root", type=Path, required=True)
+    search_paths_mode = search_paths.add_mutually_exclusive_group()
+    search_paths_mode.add_argument("--literal", action="store_true")
+    search_paths_mode.add_argument("--regex", action="store_true")
+    search_paths.add_argument("--include-ignored", action="store_true")
+    search_paths.add_argument("--max-files", type=int, default=100_000)
+    search_paths.add_argument("--page-size", type=int, default=100)
+    search_paths.add_argument("--page-token", default="")
+    search_paths.add_argument("--json", action="store_true")
 
     agent = sub.add_parser("agent")
     agent.add_argument(
@@ -12746,6 +12930,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     # creating or migrating the Manager state database just to resolve policy.
     if args.command == "performance":
         return command_performance(args, config)
+    if args.command == "search":
+        return command_search(args, config)
     manager_hook_launch = bool(
         getattr(args, "command", "") == "agent"
         and getattr(args, "action", "") == "hook"

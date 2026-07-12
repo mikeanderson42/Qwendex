@@ -46,6 +46,9 @@ store. Its aggregates are attribution evidence, not a performance-improvement
 claim. Before changing it, read
 `docs/development/exploration-performance.md`; preserve the no-raw-content
 boundary and run the privacy and benchmark coverage with the hook regressions.
+For an explicit default-off search-compaction evaluation, also read
+`docs/development/optimization-lab.md`; do not treat its controlled runner as
+live-model or default-enable evidence.
 
 ## Connectedness Check
 

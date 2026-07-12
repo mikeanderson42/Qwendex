@@ -116,3 +116,9 @@ exporter, search broker, generic tool recorder, or Codex patch. Do not promote
 search-output compaction or another optimization from this data until real,
 privacy-safe runs demonstrate a bottleneck and a separate task defines paired
 quality and performance gates.
+
+The v0.6.0 developer-only paired workflow and its explicitly activated
+`search_evidence_compaction_v1` candidate are documented in
+[Optimization Lab And Search-Evidence Candidate](optimization-lab.md). The
+candidate is default-off, raw search evidence stays under ignored run artifacts,
+and a controlled runner does not make a live-model or production-speed claim.

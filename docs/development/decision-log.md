@@ -31,6 +31,22 @@ The Phase 1 benchmark is intentionally synthetic and isolated. Its timing and
 privacy scan validate instrumentation only; search, startup, validation, model,
 and end-to-end performance claims require a later paired evaluation.
 
+## Optimization Lab And Search Evidence Compaction
+
+Decision: v0.6.0 uses a frozen, isolated paired-evaluation lab before any
+optimization claim. Its first candidate, `search_evidence_compaction_v1`, is
+default-off, uses current-worktree live ripgrep rather than an index/cache, and
+keeps full raw evidence only in ignored local artifacts. The metadata telemetry
+database remains content-free. A controlled search-evidence runner may reject
+or hold a candidate, but cannot promote it without separate live-model and
+Manager-binding evidence.
+
+Reason: byte reduction alone can conceal missing relevant regions, stale or
+untracked-file misses, privacy leaks, Manager regressions, or model-context
+cost. Separating the candidate from normal search behavior retains a reversible
+experimental boundary while reproducible gates establish the next measured
+frontier.
+
 ## Patched Codex Contract
 
 Decision: Qwendex patches Codex source by versioned anchors, not by mutating the
