@@ -464,6 +464,20 @@ def selected_candidate_from_environment(value: str | None = None) -> str | None:
     return None
 
 
+def managed_instruction_for_candidate(candidate_id: str, *, search_command: str | None = None) -> str:
+    """Render a scoped instruction without persisting an operator-local command path."""
+
+    selected = str(candidate_id or "")
+    if selected == SEARCH_V1_CANDIDATE_ID:
+        instruction = SEARCH_CANDIDATE_MANAGED_INSTRUCTION
+    elif selected == SEARCH_V2_CANDIDATE_ID:
+        instruction = SEARCH_V2_CANDIDATE_MANAGED_INSTRUCTION
+    else:
+        return ""
+    command = str(search_command if search_command is not None else os.environ.get("QWENDEX_SEARCH_COMMAND") or "scripts/qwendex").strip()
+    return instruction.replace("scripts/qwendex", command) if command else instruction
+
+
 def candidate_registry() -> dict[str, Any]:
     """Return default-off search candidates without changing historic v1."""
 

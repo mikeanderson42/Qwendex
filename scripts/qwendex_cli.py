@@ -6447,6 +6447,27 @@ def command_performance(args: argparse.Namespace, config: dict[str, Any]) -> dic
                 summary=str(payload.get("summary") or "Ran Qwendex optimization-lab paired evaluation."),
                 data={"lab": payload.get("data", {})},
             )
+        if lab_action == "live-run":
+            try:
+                payload = module.live_paired_run(
+                    Path(getattr(args, "manifest", "")),
+                    candidate_id=str(getattr(args, "candidate", "") or ""),
+                    auth_source=Path(getattr(args, "auth_source", "")),
+                    output_root=(Path(args.output_root) if str(getattr(args, "output_root", "") or "") else None),
+                )
+            except (OSError, ValueError) as exc:
+                return stable_envelope(
+                    command="performance",
+                    status="fail",
+                    summary="Could not run the Qwendex held-out live-agent paired evaluation.",
+                    errors=[str(exc)],
+                )
+            return stable_envelope(
+                command="performance",
+                status=str(payload.get("status") or "fail"),
+                summary=str(payload.get("summary") or "Ran Qwendex held-out live-agent paired evaluation."),
+                data={"lab": payload.get("data", {})},
+            )
         if lab_action == "compare":
             payload = module.compare_run(Path(getattr(args, "run_dir", "")))
             return stable_envelope(
@@ -7483,7 +7504,7 @@ def experimental_search_candidate_context() -> str:
         return ""
     for candidate in module.candidate_registry().get("candidates", []):
         if isinstance(candidate, Mapping) and str(candidate.get("candidate_id") or "") == candidate_id:
-            return str(candidate.get("managed_instruction") or "")
+            return str(module.managed_instruction_for_candidate(candidate_id))
     return ""
 
 
@@ -12743,6 +12764,12 @@ def command_line() -> argparse.ArgumentParser:
     performance_lab_run.add_argument("--candidate", required=True)
     performance_lab_run.add_argument("--output-root", default="")
     performance_lab_run.add_argument("--json", action="store_true")
+    performance_lab_live_run = performance_lab_sub.add_parser("live-run")
+    performance_lab_live_run.add_argument("--manifest", type=Path, required=True)
+    performance_lab_live_run.add_argument("--candidate", required=True)
+    performance_lab_live_run.add_argument("--auth-source", type=Path, required=True)
+    performance_lab_live_run.add_argument("--output-root", default="")
+    performance_lab_live_run.add_argument("--json", action="store_true")
     performance_lab_compare = performance_lab_sub.add_parser("compare")
     performance_lab_compare.add_argument("--run-dir", type=Path, required=True)
     performance_lab_compare.add_argument("--json", action="store_true")

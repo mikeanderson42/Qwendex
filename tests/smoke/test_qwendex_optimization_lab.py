@@ -394,6 +394,49 @@ def test_v2_paired_run_validates_cursor_coverage_contract(tmp_path: Path) -> Non
     assert all(row["retrieval_contract"]["cursor_contract_complete"] for row in rows)
 
 
+def test_live_workload_schema_and_trace_summary_are_private_metadata_only(tmp_path: Path) -> None:
+    lab = load_module("qwendex_optimization_lab")
+    repository, commit, tree = make_repository(tmp_path)
+    manifest = write_full_manifest(tmp_path, repository, commit, tree)
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["execution_mode"] = "live_agent_adoption_v2"
+    payload["live_contract"] = {
+        "runner": "codex_exec_json",
+        "conversation_isolation": "fresh_home_per_arm",
+        "candidate_instruction_delivery": "scoped_environment_hook",
+    }
+    task_classes = [
+        "narrow_exact_localization",
+        "broad_definition_discovery",
+        "broad_reference_discovery",
+        "documentation_code_verification",
+    ]
+    for index, task in enumerate(payload["tasks"]):
+        task["live"] = {"task_class": task_classes[index % len(task_classes)], "candidate_eligible": index % 2 == 0}
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+
+    validated = lab.validate_workload(manifest)
+    events = tmp_path / "events.jsonl"
+    events.write_text(
+        "\n".join(
+            [
+                json.dumps({"type": "item.completed", "item": {"type": "command_execution", "command": "scripts/qwendex search content def --candidate v2", "aggregated_output": "{}"}}),
+                json.dumps({"type": "item.completed", "item": {"type": "command_execution", "command": "python3 -m pytest tests", "aggregated_output": "pass"}}),
+                json.dumps({"type": "turn.completed", "usage": {"input_tokens": 11, "output_tokens": 7}}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    trace = lab._live_trace_summary(events)
+
+    assert validated["status"] == "pass"
+    assert trace["candidate_adopted"] is True
+    assert trace["candidate_search_calls"] == 1
+    assert trace["validation_tool_calls"] == 1
+    assert trace["token_usage"] == {"input_tokens": 11, "output_tokens": 7}
+
+
 def test_cli_validates_the_connected_optimization_lab_surface(tmp_path: Path) -> None:
     repository, commit, tree = make_repository(tmp_path)
     manifest = write_full_manifest(tmp_path, repository, commit, tree)
@@ -487,3 +530,22 @@ def test_scoped_candidate_environment_injects_only_the_bounded_instruction() -> 
     assert "Experimental search compaction is enabled" not in disabled_context
     assert "Experimental search compaction is enabled" in enabled_context
     assert len(enabled_context.encode("utf-8")) - len(disabled_context.encode("utf-8")) < 400
+
+    v2_environment = {
+        **environment,
+        "QWENDEX_SEARCH_EVIDENCE_COMPACTION": "v2",
+        "QWENDEX_SEARCH_COMMAND": "/isolated/live/qwendex",
+    }
+    v2 = subprocess.run(
+        [str(QWENDEX), "agent", "hook", "SessionStart", "--event-json", "{}", "--json"],
+        cwd=ROOT,
+        env=v2_environment,
+        check=False,
+        text=True,
+        capture_output=True,
+        timeout=60,
+    )
+    v2_context = json.loads(v2.stdout)["data"]["hook_result"]["hookSpecificOutput"]["additionalContext"]
+    assert v2.returncode == 0
+    assert "recall-preserving search compaction v2" in v2_context
+    assert "/isolated/live/qwendex search content" in v2_context

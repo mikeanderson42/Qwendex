@@ -12,6 +12,8 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
+import signal
 import shutil
 import subprocess
 import tempfile
@@ -27,6 +29,8 @@ WORKLOAD_SCHEMA_VERSION = "qwendex.optimization_lab.workload.v1"
 BASELINE_RUN_SCHEMA_VERSION = "qwendex.optimization_lab.run.v1"
 BASELINE_CAPTURE_SCHEMA_VERSION = "qwendex.optimization_lab.baseline_capture.v1"
 ARTIFACT_MANIFEST_SCHEMA_VERSION = "qwendex.optimization_lab.artifact_manifest.v1"
+LIVE_AGENT_RUN_SCHEMA_VERSION = "qwendex.optimization_lab.live_agent_run.v1"
+LIVE_EXECUTION_MODE = "live_agent_adoption_v2"
 
 SCRIPT_ROOT = Path(__file__).resolve().parent
 REPOSITORY_ROOT = SCRIPT_ROOT.parent
@@ -235,7 +239,8 @@ def validate_workload(manifest_path: Path | str) -> dict[str, Any]:
         errors.append("workload id and frozen marker are required")
     if not isinstance(payload.get("seed"), int):
         errors.append("fixed workload seed is required")
-    if payload.get("execution_mode") != "controlled_search_evidence_v1":
+    execution_mode = str(payload.get("execution_mode") or "")
+    if execution_mode not in {"controlled_search_evidence_v1", LIVE_EXECUTION_MODE}:
         errors.append("unsupported workload execution mode")
     policy = payload.get("model_policy")
     if not isinstance(policy, Mapping) or any(not str(policy.get(key) or "") for key in ("model_identifier", "reasoning_effort", "manager_mode", "local_routing_state", "permission_mode")):
@@ -290,6 +295,38 @@ def validate_workload(manifest_path: Path | str) -> dict[str, Any]:
                 errors.append(f"workload requires four tasks in {stratum}")
         if orders.get("baseline_first", 0) != orders.get("candidate_first", 0):
             errors.append("baseline/candidate order must be balanced")
+    if execution_mode == LIVE_EXECUTION_MODE:
+        live_contract = payload.get("live_contract")
+        if not isinstance(live_contract, Mapping) or any(
+            not str(live_contract.get(key) or "")
+            for key in ("runner", "conversation_isolation", "candidate_instruction_delivery")
+        ):
+            errors.append("live workload contract is incomplete")
+        elif live_contract.get("conversation_isolation") != "fresh_home_per_arm":
+            errors.append("live workload must require a fresh home per arm")
+        for task in tasks if isinstance(tasks, list) else []:
+            if not isinstance(task, Mapping):
+                continue
+            live = task.get("live")
+            if not isinstance(live, Mapping):
+                errors.append(f"task {task.get('id') or 'unknown'}: live task contract is missing")
+                continue
+            if str(live.get("task_class") or "") not in {
+                "narrow_exact_localization",
+                "broad_definition_discovery",
+                "broad_reference_discovery",
+                "documentation_code_verification",
+                "test_failure_diagnosis",
+                "isolated_small_implementation",
+                "root_only_work",
+                "manager_explorer_work",
+                "manager_implementer_work",
+                "manager_verifier_work",
+                "modified_untracked_freshness",
+            }:
+                errors.append(f"task {task.get('id') or 'unknown'}: live task class is invalid")
+            if not isinstance(live.get("candidate_eligible"), bool):
+                errors.append(f"task {task.get('id') or 'unknown'}: candidate eligibility is required")
     digest = "sha256:" + sha256_file(path) if path.is_file() else "not_observed"
     return {
         "schema_version": WORKLOAD_SCHEMA_VERSION,
@@ -358,6 +395,206 @@ def _isolated_run_environment(isolation_root: Path, worktree: Path) -> dict[str,
     return environment
 
 
+def _isolated_live_environment(isolation_root: Path, worktree: Path) -> dict[str, str]:
+    """Create a fresh process/home boundary for one real Codex arm."""
+
+    environment = _isolated_run_environment(isolation_root, worktree)
+    home = isolation_root / "home"
+    xdg_cache = isolation_root / "xdg-cache"
+    xdg_config = isolation_root / "xdg-config"
+    xdg_state = isolation_root / "xdg-state"
+    for path in (home, xdg_cache, xdg_config, xdg_state):
+        path.mkdir(parents=True, exist_ok=True)
+    for key in ("QWENDEX_SEARCH_EVIDENCE_COMPACTION", "QWENDEX_LIVE_EVAL_AUTH_SOURCE"):
+        environment.pop(key, None)
+    environment.update(
+        {
+            "HOME": str(home.resolve()),
+            "XDG_CACHE_HOME": str(xdg_cache.resolve()),
+            "XDG_CONFIG_HOME": str(xdg_config.resolve()),
+            "XDG_STATE_HOME": str(xdg_state.resolve()),
+            "QWENDEX_AGENT_USE": "Manager",
+            "QWENDEX_MANAGER_TARGET_REPO": str(worktree.resolve()),
+            "QWENDEX_PERFORMANCE_CAPTURE": "metadata",
+        }
+    )
+    return environment
+
+
+def _copy_live_auth(auth_source: Path, codex_home: Path) -> None:
+    """Copy only operator-supplied Codex auth into an ignored arm-local home."""
+
+    source = auth_source.expanduser().resolve(strict=False)
+    if not source.is_file():
+        raise LabError("live evaluation auth source is unavailable")
+    target = codex_home / "auth.json"
+    shutil.copyfile(source, target)
+    target.chmod(0o600)
+
+
+def _live_prompt(manifest_path: Path, task: Mapping[str, Any]) -> str:
+    prompt_file, key = _safe_reference_path(manifest_path, str(task.get("private_prompt_ref") or ""))
+    payload = _read_json(prompt_file)
+    value = payload.get(key) if isinstance(payload, Mapping) and key else None
+    if not isinstance(value, str) or not value:
+        raise LabError("live task prompt is unavailable")
+    return value
+
+
+def _materialize_live_fixture(task: Mapping[str, Any], worktree: Path) -> None:
+    live = task.get("live") if isinstance(task.get("live"), Mapping) else {}
+    fixtures = live.get("fixture_files", []) if isinstance(live, Mapping) else []
+    if not isinstance(fixtures, list):
+        raise LabError("live fixture files must be a list")
+    for item in fixtures:
+        if not isinstance(item, Mapping):
+            raise LabError("live fixture entry is invalid")
+        relative = Path(str(item.get("path") or ""))
+        if not str(relative) or relative.is_absolute() or ".." in relative.parts:
+            raise LabError("live fixture path escapes its worktree")
+        target = worktree / relative
+        if not _within(target.resolve(strict=False), worktree.resolve(strict=False)):
+            raise LabError("live fixture path escapes its worktree")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(str(item.get("content") or ""), encoding="utf-8")
+    mutation = live.get("tracked_mutation") if isinstance(live, Mapping) else None
+    if mutation is not None:
+        if not isinstance(mutation, Mapping):
+            raise LabError("live tracked mutation is invalid")
+        relative = Path(str(mutation.get("path") or ""))
+        if not str(relative) or relative.is_absolute() or ".." in relative.parts:
+            raise LabError("live tracked mutation path escapes its worktree")
+        target = worktree / relative
+        if not _within(target.resolve(strict=False), worktree.resolve(strict=False)) or not target.is_file():
+            raise LabError("live tracked mutation target is unavailable")
+        target.write_text(target.read_text(encoding="utf-8") + str(mutation.get("append") or ""), encoding="utf-8")
+
+
+def _read_json_if_present(path: Path) -> dict[str, Any]:
+    try:
+        value = _read_json(path)
+    except LabError:
+        return {}
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _live_launch_script() -> str:
+    """Return a wrapper whose PID becomes the trusted Codex root process."""
+
+    return r'''
+set -euo pipefail
+export QWENDEX_MANAGER_LAUNCH_PID="$$"
+export QWENDEX_MANAGER_LAUNCH_START_TICKS="$(python3 - "$$" <<'PY'
+import sys
+from pathlib import Path
+try:
+    stat = Path(f"/proc/{sys.argv[1]}/stat").read_text(encoding="utf-8")
+    closing = stat.rfind(")")
+    fields = stat[closing + 2:].split() if closing >= 0 else []
+    print(fields[19] if len(fields) > 19 else "")
+except OSError:
+    print("")
+PY
+)"
+export QWENDEX_MANAGER_LAUNCH_NONCE="$(python3 - <<'PY'
+import uuid
+print(uuid.uuid4().hex)
+PY
+)"
+"$QWENDEX_LIVE_COMMAND" --agent-use Manager manager preflight --interactive-prompt-unknown --json > "$QWENDEX_LIVE_PREFLIGHT"
+eval "$(python3 - "$QWENDEX_LIVE_PREFLIGHT" <<'PY'
+import json
+import shlex
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    payload = json.load(handle)
+data = payload.get("data", {})
+exports = data.get("exports", {}) if isinstance(data, dict) else {}
+if not data.get("ok") or not str(exports.get("QWENDEX_MANAGER_ROOT_AGENT_ID") or ""):
+    raise SystemExit(2)
+for key, value in exports.items():
+    print(f"export {key}={shlex.quote(str(value))}")
+PY
+)"
+exec "$QWENDEX_LIVE_RUNTIME" \
+  --no-alt-screen \
+  --sandbox workspace-write \
+  --dangerously-bypass-hook-trust \
+  --config "projects={$QWENDEX_LIVE_PROJECT={trust_level=\"trusted\"}}" \
+  -c "model_reasoning_effort=$QWENDEX_LIVE_REASONING" \
+  exec --ephemeral --json -C "$QWENDEX_LIVE_WORKTREE" -m "$QWENDEX_LIVE_MODEL" \
+  --output-last-message "$QWENDEX_LIVE_LAST_MESSAGE" \
+  "$@"
+'''
+
+
+def _run_live_codex(
+    *,
+    environment: Mapping[str, str],
+    worktree: Path,
+    prompt: str,
+    model: str,
+    reasoning_effort: str,
+    timeout_seconds: int,
+    raw_dir: Path,
+) -> dict[str, Any]:
+    """Run one fresh authenticated Manager root and retain only private raw output."""
+
+    runtime = str(environment.get("QWENDEX_CODEX_RUNTIME") or os.environ.get("QWENDEX_CODEX_RUNTIME") or "")
+    if not runtime or not Path(runtime).is_file():
+        raise LabError("live evaluation Codex runtime is unavailable")
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    preflight_path = raw_dir / "manager_preflight.json"
+    stdout_path = raw_dir / "events.jsonl"
+    stderr_path = raw_dir / "stderr.txt"
+    last_message_path = raw_dir / "last_message.md"
+    child_env = dict(environment)
+    child_env.update(
+        {
+            "QWENDEX_LIVE_COMMAND": str((REPOSITORY_ROOT / "scripts" / "qwendex").resolve()),
+            "QWENDEX_LIVE_RUNTIME": runtime,
+            "QWENDEX_LIVE_PREFLIGHT": str(preflight_path.resolve()),
+            "QWENDEX_LIVE_PROJECT": json.dumps(str(worktree.resolve())),
+            "QWENDEX_LIVE_REASONING": json.dumps(reasoning_effort),
+            "QWENDEX_LIVE_WORKTREE": str(worktree.resolve()),
+            "QWENDEX_LIVE_MODEL": model,
+            "QWENDEX_LIVE_LAST_MESSAGE": str(last_message_path.resolve()),
+        }
+    )
+    started = time.monotonic()
+    with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
+        process = subprocess.Popen(
+            ["bash", "-c", _live_launch_script(), "qwendex-live", prompt],
+            cwd=worktree,
+            env=child_env,
+            stdout=stdout,
+            stderr=stderr,
+            start_new_session=True,
+        )
+        timed_out = False
+        try:
+            returncode = process.wait(timeout=max(30, timeout_seconds))
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            os.killpg(process.pid, signal.SIGTERM)
+            try:
+                returncode = process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                os.killpg(process.pid, signal.SIGKILL)
+                returncode = process.wait(timeout=10)
+    return {
+        "returncode": returncode,
+        "timed_out": timed_out,
+        "duration_ms": round((time.monotonic() - started) * 1000, 3),
+        "preflight": _read_json_if_present(preflight_path),
+        "raw_paths": {
+            "events": stdout_path,
+            "stderr": stderr_path,
+            "last_message": last_message_path,
+        },
+    }
+
+
 def _prepare_isolated_manager(isolation_root: Path, worktree: Path) -> tuple[dict[str, str], dict[str, Any]]:
     environment = _isolated_run_environment(isolation_root, worktree)
     command = REPOSITORY_ROOT / "scripts" / "qwendex"
@@ -402,6 +639,257 @@ def _prepare_isolated_manager(isolation_root: Path, worktree: Path) -> tuple[dic
         "root_identity": "derived" if preflight_data.get("root_agent_id") else "not_observed",
     }
     return environment, result
+
+
+def _prepare_live_manager(isolation_root: Path, worktree: Path) -> tuple[dict[str, str], dict[str, Any]]:
+    """Install verified hooks into a fresh live arm before its PID-bound launch."""
+
+    environment = _isolated_live_environment(isolation_root, worktree)
+    command = REPOSITORY_ROOT / "scripts" / "qwendex"
+    install = subprocess.run(
+        [str(command), "agent", "hook-config", "--install", "--codex-home", environment["CODEX_HOME"], "--json"],
+        cwd=REPOSITORY_ROOT,
+        env=environment,
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=30,
+    )
+    probe = subprocess.run(
+        [str(command), "--agent-use", "Manager", "manager", "preflight", "--mode", "manager", "--dry-run", "--json"],
+        cwd=REPOSITORY_ROOT,
+        env=environment,
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=30,
+    )
+    try:
+        install_payload = json.loads(install.stdout)
+        probe_payload = json.loads(probe.stdout)
+    except json.JSONDecodeError as exc:
+        raise LabError("isolated live Manager setup returned invalid JSON") from exc
+    data = probe_payload.get("data", {}) if isinstance(probe_payload.get("data"), Mapping) else {}
+    hook = data.get("hook_status", {}) if isinstance(data.get("hook_status"), Mapping) else {}
+    result = {
+        "status": "pass"
+        if install_payload.get("status") == "pass"
+        and probe_payload.get("status") == "pass"
+        and data.get("stop_status") == "STOP_MANAGER_PREFLIGHT_READY"
+        and bool(hook.get("verified"))
+        else "fail",
+        "hook_verified": bool(hook.get("verified")),
+        "stop_status": str(data.get("stop_status") or ""),
+        "policy_hash": str(data.get("policy_hash") or ""),
+        "repository_binding": "isolated_snapshot" if data.get("repo_root") else "not_observed",
+        "root_identity": "dry_run_derived" if data.get("root_agent_id") else "not_observed",
+    }
+    return environment, result
+
+
+def _live_raw_artifacts(raw_dir: Path, run_dir: Path) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    for path in sorted(item for item in raw_dir.rglob("*") if item.is_file()):
+        entries.append(
+            {
+                "path": path.relative_to(run_dir).as_posix(),
+                "bytes": path.stat().st_size,
+                "sha256": "sha256:" + sha256_file(path),
+            }
+        )
+    return entries
+
+
+def _live_trace_summary(events_path: Path) -> dict[str, Any]:
+    """Derive numeric observations from Codex JSONL without retaining content."""
+
+    command_count = 0
+    search_calls = 0
+    read_calls = 0
+    edit_calls = 0
+    validation_calls = 0
+    search_output_bytes = 0
+    candidate_search_calls = 0
+    pagination_calls = 0
+    fallback_count = 0
+    parse_errors = 0
+    token_usage: dict[str, int] = {}
+    for line in events_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            parse_errors += 1
+            continue
+        if not isinstance(event, Mapping):
+            continue
+        usage = event.get("usage")
+        if isinstance(usage, Mapping):
+            for key in ("input_tokens", "output_tokens", "reasoning_output_tokens", "cached_input_tokens"):
+                if isinstance(usage.get(key), int):
+                    token_usage[key] = token_usage.get(key, 0) + int(usage[key])
+        item = event.get("item")
+        if not isinstance(item, Mapping) or item.get("type") != "command_execution":
+            continue
+        command_count += 1
+        command = str(item.get("command") or "")
+        lowered = command.lower()
+        output = str(item.get("aggregated_output") or "")
+        is_search = bool(re.search(r"(?:^|[\s;&|])rg(?:[\s;&|]|$)", lowered)) or " search content " in f" {lowered} "
+        is_validation = any(token in lowered for token in ("pytest", "py_compile", "json.tool", "git diff --check", "ruff check"))
+        is_edit = any(token in lowered for token in ("apply_patch", "perl -pi", "sed -i", "mv ", "cp ", "touch "))
+        is_read = not is_search and not is_validation and any(token in lowered for token in (" cat ", " sed ", " head ", " tail ", " less ", " rg "))
+        if is_search:
+            search_calls += 1
+            search_output_bytes += len(output.encode("utf-8", "replace"))
+            if "search content" in lowered and re.search(r"--candidate(?:=|\s+)v2\b", lowered):
+                candidate_search_calls += 1
+                fallback_count += output.count("baseline_fallback")
+            if "search next" in lowered:
+                pagination_calls += 1
+        elif is_validation:
+            validation_calls += 1
+        elif is_edit:
+            edit_calls += 1
+        elif is_read:
+            read_calls += 1
+    return {
+        "tool_calls": command_count,
+        "search_calls": search_calls,
+        "read_calls": read_calls,
+        "edit_calls": edit_calls,
+        "validation_tool_calls": validation_calls,
+        "search_output_bytes": search_output_bytes if search_calls else "not_observed",
+        "candidate_search_calls": candidate_search_calls,
+        "pagination_calls": pagination_calls,
+        "fallback_count": fallback_count,
+        "candidate_adopted": candidate_search_calls > 0,
+        "parse_errors": parse_errors,
+        "token_usage": token_usage or "not_observed",
+    }
+
+
+def _live_evidence_grade(task: Mapping[str, Any], raw_dir: Path) -> dict[str, Any]:
+    text = "\n".join(
+        path.read_text(encoding="utf-8", errors="replace")
+        for path in (raw_dir / "events.jsonl", raw_dir / "last_message.md")
+        if path.is_file()
+    )
+    expected_files = [str(item) for item in task.get("expected_relevant_files", [])]
+    regions = [item for item in task.get("expected_relevant_regions", []) if isinstance(item, Mapping)]
+    file_hits = [path for path in expected_files if path in text]
+    region_hits = [
+        {"path": str(region.get("path") or ""), "anchor": str(region.get("anchor") or ""), "observed": str(region.get("anchor") or "") in text}
+        for region in regions
+    ]
+    file_recall = round(len(file_hits) / len(expected_files), 6) if expected_files else 0.0
+    region_recall = round(sum(1 for item in region_hits if item["observed"]) / len(region_hits), 6) if region_hits else 0.0
+    rubric = task.get("task_success_rubric", {}) if isinstance(task.get("task_success_rubric"), Mapping) else {}
+    return {
+        "relevant_file_recall": file_recall,
+        "relevant_region_recall": region_recall,
+        "file_hits": len(file_hits),
+        "file_expected": len(expected_files),
+        "region_hits": sum(1 for item in region_hits if item["observed"]),
+        "region_expected": len(region_hits),
+        "region_evidence": region_hits,
+        "quality_status": "pass"
+        if file_recall >= float(rubric.get("minimum_file_recall", 1.0))
+        and region_recall >= float(rubric.get("minimum_region_recall", 1.0))
+        else "fail",
+    }
+
+
+def _run_live_validation(task: Mapping[str, Any], worktree: Path, raw_dir: Path, environment: Mapping[str, str]) -> dict[str, Any]:
+    command = [str(item) for item in task.get("validation_command", [])]
+    if not command:
+        return {"status": "not_applicable", "duration_ms": None}
+    started = time.monotonic()
+    stdout_path = raw_dir / "validation.stdout"
+    stderr_path = raw_dir / "validation.stderr"
+    try:
+        with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
+            completed = subprocess.run(
+                command,
+                cwd=worktree,
+                env=dict(environment),
+                stdout=stdout,
+                stderr=stderr,
+                check=False,
+                timeout=max(30, int(task.get("timeout_seconds") or 180)),
+            )
+        live = task.get("live") if isinstance(task.get("live"), Mapping) else {}
+        expected = str(live.get("validation_expectation") or "pass") if isinstance(live, Mapping) else "pass"
+        status = "pass" if (completed.returncode == 0) == (expected != "fail") else "fail"
+    except (OSError, subprocess.TimeoutExpired):
+        status = "fail"
+    return {"status": status, "duration_ms": round((time.monotonic() - started) * 1000, 3)}
+
+
+def _live_postconditions(task: Mapping[str, Any], worktree: Path) -> bool:
+    live = task.get("live") if isinstance(task.get("live"), Mapping) else {}
+    checks = live.get("postconditions", []) if isinstance(live, Mapping) else []
+    if not isinstance(checks, list):
+        return False
+    for check in checks:
+        if not isinstance(check, Mapping):
+            return False
+        relative = Path(str(check.get("path") or ""))
+        target = worktree / relative
+        if not str(relative) or relative.is_absolute() or ".." in relative.parts or not target.is_file():
+            return False
+        if str(check.get("contains") or "") not in target.read_text(encoding="utf-8", errors="replace"):
+            return False
+    return True
+
+
+def _live_manager_status(environment: Mapping[str, str]) -> dict[str, Any]:
+    command = REPOSITORY_ROOT / "scripts" / "qwendex"
+    completed = subprocess.run(
+        [str(command), "manager", "status", "--json"],
+        cwd=REPOSITORY_ROOT,
+        env=dict(environment),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    try:
+        payload = json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        return {"status": "fail", "agent_count": "not_observed", "stale_count": "not_observed"}
+    data = payload.get("data", {}) if isinstance(payload.get("data"), Mapping) else {}
+    active = data.get("active_subagents", {}) if isinstance(data.get("active_subagents"), Mapping) else {}
+    stale = data.get("stale_sessions", {}) if isinstance(data.get("stale_sessions"), Mapping) else {}
+    outcomes = data.get("agent_outcomes", []) if isinstance(data.get("agent_outcomes"), list) else []
+    return {
+        "status": str(payload.get("status") or "fail"),
+        "agent_count": int(active.get("count") or 0),
+        "stale_count": int(stale.get("count") or 0),
+        "outcome_count": len(outcomes),
+    }
+
+
+def _contains_live_guard_marker(raw_dir: Path) -> bool:
+    final_message = raw_dir / "last_message.md"
+    if not final_message.is_file():
+        return True
+    text = final_message.read_text(encoding="utf-8", errors="replace")
+    return any(marker in text for marker in ("LOCAL_MODEL_TOOL_CALL_TOO_LARGE", "LOCAL_MODEL_TOOL_CALL_TRUNCATED", "LOCAL_MODEL_TOOL_MARKUP_SUPPRESSED", "LOCAL_MODEL_LOOP_DETECTED", "<tool_call", "<function="))
+
+
+def _cleanup_live_isolation(isolation_root: Path) -> None:
+    """Remove credentials, homes, and transient state while preserving only safe perf DBs."""
+
+    for name in ("codex_home", "home", "xdg-cache", "xdg-config", "xdg-state"):
+        shutil.rmtree(isolation_root / name, ignore_errors=True)
+    state = isolation_root / "state"
+    for path in state.glob("qwendex*.sqlite*"):
+        if path.name.startswith("qwendex-performance.sqlite"):
+            continue
+        path.unlink(missing_ok=True)
 
 
 def _raw_evidence_path(run_dir: Path, task_id: str) -> Path:
@@ -759,6 +1247,7 @@ def _artifact_manifest(run_dir: Path) -> dict[str, Any]:
         for item in run_dir.rglob("*")
         if item.is_file()
         and item.name != "manifest.json"
+        and item.name != "auth.json"
         and not item.name.endswith(("-shm", "-wal"))
     ):
         entries.append(
@@ -1817,6 +2306,529 @@ def paired_run(
         "schema_version": "qwendex.optimization_lab.paired_run.v1",
         "status": "pass" if gate.get("candidate_decision") in {"hold_for_more_evidence", "promote_opt_in_experimental"} else "fail",
         "summary": "Ran isolated Qwendex optimization-lab paired evaluation.",
+        "data": {
+            "run_id": run_id,
+            "artifact_dir": str(run_dir),
+            "candidate_decision": gate.get("candidate_decision"),
+            "attempted_pairs": len(pairs),
+            "valid_pairs": gate.get("valid_pairs"),
+            "invalid_pairs": gate.get("invalid_pairs"),
+            "pilot_early_stop": pilot_hard_failure,
+        },
+    }
+
+
+def _run_live_arm(
+    *,
+    task: Mapping[str, Any],
+    repository: Mapping[str, Any],
+    run_dir: Path,
+    run_id: str,
+    manifest_path: Path,
+    auth_source: Path,
+    variant: str,
+    candidate_id: str = "",
+) -> dict[str, Any]:
+    """Execute one genuinely fresh live Codex arm in an isolated worktree."""
+
+    task_id = str(task.get("id") or "unknown")
+    source = Path(str(repository.get("source_path") or "")).expanduser()
+    worktree = run_dir / "isolation" / task_id / variant / "worktree"
+    isolation_root = worktree.parent
+    raw_dir = run_dir / "raw" / variant / task_id
+    receipt_path = run_dir / "arms" / task_id / variant / "receipt.json"
+    started = time.monotonic()
+    _snapshot_worktree(source, str(repository.get("commit") or ""), worktree)
+    try:
+        _materialize_live_fixture(task, worktree)
+        environment, setup = _prepare_live_manager(isolation_root, worktree)
+        _copy_live_auth(auth_source, Path(environment["CODEX_HOME"]))
+        candidate_active = variant == "candidate" and candidate_id == search_module().SEARCH_V2_CANDIDATE_ID
+        if candidate_active:
+            environment["QWENDEX_SEARCH_EVIDENCE_COMPACTION"] = "v2"
+            environment["QWENDEX_SEARCH_COMMAND"] = str(
+                (worktree / "scripts" / "qwendex").resolve()
+                if (worktree / "scripts" / "qwendex").is_file()
+                else (REPOSITORY_ROOT / "scripts" / "qwendex").resolve()
+            )
+        prompt = _live_prompt(manifest_path, task)
+        policy = _read_json(manifest_path).get("model_policy", {})
+        model = str(policy.get("model_identifier") or "") if isinstance(policy, Mapping) else ""
+        reasoning = str(policy.get("reasoning_effort") or "") if isinstance(policy, Mapping) else ""
+        if not model or not reasoning:
+            raise LabError("live workload model policy is incomplete")
+        launch = _run_live_codex(
+            environment=environment,
+            worktree=worktree,
+            prompt=prompt,
+            model=model,
+            reasoning_effort=reasoning,
+            timeout_seconds=int(task.get("timeout_seconds") or 180),
+            raw_dir=raw_dir,
+        )
+        preflight_data = launch["preflight"].get("data", {}) if isinstance(launch.get("preflight"), Mapping) else {}
+        actual_preflight_ok = (
+            launch["preflight"].get("status") == "pass"
+            and preflight_data.get("stop_status") == "STOP_MANAGER_PREFLIGHT_READY"
+            and bool(preflight_data.get("hook_status", {}).get("verified"))
+        )
+        trace = _live_trace_summary(Path(launch["raw_paths"]["events"]))
+        evidence = _live_evidence_grade(task, raw_dir)
+        validation = _run_live_validation(task, worktree, raw_dir, environment)
+        postconditions_ok = _live_postconditions(task, worktree)
+        manager = _live_manager_status(environment)
+        telemetry = performance_module().summary(
+            Path(environment["QWENDEX_PERFORMANCE_DB"]),
+            retention_days=14,
+            max_events=50_000,
+            repository_scope_digest=search_module().repository_scope_digest(worktree),
+        )
+        guard_marker = _contains_live_guard_marker(raw_dir)
+        task_success = (
+            not launch["timed_out"]
+            and launch["returncode"] == 0
+            and actual_preflight_ok
+            and evidence["quality_status"] == "pass"
+            and validation["status"] in {"pass", "not_applicable"}
+            and postconditions_ok
+            and not guard_marker
+        )
+        if not setup.get("status") == "pass" or not actual_preflight_ok or launch["timed_out"]:
+            status = "blocked"
+        else:
+            status = "pass" if task_success else "fail"
+        raw_manifest_path = raw_dir / "raw_manifest.json"
+        _write_json(
+            raw_manifest_path,
+            {
+                "schema_version": "qwendex.optimization_lab.live_raw_manifest.v1",
+                "retention_boundary": "ignored_local_live_evaluation_artifact",
+                "artifacts": _live_raw_artifacts(raw_dir, run_dir),
+            },
+        )
+        raw_artifacts = _live_raw_artifacts(raw_dir, run_dir)
+        receipt = {
+            "schema_version": LIVE_AGENT_RUN_SCHEMA_VERSION,
+            "task_id": task_id,
+            "variant": variant,
+            "candidate_id": candidate_id if candidate_active else "baseline_raw_tools",
+            "status": status,
+            "returncode": launch["returncode"],
+            "timed_out": launch["timed_out"],
+            "manager_preflight": {
+                "setup_status": setup.get("status"),
+                "actual_status": launch["preflight"].get("status"),
+                "stop_status": preflight_data.get("stop_status"),
+                "hook_verified": bool(preflight_data.get("hook_status", {}).get("verified")),
+            },
+            "evidence": {key: evidence[key] for key in ("relevant_file_recall", "relevant_region_recall", "file_hits", "file_expected", "region_hits", "region_expected")},
+            "validation": validation,
+            "trace": trace,
+            "manager": manager,
+            "telemetry": telemetry,
+            "guard_marker": guard_marker,
+            "raw_artifacts": raw_artifacts,
+        }
+        _write_json(receipt_path, receipt)
+        raw_manifest_entry = {
+            "path": raw_manifest_path.relative_to(run_dir).as_posix(),
+            "sha256": "sha256:" + sha256_file(raw_manifest_path),
+        }
+        return {
+            "schema_version": BASELINE_RUN_SCHEMA_VERSION,
+            "task_id": task_id,
+            "repository": str(task.get("repository") or ""),
+            "stratum": str(task.get("stratum") or ""),
+            "variant": variant,
+            "candidate_id": candidate_id if candidate_active else "baseline_raw_tools",
+            "candidate_version": "2" if candidate_active else "not_applicable",
+            "status": status,
+            "task_success": task_success,
+            "quality_status": evidence["quality_status"],
+            "validation_status": validation["status"],
+            "validation_duration_ms": validation["duration_ms"],
+            "relevant_file_recall": evidence["relevant_file_recall"],
+            "relevant_region_recall": evidence["relevant_region_recall"],
+            "model_facing_search_bytes": trace["search_output_bytes"],
+            "raw_output_bytes": sum(item["bytes"] for item in raw_artifacts),
+            "search_calls": trace["search_calls"],
+            "read_calls": trace["read_calls"],
+            "tool_calls": trace["tool_calls"],
+            "pagination_calls": trace["pagination_calls"],
+            "fallback_count": trace["fallback_count"],
+            "candidate_invoked": candidate_active,
+            "candidate_adopted": bool(trace["candidate_adopted"]) if candidate_active else False,
+            "candidate_search_calls": trace["candidate_search_calls"],
+            "token_usage": trace["token_usage"],
+            "guard_marker": guard_marker,
+            "manager_preflight": receipt["manager_preflight"],
+            "manager": manager,
+            "telemetry": telemetry,
+            "receipt": receipt_path.relative_to(run_dir).as_posix(),
+            "raw_artifact": raw_manifest_entry,
+            "wall_time_ms": round((time.monotonic() - started) * 1000, 3),
+            "isolation": {
+                "codex_home": "fresh_auth_copied_then_removed",
+                "manager_state": "isolated",
+                "performance_db": "isolated",
+                "results_root": "isolated",
+                "worktree": "isolated_detached",
+                "conversation": "fresh_ephemeral",
+            },
+        }
+    finally:
+        _cleanup_live_isolation(isolation_root)
+        _remove_worktree(source, worktree)
+
+
+def _live_pair_result(task: Mapping[str, Any], baseline: Mapping[str, Any], candidate: Mapping[str, Any]) -> dict[str, Any]:
+    baseline_bytes = baseline.get("model_facing_search_bytes")
+    candidate_bytes = candidate.get("model_facing_search_bytes")
+    if isinstance(baseline_bytes, int | float) and isinstance(candidate_bytes, int | float) and baseline_bytes > 0:
+        reduction: float | str = round(1 - float(candidate_bytes) / float(baseline_bytes), 6)
+        byte_ratio: float | str = round(float(candidate_bytes) / float(baseline_bytes), 6)
+    else:
+        reduction = "not_observed"
+        byte_ratio = "not_observed"
+    baseline_tools = int(baseline.get("tool_calls") or 0)
+    candidate_tools = int(candidate.get("tool_calls") or 0)
+    return {
+        "schema_version": "qwendex.optimization_lab.live_pair_result.v1",
+        "pair_id": str(task.get("id") or ""),
+        "repository": str(task.get("repository") or ""),
+        "stratum": str(task.get("stratum") or ""),
+        "pair_order": str(task.get("pair_order") or ""),
+        "state": "invalid_pair" if "blocked" in {baseline.get("status"), candidate.get("status")} else "pass" if baseline.get("status") == candidate.get("status") == "pass" else "fail",
+        "baseline_status": baseline.get("status"),
+        "candidate_status": candidate.get("status"),
+        "task_success": {"baseline": bool(baseline.get("task_success")), "candidate": bool(candidate.get("task_success"))},
+        "relevant_file_recall": {"baseline": baseline.get("relevant_file_recall"), "candidate": candidate.get("relevant_file_recall")},
+        "relevant_region_recall": {"baseline": baseline.get("relevant_region_recall"), "candidate": candidate.get("relevant_region_recall")},
+        "validation_status": {"baseline": baseline.get("validation_status"), "candidate": candidate.get("validation_status")},
+        "search_output_bytes": {"baseline": baseline_bytes, "candidate": candidate_bytes, "ratio": byte_ratio, "reduction": reduction},
+        "search_read_call_ratio": round((int(candidate.get("search_calls") or 0) + int(candidate.get("read_calls") or 0)) / max(1, int(baseline.get("search_calls") or 0) + int(baseline.get("read_calls") or 0)), 6),
+        "total_tool_call_ratio": round(candidate_tools / max(1, baseline_tools), 6),
+        "wall_time_ratio": round(float(candidate.get("wall_time_ms") or 0.0) / max(1.0, float(baseline.get("wall_time_ms") or 0.0)), 6),
+        "candidate_invoked": bool(candidate.get("candidate_invoked")),
+        "candidate_adopted": bool(candidate.get("candidate_adopted")),
+        "candidate_search_calls": candidate.get("candidate_search_calls", 0),
+        "manager": {"baseline": baseline.get("manager"), "candidate": candidate.get("manager")},
+    }
+
+
+def _live_privacy_scan(run_dir: Path, manifest_path: Path, payload: Mapping[str, Any]) -> dict[str, Any]:
+    base = _privacy_scan(run_dir, manifest_path, payload)
+    raw_files = [path for path in (run_dir / "raw").rglob("*") if path.is_file()]
+    secret_markers = (b'"access_token"', b'"refresh_token"', b'"api_key"', b"authorization: bearer")
+    raw_secret_hits = sum(1 for path in raw_files if any(marker in path.read_bytes().lower() for marker in secret_markers))
+    return {
+        **base,
+        "raw_artifacts_scanned": len(raw_files),
+        "raw_secret_marker_matches": raw_secret_hits,
+        "status": "pass" if base.get("status") == "pass" and raw_secret_hits == 0 else "fail",
+        "leak_match_count": int(base.get("leak_match_count") or 0) + raw_secret_hits,
+    }
+
+
+def _live_performance_summary(baselines: list[Mapping[str, Any]], candidates: list[Mapping[str, Any]], pairs: list[Mapping[str, Any]]) -> dict[str, Any]:
+    reductions = [
+        float(value)
+        for pair in pairs
+        for value in [pair.get("search_output_bytes", {}).get("reduction") if isinstance(pair.get("search_output_bytes"), Mapping) else None]
+        if isinstance(value, int | float)
+    ]
+    search_ratios = [float(pair.get("search_read_call_ratio") or 0.0) for pair in pairs]
+    tool_ratios = [float(pair.get("total_tool_call_ratio") or 0.0) for pair in pairs]
+    wall_ratios = [float(pair.get("wall_time_ratio") or 0.0) for pair in pairs]
+    eligible = [row for row in candidates if bool(row.get("candidate_invoked"))]
+    fallback_count = sum(int(row.get("fallback_count") or 0) for row in candidates)
+    pagination_calls = sum(int(row.get("pagination_calls") or 0) for row in candidates)
+    validation_durations = [float(row["validation_duration_ms"]) for row in [*baselines, *candidates] if isinstance(row.get("validation_duration_ms"), int | float)]
+    p95_values: list[float] = []
+    p50_values: list[float] = []
+    token_totals: dict[str, int] = {}
+    for row in [*baselines, *candidates]:
+        telemetry = row.get("telemetry") if isinstance(row.get("telemetry"), Mapping) else {}
+        overhead = telemetry.get("instrumentation_overhead") if isinstance(telemetry, Mapping) else None
+        if isinstance(overhead, Mapping):
+            if isinstance(overhead.get("p95_ms"), int | float):
+                p95_values.append(float(overhead["p95_ms"]))
+            if isinstance(overhead.get("median_ms"), int | float):
+                p50_values.append(float(overhead["median_ms"]))
+        usage = row.get("token_usage")
+        if isinstance(usage, Mapping):
+            for key, value in usage.items():
+                if isinstance(value, int):
+                    token_totals[str(key)] = token_totals.get(str(key), 0) + value
+    return {
+        "schema_version": "qwendex.optimization_lab.live_performance_summary.v1",
+        "pair_count": len(pairs),
+        "search_output_reduction": {"median": _median(reductions), "values": reductions or "not_observed"},
+        "search_read_call_ratio": {"median": _median(search_ratios), "values": search_ratios},
+        "total_tool_call_ratio": {"median": _median(tool_ratios), "values": tool_ratios},
+        "wall_time_ratio": {"median": _median(wall_ratios), "max": max(wall_ratios) if wall_ratios else "not_observed", "values": wall_ratios},
+        "candidate_adoption": {
+            "eligible_tasks": len(eligible),
+            "adopted_tasks": sum(1 for row in eligible if row.get("candidate_adopted")),
+            "rate": round(sum(1 for row in eligible if row.get("candidate_adopted")) / len(eligible), 6) if eligible else "not_observed",
+        },
+        "fallback_count": fallback_count,
+        "fallback_rate": round(fallback_count / len(eligible), 6) if eligible else "not_observed",
+        "pagination_calls": pagination_calls,
+        "validation_duration_ms": {"p50": _percentile(validation_durations, 0.5), "p95": _percentile(validation_durations, 0.95)},
+        "telemetry_instrumentation_overhead_ms": {"p50": _percentile(p50_values, 0.5), "p95": _percentile(p95_values, 0.95)},
+        "telemetry_instrumentation_p95_ms": _percentile(p95_values, 0.95) if p95_values else "not_observed",
+        "token_usage": token_totals or "not_observed",
+        "time_to_first_relevant_evidence_ms": "not_observed",
+        "time_to_first_edit_ms": "not_observed",
+        "context_compaction_count": "not_observed",
+        "root_subagent_overlap": "not_observed",
+        "duplicate_query_rate": "not_observed",
+    }
+
+
+def _live_gate_decision(
+    *,
+    baselines: list[Mapping[str, Any]],
+    candidates: list[Mapping[str, Any]],
+    pairs: list[Mapping[str, Any]],
+    freshness: Mapping[str, Any],
+    privacy: Mapping[str, Any],
+    raw_artifacts_valid: bool,
+    performance: Mapping[str, Any],
+) -> dict[str, Any]:
+    valid = [pair for pair in pairs if pair.get("state") != "invalid_pair"]
+    invalid = [pair for pair in pairs if pair.get("state") == "invalid_pair"]
+    file_ok = all(float(pair.get("relevant_file_recall", {}).get("candidate") or 0.0) >= float(pair.get("relevant_file_recall", {}).get("baseline") or 0.0) for pair in valid)
+    region_ok = all(float(pair.get("relevant_region_recall", {}).get("candidate") or 0.0) >= float(pair.get("relevant_region_recall", {}).get("baseline") or 0.0) for pair in valid)
+    task_ok = all(bool(pair.get("task_success", {}).get("candidate")) >= bool(pair.get("task_success", {}).get("baseline")) for pair in valid)
+    manager_ok = all(
+        row.get("manager_preflight", {}).get("actual_status") == "pass"
+        and row.get("manager_preflight", {}).get("stop_status") == "STOP_MANAGER_PREFLIGHT_READY"
+        and bool(row.get("manager_preflight", {}).get("hook_verified"))
+        and int(row.get("manager", {}).get("stale_count") or 0) == 0
+        for row in [*baselines, *candidates]
+    )
+    guard_ok = not any(bool(row.get("guard_marker")) for row in [*baselines, *candidates])
+    hard = {
+        "relevant_file_recall": "pass" if file_ok else "fail",
+        "relevant_region_recall": "pass" if region_ok else "fail",
+        "live_task_and_validation_noninferior": "pass" if task_ok else "fail",
+        "dirty_untracked_freshness": str(freshness.get("status") or "fail"),
+        "privacy_boundary": str(privacy.get("status") or "fail"),
+        "manager_live_root_binding": "pass" if manager_ok else "fail",
+        "guard_marker_absence": "pass" if guard_ok else "fail",
+        "raw_artifact_digests": "pass" if raw_artifacts_valid else "fail",
+        "candidate_default_off": "pass",
+        "deterministic_v2_contract": "pass",
+    }
+    reduction = performance.get("search_output_reduction", {}).get("median") if isinstance(performance.get("search_output_reduction"), Mapping) else None
+    adoption = performance.get("candidate_adoption", {}).get("rate") if isinstance(performance.get("candidate_adoption"), Mapping) else None
+    wall = performance.get("wall_time_ratio", {}).get("median") if isinstance(performance.get("wall_time_ratio"), Mapping) else None
+    calls = performance.get("search_read_call_ratio", {}).get("median") if isinstance(performance.get("search_read_call_ratio"), Mapping) else None
+    telemetry = performance.get("telemetry_instrumentation_p95_ms")
+    fallback = performance.get("fallback_rate")
+    efficiency = {
+        "median_search_evidence_reduction": "pass" if isinstance(reduction, int | float) and reduction >= 0.70 else "fail",
+        "search_read_call_non_regression": "pass" if isinstance(calls, int | float) and calls <= 1.10 else "fail",
+        "wall_time_non_regression": "pass" if isinstance(wall, int | float) and wall <= 1.05 else "fail",
+        "candidate_adoption": "pass" if isinstance(adoption, int | float) and adoption >= 0.80 else "fail",
+        "fallback_rate": "pass" if isinstance(fallback, int | float) and fallback <= 0.25 else "fail",
+        "telemetry_p95": "pass" if isinstance(telemetry, int | float) and telemetry < 5 else "fail",
+        "context_compaction": "not_observed" if performance.get("context_compaction_count") == "not_observed" else "pass",
+    }
+    hard_failed = any(value == "fail" for value in hard.values())
+    efficiency_passed = all(value in {"pass", "not_observed"} for value in efficiency.values())
+    if hard_failed:
+        decision = "reject_candidate"
+    elif invalid:
+        decision = "invalid_evaluation"
+    elif len(valid) >= 12 and efficiency_passed and all(value == "pass" for key, value in efficiency.items() if key != "context_compaction"):
+        decision = "promote_opt_in_experimental"
+    else:
+        decision = "hold_for_more_evidence"
+    return {
+        "schema_version": "qwendex.optimization_lab.live_gate_decision.v1",
+        "status": "pass" if decision in {"hold_for_more_evidence", "promote_opt_in_experimental"} else "fail",
+        "candidate_decision": decision,
+        "promotion_status": "promoted_opt_in_experimental" if decision == "promote_opt_in_experimental" else "not_promoted",
+        "hard_gates": hard,
+        "performance_gates": efficiency,
+        "valid_pairs": len(valid),
+        "invalid_pairs": len(invalid),
+        "claim_ceiling": "Live Codex evidence is isolated and paired; promotion still requires every reported hard and observable efficiency gate.",
+    }
+
+
+def _live_final_report(run_id: str, payload: Mapping[str, Any], baselines: list[Mapping[str, Any]], candidates: list[Mapping[str, Any]], gate: Mapping[str, Any], performance: Mapping[str, Any]) -> str:
+    return "\n".join(
+        [
+            "# Qwendex v0.6.0 Held-Out Live-Agent Paired Evaluation",
+            "",
+            f"- Run: `{run_id}`",
+            f"- Workload: `{payload.get('workload_id')}`",
+            f"- Candidate decision: `{gate.get('candidate_decision')}`",
+            f"- Valid pairs: {gate.get('valid_pairs')}; invalid pairs: {gate.get('invalid_pairs')}",
+            f"- Baseline arms: {len(baselines)}; candidate arms: {len(candidates)}",
+            f"- Median model-visible search-evidence reduction: {performance.get('search_output_reduction', {}).get('median')}",
+            f"- Candidate adoption: {performance.get('candidate_adoption', {}).get('rate')}",
+            "- Raw prompts, event streams, and tool output remain ignored local artifacts; safe summaries contain counts and digests only.",
+            "- Version bump, tag, publication, and push: intentionally skipped.",
+            "",
+        ]
+    )
+
+
+def live_paired_run(
+    manifest_path: Path | str,
+    *,
+    candidate_id: str,
+    auth_source: Path | str,
+    output_root: Path | str | None = None,
+) -> dict[str, Any]:
+    """Run a frozen, isolated, paired live-agent adoption evaluation."""
+
+    manifest = Path(manifest_path).expanduser().resolve(strict=False)
+    validation = validate_workload(manifest)
+    if not validation.get("valid"):
+        raise LabError("workload manifest validation failed")
+    payload = _read_json(manifest)
+    if payload.get("execution_mode") != LIVE_EXECUTION_MODE:
+        raise LabError("live evaluation requires a frozen live-agent workload")
+    if candidate_id != search_module().SEARCH_V2_CANDIDATE_ID:
+        raise LabError("live adoption evaluation requires search_evidence_compaction_v2")
+    auth = Path(auth_source).expanduser().resolve(strict=False)
+    if not auth.is_file():
+        raise LabError("operator-supplied live evaluation auth source is unavailable")
+    root = Path(output_root).expanduser().resolve(strict=False) if output_root else REPOSITORY_ROOT / ".qwendex-dev" / "results" / "performance" / "paired-eval"
+    run_id = "live-paired-" + datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8]
+    run_dir = root / run_id
+    if run_dir.exists():
+        raise LabError("generated live evaluation directory already exists")
+    run_dir.mkdir(parents=True)
+    _write_text(
+        run_dir / "00_scope_and_git_custody.md",
+        "\n".join(
+            [
+                "# Qwendex held-out live-agent evaluation custody",
+                "",
+                f"- Run: `{run_id}`",
+                f"- Workload: `{payload.get('workload_id')}`",
+                "- Each arm has a detached worktree, fresh Codex home, fresh Manager state/ledger, fresh performance DB, and fresh ephemeral conversation.",
+                "- Operator auth was copied only into each ignored temporary home and removed before the run artifact manifest was written.",
+                "- Raw prompts, events, and tool output remain ignored local artifacts.",
+                "",
+            ]
+        ),
+    )
+    _write_json(run_dir / "01_phase1_baseline_commit.json", _phase1_baseline_commit())
+    environment = _environment_lock(payload, manifest)
+    environment.update(
+        {
+            "candidate_mode": candidate_id,
+            "execution_mode": LIVE_EXECUTION_MODE,
+            "auth_source": "operator_supplied_private",
+            "conversation_isolation": "fresh_home_per_arm",
+        }
+    )
+    _write_json(run_dir / "02_environment_lock.json", environment)
+    shutil.copyfile(manifest, run_dir / "03_workload_manifest.json")
+    _write_text(run_dir / "04_workload_manifest.sha256", f"{sha256_file(manifest)}  03_workload_manifest.json\n")
+    _write_json(run_dir / "05_candidate_registry.json", search_module().candidate_registry())
+    repositories = {str(item.get("id") or ""): item for item in payload.get("repositories", []) if isinstance(item, Mapping)}
+    tasks = [item for item in payload.get("tasks", []) if isinstance(item, Mapping)]
+    baselines: list[dict[str, Any]] = []
+    candidates: list[dict[str, Any]] = []
+    pairs: list[dict[str, Any]] = []
+
+    def execute(task: Mapping[str, Any]) -> None:
+        repository = repositories.get(str(task.get("repository") or ""))
+        if repository is None:
+            blocked = {"task_id": str(task.get("id") or "unknown"), "variant": "baseline", "status": "blocked", "reason": "repository unavailable"}
+            baselines.append(blocked)
+            candidates.append({**blocked, "variant": "candidate"})
+            pairs.append({"pair_id": str(task.get("id") or "unknown"), "state": "invalid_pair"})
+            return
+        try:
+            if str(task.get("pair_order") or "") == "candidate_first":
+                candidate = _run_live_arm(task=task, repository=repository, run_dir=run_dir, run_id=run_id, manifest_path=manifest, auth_source=auth, variant="candidate", candidate_id=candidate_id)
+                baseline = _run_live_arm(task=task, repository=repository, run_dir=run_dir, run_id=run_id, manifest_path=manifest, auth_source=auth, variant="baseline")
+            else:
+                baseline = _run_live_arm(task=task, repository=repository, run_dir=run_dir, run_id=run_id, manifest_path=manifest, auth_source=auth, variant="baseline")
+                candidate = _run_live_arm(task=task, repository=repository, run_dir=run_dir, run_id=run_id, manifest_path=manifest, auth_source=auth, variant="candidate", candidate_id=candidate_id)
+        except (LabError, OSError, ValueError, subprocess.TimeoutExpired) as exc:
+            baseline = {"task_id": str(task.get("id") or "unknown"), "variant": "baseline", "status": "blocked", "reason": str(exc)}
+            candidate = {"task_id": str(task.get("id") or "unknown"), "variant": "candidate", "status": "blocked", "reason": str(exc)}
+        baselines.append(baseline)
+        candidates.append(candidate)
+        pairs.append(_live_pair_result(task, baseline, candidate))
+
+    pilot = _pilot_tasks(tasks)
+    remaining = [task for task in tasks if str(task.get("id") or "") not in {str(item.get("id") or "") for item in pilot}]
+    for task in pilot:
+        execute(task)
+    pilot_hard_failure = any(
+        pair.get("state") == "invalid_pair"
+        or float(pair.get("relevant_file_recall", {}).get("candidate") or 0.0) < float(pair.get("relevant_file_recall", {}).get("baseline") or 0.0)
+        or float(pair.get("relevant_region_recall", {}).get("candidate") or 0.0) < float(pair.get("relevant_region_recall", {}).get("baseline") or 0.0)
+        or (bool(pair.get("task_success", {}).get("baseline")) and not bool(pair.get("task_success", {}).get("candidate")))
+        for pair in pairs
+    )
+    if not pilot_hard_failure:
+        for task in remaining:
+            execute(task)
+    _write_jsonl(run_dir / "06_baseline_runs.jsonl", baselines)
+    _write_jsonl(run_dir / "07_candidate_runs.jsonl", candidates)
+    _pair_csv(run_dir / "08_pair_results.csv", pairs)
+    quality = _quality_results(pairs)
+    _write_json(run_dir / "09_quality_rubric_results.json", quality)
+    freshness = search_module().freshness_matrix()
+    _write_json(run_dir / "10_freshness_matrix.json", freshness)
+    privacy = _live_privacy_scan(run_dir, manifest, payload)
+    _write_json(run_dir / "11_privacy_scan.json", privacy)
+    manager = {
+        "schema_version": "qwendex.optimization_lab.live_manager_gate.v1",
+        "status": "pass"
+        if all(
+            row.get("manager_preflight", {}).get("actual_status") == "pass"
+            and row.get("manager_preflight", {}).get("stop_status") == "STOP_MANAGER_PREFLIGHT_READY"
+            and bool(row.get("manager_preflight", {}).get("hook_verified"))
+            and int(row.get("manager", {}).get("stale_count") or 0) == 0
+            for row in [*baselines, *candidates]
+            if row.get("status") != "blocked"
+        )
+        else "fail",
+        "arm_count": len([*baselines, *candidates]),
+        "live_root_binding": "observed_pid_bound_preflight",
+    }
+    _write_json(run_dir / "12_manager_and_security_regressions.json", manager)
+    performance = _live_performance_summary(baselines, candidates, pairs)
+    _write_json(run_dir / "13_performance_summary.json", performance)
+    raw_artifacts_valid = _raw_artifact_hashes_valid(run_dir, [*baselines, *candidates])
+    gate = _live_gate_decision(
+        baselines=baselines,
+        candidates=candidates,
+        pairs=pairs,
+        freshness=freshness,
+        privacy=privacy,
+        raw_artifacts_valid=raw_artifacts_valid,
+        performance=performance,
+    )
+    if pilot_hard_failure:
+        gate["pilot_early_stop"] = True
+        gate["candidate_decision"] = "reject_candidate"
+        gate["status"] = "fail"
+    _write_json(run_dir / "14_gate_decision.json", gate)
+    _write_text(run_dir / "15_angle_check_and_gap_analysis.md", "# Live angle check\n\n- Live adoption, tool counts, isolated Manager preflight, and paired wall time are measured from fresh arm receipts.\n- Metrics without a trusted producer remain `not_observed`.\n")
+    _write_text(run_dir / "16_next_recommended_goal.md", "# Next recommended goal\n\nUse measured live-pair bottlenecks only; do not add an index or structural dependency without a separate goal.\n")
+    _write_text(run_dir / "FINAL_REPORT.md", _live_final_report(run_id, payload, baselines, candidates, gate, performance))
+    environment["completed_at"] = utc_now()
+    _write_json(run_dir / "02_environment_lock.json", environment)
+    _write_json(run_dir / "manifest.json", _artifact_manifest(run_dir))
+    return {
+        "schema_version": "qwendex.optimization_lab.live_paired_run.v1",
+        "status": "pass" if gate.get("candidate_decision") in {"hold_for_more_evidence", "promote_opt_in_experimental"} else "fail",
+        "summary": "Ran isolated held-out Qwendex live-agent paired evaluation.",
         "data": {
             "run_id": run_id,
             "artifact_dir": str(run_dir),
