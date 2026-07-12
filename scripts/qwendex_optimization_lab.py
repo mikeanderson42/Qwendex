@@ -1674,6 +1674,8 @@ def _percentile(values: list[float], fraction: float) -> float | None:
 
 def _raw_artifact_hashes_valid(run_dir: Path, rows: list[Mapping[str, Any]]) -> bool:
     for row in rows:
+        if row.get("status") == "blocked":
+            continue
         artifact = row.get("raw_artifact")
         if not isinstance(artifact, Mapping):
             return False
@@ -2031,8 +2033,12 @@ def _pair_csv(path: Path, pairs: list[Mapping[str, Any]]) -> None:
         "search_read_call_ratio",
         "total_tool_call_ratio",
         "wall_time_ratio",
+        "candidate_eligible",
         "candidate_invoked",
         "candidate_adopted",
+        "initial_state",
+        "adjudication_status",
+        "candidate_failure_reproducible",
     ]
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="") as handle:
@@ -2058,8 +2064,12 @@ def _pair_csv(path: Path, pairs: list[Mapping[str, Any]]) -> None:
                     "search_read_call_ratio": pair.get("search_read_call_ratio"),
                     "total_tool_call_ratio": pair.get("total_tool_call_ratio"),
                     "wall_time_ratio": pair.get("wall_time_ratio"),
+                    "candidate_eligible": pair.get("candidate_eligible"),
                     "candidate_invoked": pair.get("candidate_invoked"),
                     "candidate_adopted": pair.get("candidate_adopted"),
+                    "initial_state": pair.get("initial_state"),
+                    "adjudication_status": (pair.get("adjudication") or {}).get("status") if isinstance(pair.get("adjudication"), Mapping) else "not_required",
+                    "candidate_failure_reproducible": (pair.get("adjudication") or {}).get("candidate_failure_reproducible") if isinstance(pair.get("adjudication"), Mapping) else False,
                 }
             )
 
@@ -2067,27 +2077,31 @@ def _pair_csv(path: Path, pairs: list[Mapping[str, Any]]) -> None:
 def _quality_results(pairs: list[Mapping[str, Any]]) -> dict[str, Any]:
     rows = []
     for pair in pairs:
-        file_value = pair.get("relevant_file_recall", {}) if isinstance(pair.get("relevant_file_recall"), Mapping) else {}
-        region_value = pair.get("relevant_region_recall", {}) if isinstance(pair.get("relevant_region_recall"), Mapping) else {}
-        task_value = pair.get("task_success", {}) if isinstance(pair.get("task_success"), Mapping) else {}
+        adjudication = pair.get("adjudication") if isinstance(pair.get("adjudication"), Mapping) else {}
         rows.append(
             {
                 "task_id": pair.get("pair_id"),
                 "state": pair.get("state"),
-                "file_recall_non_inferior": float(file_value.get("candidate") or 0.0) >= float(file_value.get("baseline") or 0.0),
-                "region_recall_non_inferior": float(region_value.get("candidate") or 0.0) >= float(region_value.get("baseline") or 0.0),
-                "task_success_non_inferior": bool(task_value.get("candidate")) >= bool(task_value.get("baseline")),
+                "candidate_eligible": bool(pair.get("candidate_eligible")),
+                "file_recall_non_inferior": _live_pair_metric_noninferior(pair, "relevant_file_recall"),
+                "region_recall_non_inferior": _live_pair_metric_noninferior(pair, "relevant_region_recall"),
+                "task_success_non_inferior": _live_pair_metric_noninferior(pair, "task_success"),
+                "adjudication_status": adjudication.get("status") or "not_required",
+                "candidate_failure_reproducible": bool(adjudication.get("candidate_failure_reproducible")),
                 "focused_validation": pair.get("validation_status"),
             }
         )
+    v2_rows = [row for row in rows if row["candidate_eligible"]]
     return {
         "schema_version": "qwendex.optimization_lab.quality_rubric.v1",
         "status": "pass" if all(
             row["file_recall_non_inferior"]
             and row["region_recall_non_inferior"]
             and row["task_success_non_inferior"]
-            for row in rows
+            for row in v2_rows
         ) else "fail",
+        "eligible_v2_row_count": len(v2_rows),
+        "control_pair_discordance_count": sum(1 for row in rows if not row["candidate_eligible"] and row["state"] == "fail"),
         "rows": rows,
     }
 
@@ -2328,15 +2342,22 @@ def _run_live_arm(
     auth_source: Path,
     variant: str,
     candidate_id: str = "",
+    attempt: int = 0,
 ) -> dict[str, Any]:
     """Execute one genuinely fresh live Codex arm in an isolated worktree."""
 
     task_id = str(task.get("id") or "unknown")
     source = Path(str(repository.get("source_path") or "")).expanduser()
-    worktree = run_dir / "isolation" / task_id / variant / "worktree"
-    isolation_root = worktree.parent
+    attempt_name = "initial" if attempt == 0 else f"rerun-{attempt}"
+    isolation_root = run_dir / "isolation" / task_id / variant
     raw_dir = run_dir / "raw" / variant / task_id
     receipt_path = run_dir / "arms" / task_id / variant / "receipt.json"
+    if attempt:
+        isolation_root = isolation_root / attempt_name
+        raw_dir = raw_dir / attempt_name
+        receipt_path = receipt_path.parent / attempt_name / "receipt.json"
+    worktree = isolation_root / "worktree"
+    isolation_root = worktree.parent
     started = time.monotonic()
     _snapshot_worktree(source, str(repository.get("commit") or ""), worktree)
     try:
@@ -2412,6 +2433,7 @@ def _run_live_arm(
             "schema_version": LIVE_AGENT_RUN_SCHEMA_VERSION,
             "task_id": task_id,
             "variant": variant,
+            "attempt": attempt_name,
             "candidate_id": candidate_id if candidate_active else "baseline_raw_tools",
             "candidate_eligible": candidate_eligible,
             "status": status,
@@ -2442,6 +2464,7 @@ def _run_live_arm(
             "repository": str(task.get("repository") or ""),
             "stratum": str(task.get("stratum") or ""),
             "variant": variant,
+            "attempt": attempt_name,
             "candidate_id": candidate_id if candidate_active else "baseline_raw_tools",
             "candidate_version": "2" if candidate_active else "not_applicable",
             "candidate_eligible": candidate_eligible,
@@ -2542,6 +2565,87 @@ def _live_pair_result(task: Mapping[str, Any], baseline: Mapping[str, Any], cand
     }
 
 
+def _live_pair_is_discordant(pair: Mapping[str, Any]) -> bool:
+    """Return whether a pair needs the required one-per-arm adjudication rerun."""
+
+    outcomes = pair.get("task_success") if isinstance(pair.get("task_success"), Mapping) else {}
+    return bool(outcomes.get("baseline")) != bool(outcomes.get("candidate"))
+
+
+def _live_pair_adjudication(initial: Mapping[str, Any], rerun: Mapping[str, Any]) -> dict[str, Any]:
+    """Classify a discordant pair without exposing raw prompts or model output."""
+
+    initial_outcomes = initial.get("task_success") if isinstance(initial.get("task_success"), Mapping) else {}
+    rerun_outcomes = rerun.get("task_success") if isinstance(rerun.get("task_success"), Mapping) else {}
+    initial_candidate_only = bool(initial_outcomes.get("baseline")) and not bool(initial_outcomes.get("candidate"))
+    rerun_candidate_only = bool(rerun_outcomes.get("baseline")) and not bool(rerun_outcomes.get("candidate"))
+    reproducible = initial_candidate_only and rerun_candidate_only
+    rerun_invalid = rerun.get("state") == "invalid_pair"
+    if rerun_invalid:
+        classification = "environment_or_runtime_drift"
+        status = "unresolved"
+    elif reproducible:
+        classification = "candidate_only_failure_reproduced"
+        status = "reproducible_candidate_failure"
+    else:
+        classification = "model_stochastic_behavior"
+        status = "resolved_nonreproducible"
+    return {
+        "schema_version": "qwendex.optimization_lab.live_pair_adjudication.v1",
+        "pair_id": str(initial.get("pair_id") or ""),
+        "candidate_eligible": bool(initial.get("candidate_eligible")),
+        "initial_state": initial.get("state"),
+        "rerun_state": rerun.get("state"),
+        "initial_task_success": dict(initial_outcomes),
+        "rerun_task_success": dict(rerun_outcomes),
+        "rerun_metrics": {
+            "relevant_file_recall": dict(rerun.get("relevant_file_recall") or {}),
+            "relevant_region_recall": dict(rerun.get("relevant_region_recall") or {}),
+            "task_success": dict(rerun_outcomes),
+        },
+        "initial_candidate_only_failure": initial_candidate_only,
+        "rerun_candidate_only_failure": rerun_candidate_only,
+        "candidate_failure_reproducible": reproducible,
+        "classification": classification,
+        "status": status,
+        "search_evidence_attribution": "not_claimed_without_direct_private_trace_evidence",
+        "rerun_contract": "same frozen manifest, snapshot, model, reasoning, routing, permissions, isolation, and pair order",
+    }
+
+
+def _live_pair_metric_noninferior(pair: Mapping[str, Any], metric: str) -> bool:
+    """Apply a resolved discordance without averaging away a reproduced failure."""
+
+    values = pair.get(metric) if isinstance(pair.get(metric), Mapping) else {}
+    if metric == "task_success":
+        initial_ok = bool(values.get("candidate")) >= bool(values.get("baseline"))
+    else:
+        initial_ok = float(values.get("candidate") or 0.0) >= float(values.get("baseline") or 0.0)
+    if initial_ok:
+        return True
+    adjudication = pair.get("adjudication") if isinstance(pair.get("adjudication"), Mapping) else {}
+    rerun_metrics = adjudication.get("rerun_metrics") if isinstance(adjudication.get("rerun_metrics"), Mapping) else {}
+    rerun_values = rerun_metrics.get(metric) if isinstance(rerun_metrics.get(metric), Mapping) else {}
+    if metric == "task_success":
+        rerun_ok = bool(rerun_values.get("candidate")) >= bool(rerun_values.get("baseline"))
+    else:
+        rerun_ok = float(rerun_values.get("candidate") or 0.0) >= float(rerun_values.get("baseline") or 0.0)
+    return (
+        adjudication.get("status") == "resolved_nonreproducible"
+        and not bool(adjudication.get("candidate_failure_reproducible"))
+        and rerun_ok
+    )
+
+
+def _live_pair_has_reproducible_v2_regression(pair: Mapping[str, Any]) -> bool:
+    if not bool(pair.get("candidate_eligible")):
+        return False
+    return not all(
+        _live_pair_metric_noninferior(pair, metric)
+        for metric in ("relevant_file_recall", "relevant_region_recall", "task_success")
+    )
+
+
 def _live_privacy_scan(run_dir: Path, manifest_path: Path, payload: Mapping[str, Any]) -> dict[str, Any]:
     base = _privacy_scan(run_dir, manifest_path, payload)
     raw_files = [path for path in (run_dir / "raw").rglob("*") if path.is_file()]
@@ -2625,28 +2729,46 @@ def _live_gate_decision(
     privacy: Mapping[str, Any],
     raw_artifacts_valid: bool,
     performance: Mapping[str, Any],
+    reruns: list[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    valid = [pair for pair in pairs if pair.get("state") != "invalid_pair"]
-    invalid = [pair for pair in pairs if pair.get("state") == "invalid_pair"]
+    unresolved = [
+        pair
+        for pair in pairs
+        if isinstance(pair.get("adjudication"), Mapping) and pair["adjudication"].get("status") == "unresolved"
+    ]
+    invalid = [
+        pair
+        for pair in pairs
+        if pair.get("state") == "invalid_pair" or pair in unresolved
+    ]
+    valid = [pair for pair in pairs if pair not in invalid]
     v2_pairs = [pair for pair in valid if bool(pair.get("candidate_eligible"))]
     control_pairs = [pair for pair in valid if not bool(pair.get("candidate_eligible"))]
     candidate_delivery_ok = bool(v2_pairs) and all(bool(pair.get("candidate_invoked")) for pair in v2_pairs)
-    file_ok = all(float(pair.get("relevant_file_recall", {}).get("candidate") or 0.0) >= float(pair.get("relevant_file_recall", {}).get("baseline") or 0.0) for pair in v2_pairs)
-    region_ok = all(float(pair.get("relevant_region_recall", {}).get("candidate") or 0.0) >= float(pair.get("relevant_region_recall", {}).get("baseline") or 0.0) for pair in v2_pairs)
-    task_ok = all(bool(pair.get("task_success", {}).get("candidate")) >= bool(pair.get("task_success", {}).get("baseline")) for pair in v2_pairs)
+    file_ok = all(_live_pair_metric_noninferior(pair, "relevant_file_recall") for pair in v2_pairs)
+    region_ok = all(_live_pair_metric_noninferior(pair, "relevant_region_recall") for pair in v2_pairs)
+    task_ok = all(_live_pair_metric_noninferior(pair, "task_success") for pair in v2_pairs)
+    observed_rows = [*baselines, *candidates, *(reruns or [])]
+    completed_rows = [row for row in observed_rows if row.get("status") != "blocked"]
     manager_ok = all(
         row.get("manager_preflight", {}).get("actual_status") == "pass"
         and row.get("manager_preflight", {}).get("stop_status") == "STOP_MANAGER_PREFLIGHT_READY"
         and bool(row.get("manager_preflight", {}).get("hook_verified"))
         and int(row.get("manager", {}).get("stale_count") or 0) == 0
-        for row in [*baselines, *candidates]
+        for row in completed_rows
     )
-    guard_ok = not any(bool(row.get("guard_marker")) for row in [*baselines, *candidates])
+    guard_ok = not any(bool(row.get("guard_marker")) for row in observed_rows)
+    adjudication_ok = all(
+        not _live_pair_is_discordant(pair)
+        or (isinstance(pair.get("adjudication"), Mapping) and pair["adjudication"].get("status") != "unresolved")
+        for pair in pairs
+    )
     hard = {
         "relevant_file_recall": "pass" if file_ok else "fail",
         "relevant_region_recall": "pass" if region_ok else "fail",
         "live_task_and_validation_noninferior": "pass" if task_ok else "fail",
         "eligible_v2_instruction_delivery": "pass" if candidate_delivery_ok else "fail",
+        "discordant_pair_adjudication": "pass" if adjudication_ok else "not_observed",
         "dirty_untracked_freshness": str(freshness.get("status") or "fail"),
         "privacy_boundary": str(privacy.get("status") or "fail"),
         "manager_live_root_binding": "pass" if manager_ok else "fail",
@@ -2692,6 +2814,7 @@ def _live_gate_decision(
         "eligible_v2_pair_count": len(v2_pairs),
         "control_pair_count": len(control_pairs),
         "control_pair_discordance_count": sum(1 for pair in control_pairs if pair.get("state") == "fail"),
+        "unresolved_discordant_pair_count": len(unresolved),
         "claim_ceiling": "Live Codex evidence is isolated and paired; promotion still requires every reported hard and observable efficiency gate.",
     }
 
@@ -2706,6 +2829,7 @@ def _live_final_report(run_id: str, payload: Mapping[str, Any], baselines: list[
             f"- Candidate decision: `{gate.get('candidate_decision')}`",
             f"- Valid pairs: {gate.get('valid_pairs')}; invalid pairs: {gate.get('invalid_pairs')}",
             f"- Baseline arms: {len(baselines)}; candidate arms: {len(candidates)}",
+            f"- Discordant pairs adjudicated: {gate.get('discordant_pair_count', 0)}; reproducible candidate-only failures: {gate.get('discordant_reproducible_candidate_failure_count', 0)}",
             f"- Median model-visible search-evidence reduction: {performance.get('search_output_reduction', {}).get('median')}",
             f"- Candidate adoption: {performance.get('candidate_adoption', {}).get('rate')}",
             "- Raw prompts, event streams, and tool output remain ignored local artifacts; safe summaries contain counts and digests only.",
@@ -2776,6 +2900,55 @@ def live_paired_run(
     baselines: list[dict[str, Any]] = []
     candidates: list[dict[str, Any]] = []
     pairs: list[dict[str, Any]] = []
+    rerun_rows: list[dict[str, Any]] = []
+    adjudications: list[dict[str, Any]] = []
+
+    def execute_attempt(task: Mapping[str, Any], repository: Mapping[str, Any], *, attempt: int) -> tuple[dict[str, Any], dict[str, Any]]:
+        if str(task.get("pair_order") or "") == "candidate_first":
+            candidate = _run_live_arm(
+                task=task,
+                repository=repository,
+                run_dir=run_dir,
+                run_id=run_id,
+                manifest_path=manifest,
+                auth_source=auth,
+                variant="candidate",
+                candidate_id=candidate_id,
+                attempt=attempt,
+            )
+            baseline = _run_live_arm(
+                task=task,
+                repository=repository,
+                run_dir=run_dir,
+                run_id=run_id,
+                manifest_path=manifest,
+                auth_source=auth,
+                variant="baseline",
+                attempt=attempt,
+            )
+        else:
+            baseline = _run_live_arm(
+                task=task,
+                repository=repository,
+                run_dir=run_dir,
+                run_id=run_id,
+                manifest_path=manifest,
+                auth_source=auth,
+                variant="baseline",
+                attempt=attempt,
+            )
+            candidate = _run_live_arm(
+                task=task,
+                repository=repository,
+                run_dir=run_dir,
+                run_id=run_id,
+                manifest_path=manifest,
+                auth_source=auth,
+                variant="candidate",
+                candidate_id=candidate_id,
+                attempt=attempt,
+            )
+        return baseline, candidate
 
     def execute(task: Mapping[str, Any]) -> None:
         repository = repositories.get(str(task.get("repository") or ""))
@@ -2786,29 +2959,37 @@ def live_paired_run(
             pairs.append({"pair_id": str(task.get("id") or "unknown"), "state": "invalid_pair"})
             return
         try:
-            if str(task.get("pair_order") or "") == "candidate_first":
-                candidate = _run_live_arm(task=task, repository=repository, run_dir=run_dir, run_id=run_id, manifest_path=manifest, auth_source=auth, variant="candidate", candidate_id=candidate_id)
-                baseline = _run_live_arm(task=task, repository=repository, run_dir=run_dir, run_id=run_id, manifest_path=manifest, auth_source=auth, variant="baseline")
-            else:
-                baseline = _run_live_arm(task=task, repository=repository, run_dir=run_dir, run_id=run_id, manifest_path=manifest, auth_source=auth, variant="baseline")
-                candidate = _run_live_arm(task=task, repository=repository, run_dir=run_dir, run_id=run_id, manifest_path=manifest, auth_source=auth, variant="candidate", candidate_id=candidate_id)
+            baseline, candidate = execute_attempt(task, repository, attempt=0)
         except (LabError, OSError, ValueError, subprocess.TimeoutExpired) as exc:
             baseline = {"task_id": str(task.get("id") or "unknown"), "variant": "baseline", "status": "blocked", "reason": str(exc)}
             candidate = {"task_id": str(task.get("id") or "unknown"), "variant": "candidate", "status": "blocked", "reason": str(exc)}
         baselines.append(baseline)
         candidates.append(candidate)
-        pairs.append(_live_pair_result(task, baseline, candidate))
+        pair = _live_pair_result(task, baseline, candidate)
+        if _live_pair_is_discordant(pair):
+            try:
+                rerun_baseline, rerun_candidate = execute_attempt(task, repository, attempt=1)
+            except (LabError, OSError, ValueError, subprocess.TimeoutExpired) as exc:
+                rerun_baseline = {"task_id": str(task.get("id") or "unknown"), "variant": "baseline", "attempt": "rerun-1", "status": "blocked", "reason": str(exc)}
+                rerun_candidate = {"task_id": str(task.get("id") or "unknown"), "variant": "candidate", "attempt": "rerun-1", "status": "blocked", "reason": str(exc)}
+            rerun_rows.extend([rerun_baseline, rerun_candidate])
+            rerun_pair = _live_pair_result(task, rerun_baseline, rerun_candidate)
+            adjudication = _live_pair_adjudication(pair, rerun_pair)
+            adjudication["initial_receipts"] = {"baseline": baseline.get("receipt"), "candidate": candidate.get("receipt")}
+            adjudication["rerun_receipts"] = {"baseline": rerun_baseline.get("receipt"), "candidate": rerun_candidate.get("receipt")}
+            pair["initial_state"] = pair.get("state")
+            pair["adjudication"] = adjudication
+            if pair.get("state") == "invalid_pair" and rerun_pair.get("state") != "invalid_pair":
+                pair["state"] = "fail_after_adjudication" if adjudication["candidate_failure_reproducible"] else "adjudicated_recovered"
+            adjudications.append(adjudication)
+        pairs.append(pair)
 
     pilot = _pilot_tasks(tasks)
     remaining = [task for task in tasks if str(task.get("id") or "") not in {str(item.get("id") or "") for item in pilot}]
     for task in pilot:
         execute(task)
     pilot_hard_failure = any(pair.get("state") == "invalid_pair" for pair in pairs) or any(
-        float(pair.get("relevant_file_recall", {}).get("candidate") or 0.0) < float(pair.get("relevant_file_recall", {}).get("baseline") or 0.0)
-        or float(pair.get("relevant_region_recall", {}).get("candidate") or 0.0) < float(pair.get("relevant_region_recall", {}).get("baseline") or 0.0)
-        or (bool(pair.get("task_success", {}).get("baseline")) and not bool(pair.get("task_success", {}).get("candidate")))
-        for pair in pairs
-        if bool(pair.get("candidate_eligible"))
+        _live_pair_has_reproducible_v2_regression(pair) for pair in pairs
     )
     if not pilot_hard_failure:
         for task in remaining:
@@ -2822,6 +3003,17 @@ def live_paired_run(
     _write_json(run_dir / "10_freshness_matrix.json", freshness)
     privacy = _live_privacy_scan(run_dir, manifest, payload)
     _write_json(run_dir / "11_privacy_scan.json", privacy)
+    _write_jsonl(run_dir / "17_discordant_reruns.jsonl", rerun_rows)
+    _write_json(
+        run_dir / "18_discordant_pair_adjudication.json",
+        {
+            "schema_version": "qwendex.optimization_lab.live_discordant_adjudication.v1",
+            "status": "pass" if all(item.get("status") != "unresolved" for item in adjudications) else "fail",
+            "discordant_pair_count": len(adjudications),
+            "adjudications": adjudications,
+        },
+    )
+    all_rows = [*baselines, *candidates, *rerun_rows]
     manager = {
         "schema_version": "qwendex.optimization_lab.live_manager_gate.v1",
         "status": "pass"
@@ -2830,17 +3022,17 @@ def live_paired_run(
             and row.get("manager_preflight", {}).get("stop_status") == "STOP_MANAGER_PREFLIGHT_READY"
             and bool(row.get("manager_preflight", {}).get("hook_verified"))
             and int(row.get("manager", {}).get("stale_count") or 0) == 0
-            for row in [*baselines, *candidates]
+            for row in all_rows
             if row.get("status") != "blocked"
         )
         else "fail",
-        "arm_count": len([*baselines, *candidates]),
+        "arm_count": len(all_rows),
         "live_root_binding": "observed_pid_bound_preflight",
     }
     _write_json(run_dir / "12_manager_and_security_regressions.json", manager)
     performance = _live_performance_summary(baselines, candidates, pairs)
     _write_json(run_dir / "13_performance_summary.json", performance)
-    raw_artifacts_valid = _raw_artifact_hashes_valid(run_dir, [*baselines, *candidates])
+    raw_artifacts_valid = _raw_artifact_hashes_valid(run_dir, all_rows)
     gate = _live_gate_decision(
         baselines=baselines,
         candidates=candidates,
@@ -2849,6 +3041,11 @@ def live_paired_run(
         privacy=privacy,
         raw_artifacts_valid=raw_artifacts_valid,
         performance=performance,
+        reruns=rerun_rows,
+    )
+    gate["discordant_pair_count"] = len(adjudications)
+    gate["discordant_reproducible_candidate_failure_count"] = sum(
+        1 for item in adjudications if item.get("candidate_failure_reproducible")
     )
     if pilot_hard_failure:
         gate["pilot_early_stop"] = True
@@ -2907,6 +3104,10 @@ def compare_run(run_dir: Path | str) -> dict[str, Any]:
         "FINAL_REPORT.md",
         "manifest.json",
     ]
+    workload_preview = _read_json_if_present(root / "03_workload_manifest.json")
+    is_live = isinstance(workload_preview, Mapping) and workload_preview.get("execution_mode") == LIVE_EXECUTION_MODE
+    if is_live:
+        required.extend(["17_discordant_reruns.jsonl", "18_discordant_pair_adjudication.json"])
     missing = [name for name in required if not (root / name).is_file()]
     if missing:
         return {
@@ -2941,6 +3142,8 @@ def compare_run(run_dir: Path | str) -> dict[str, Any]:
         "14_gate_decision.json",
         "manifest.json",
     ]
+    if is_live:
+        json_artifacts.append("18_discordant_pair_adjudication.json")
     parsed_json: dict[str, Any] = {}
     for name in json_artifacts:
         try:
@@ -2975,12 +3178,15 @@ def compare_run(run_dir: Path | str) -> dict[str, Any]:
     try:
         baselines = _read_jsonl(root / "06_baseline_runs.jsonl")
         candidates = _read_jsonl(root / "07_candidate_runs.jsonl")
+        reruns = _read_jsonl(root / "17_discordant_reruns.jsonl") if is_live else []
         with (root / "08_pair_results.csv").open(encoding="utf-8", newline="") as handle:
             csv_rows = list(csv.reader(handle))
         width_ok = len(csv_rows) > 1 and bool(csv_rows[0]) and all(len(row) == len(csv_rows[0]) for row in csv_rows[1:])
         rows = list(csv.DictReader([",".join(row) for row in csv_rows])) if width_ok else []
         if any(row.get("schema_version") != BASELINE_RUN_SCHEMA_VERSION for row in [*baselines, *candidates]):
             schema_failures.append("run_jsonl_schema")
+        if any(row.get("schema_version") != BASELINE_RUN_SCHEMA_VERSION for row in reruns):
+            schema_failures.append("rerun_jsonl_schema")
         gate = _read_json(root / "14_gate_decision.json")
     except LabError:
         baselines, candidates, rows, gate, width_ok = [], [], [], {}, False

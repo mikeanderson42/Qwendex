@@ -544,6 +544,38 @@ def test_live_v2_gates_and_metrics_exclude_ineligible_control_pairs() -> None:
     assert gate["control_pair_discordance_count"] == 1
 
 
+def test_live_discordant_adjudication_requires_reproduced_candidate_failure() -> None:
+    lab = load_module("qwendex_optimization_lab")
+    initial = {
+        "pair_id": "broad",
+        "candidate_eligible": True,
+        "state": "fail",
+        "task_success": {"baseline": True, "candidate": False},
+        "relevant_file_recall": {"baseline": 1.0, "candidate": 0.0},
+        "relevant_region_recall": {"baseline": 1.0, "candidate": 0.0},
+    }
+    resolved_rerun = {
+        **initial,
+        "state": "pass",
+        "task_success": {"baseline": True, "candidate": True},
+        "relevant_file_recall": {"baseline": 1.0, "candidate": 1.0},
+        "relevant_region_recall": {"baseline": 1.0, "candidate": 1.0},
+    }
+    resolved = {**initial, "adjudication": lab._live_pair_adjudication(initial, resolved_rerun)}
+    reproduced = {**initial, "adjudication": lab._live_pair_adjudication(initial, initial)}
+
+    assert lab._live_pair_is_discordant(initial)
+    assert resolved["adjudication"]["classification"] == "model_stochastic_behavior"
+    assert not resolved["adjudication"]["candidate_failure_reproducible"]
+    assert all(
+        lab._live_pair_metric_noninferior(resolved, metric)
+        for metric in ("relevant_file_recall", "relevant_region_recall", "task_success")
+    )
+    assert not lab._live_pair_has_reproducible_v2_regression(resolved)
+    assert reproduced["adjudication"]["candidate_failure_reproducible"]
+    assert lab._live_pair_has_reproducible_v2_regression(reproduced)
+
+
 def test_cli_validates_the_connected_optimization_lab_surface(tmp_path: Path) -> None:
     repository, commit, tree = make_repository(tmp_path)
     manifest = write_full_manifest(tmp_path, repository, commit, tree)
