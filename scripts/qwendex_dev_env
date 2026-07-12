@@ -32,7 +32,7 @@ QWENDEX_RELEASE_CODEX_SOURCE_REPO="https://github.com/openai/codex.git"
 QWENDEX_CODEX_SOURCE_REPO="${QWENDEX_CODEX_SOURCE_REPO:-$QWENDEX_RELEASE_CODEX_SOURCE_REPO}"
 QWENDEX_RELEASE_CODEX_VERSION="0.144.0"
 QWENDEX_RELEASE_CODEX_SOURCE_COMMIT="767822446c7a594caa19609ca435281a9ec67e0d"
-QWENDEX_RELEASE_CODEX_PATCH_SHA256="b0eca97322be9b80e25627667d49edc85e0b2f35994d685930441e8f8450d183"
+QWENDEX_RELEASE_CODEX_PATCH_SHA256="2cb83aba4b1063d339d8f156473e2c6fe748546fa63bf87fe0d99c648d716301"
 QWENDEX_RELEASE_CODEX_CARGO_LOCK_SHA256="2a3f5a7bd2b571e94cf39e35180e88567989421893f2b600607026d7896ad9c6"
 QWENDEX_CODEX_SOURCE_REF="${QWENDEX_CODEX_SOURCE_REF:-rust-v$QWENDEX_RELEASE_CODEX_VERSION}"
 QWENDEX_MODELS_CACHE_FILE="models_cache.qwendex-$QWENDEX_RELEASE_CODEX_VERSION.json"
@@ -629,7 +629,7 @@ head = subprocess.run(
     timeout=30,
 ).stdout.strip()
 diff = subprocess.run(
-    ["git", "-C", str(source_root), "diff", "HEAD", "--binary", "--no-ext-diff"],
+    ["git", "-C", str(source_root), "diff", "HEAD", "--binary", "--full-index", "--no-ext-diff"],
     capture_output=True,
     check=True,
     timeout=30,
@@ -1095,20 +1095,30 @@ cmd_codex_source() {
       ;;
     patch)
       [[ -d "$CODEX_SOURCE_DIR" ]] || die "missing Codex source: run qwendex-dev codex-source sync"
+      local patch_codex="${QWENDEX_DEV_CODEX_BIN:-$DEV_CODEX_DEFAULT}"
+      if [[ ! -x "$patch_codex" ]]; then
+        patch_codex="$MAIN_CODEX_BIN"
+      fi
+      [[ -x "$patch_codex" ]] || die "missing Codex binary for source-patch preflight"
       "$DEV_ROOT/scripts/qwendex" codex-patch apply \
-        --codex-bin "${QWENDEX_DEV_CODEX_BIN:-$DEV_CODEX_DEFAULT}" \
+        --codex-bin "$patch_codex" \
         --source "$CODEX_SOURCE_DIR" \
         --json
       "$DEV_ROOT/scripts/qwendex" codex-patch preflight \
-        --codex-bin "${QWENDEX_DEV_CODEX_BIN:-$DEV_CODEX_DEFAULT}" \
+        --codex-bin "$patch_codex" \
         --source "$CODEX_SOURCE_DIR" \
         --require-applied \
         --json > "$META_ROOT/codex_source_preflight.json"
       ;;
     preflight)
       [[ -d "$CODEX_SOURCE_DIR" ]] || die "missing Codex source: run qwendex-dev codex-source sync"
+      local preflight_codex="${QWENDEX_DEV_CODEX_BIN:-$DEV_CODEX_DEFAULT}"
+      if [[ ! -x "$preflight_codex" ]]; then
+        preflight_codex="$MAIN_CODEX_BIN"
+      fi
+      [[ -x "$preflight_codex" ]] || die "missing Codex binary for source-patch preflight"
       "$DEV_ROOT/scripts/qwendex" codex-patch preflight \
-        --codex-bin "${QWENDEX_DEV_CODEX_BIN:-$DEV_CODEX_DEFAULT}" \
+        --codex-bin "$preflight_codex" \
         --source "$CODEX_SOURCE_DIR" \
         --require-applied \
         --json
@@ -1136,10 +1146,10 @@ cmd_codex_source() {
       isolated_cargo_home="$isolated_build_root/cargo-home"
       trap '[[ -z "${isolated_build_root:-}" ]] || rm -rf "$isolated_build_root"' EXIT
       mkdir -p "$isolated_cargo_home"
-      # Release tags carry source-build lockfile versions. Normalize the lock
-      # explicitly before freezing the isolated build input. Both metadata and
-      # compilation use an initially empty, ephemeral CARGO_HOME so user/global
-      # Cargo config cannot alter the release build.
+      # Normalize the release workspace package versions in Cargo.lock before
+      # freezing build provenance. Metadata and compilation use one initially
+      # empty, ephemeral CARGO_HOME so user/global Cargo config cannot alter
+      # the deterministic lock or release build.
       (
         cd "$CODEX_SOURCE_DIR/codex-rs"
         env \
@@ -1154,7 +1164,7 @@ cmd_codex_source() {
           -u RUSTFLAGS \
           -u RUSTUP_TOOLCHAIN \
           CARGO_HOME="$isolated_cargo_home" \
-          cargo metadata --no-deps --format-version 1 >/dev/null
+          cargo metadata --format-version 1 >/dev/null
       )
       CARGO_HOME="$isolated_cargo_home" python3 - \
         "$META_ROOT/codex_build_inputs.json" \
@@ -1234,7 +1244,7 @@ changed_paths = sorted(
 unexpected_changes = sorted(set(changed_paths) - allowed_changes)
 missing_patch_paths = sorted((allowed_changes - {"codex-rs/Cargo.lock"}) - set(changed_paths))
 source_diff = run(
-    "git", "-C", str(source_path), "diff", "HEAD", "--binary", "--no-ext-diff", binary=True
+    "git", "-C", str(source_path), "diff", "HEAD", "--binary", "--full-index", "--no-ext-diff", binary=True
 )
 tree_manifest = run("git", "-C", str(source_path), "ls-tree", "-r", "--full-tree", "HEAD", binary=True)
 lock_path = source_path / "codex-rs" / "Cargo.lock"
@@ -1307,7 +1317,7 @@ PY
       require_json_pass "$META_ROOT/codex_build_inputs.json"
       mkdir -p "$isolated_build_root/source"
       git -C "$CODEX_SOURCE_DIR" archive --format=tar HEAD | tar -xf - -C "$isolated_build_root/source"
-      git -C "$CODEX_SOURCE_DIR" diff HEAD --binary --no-ext-diff > "$isolated_build_root/qwendex.patch"
+      git -C "$CODEX_SOURCE_DIR" diff HEAD --binary --full-index --no-ext-diff > "$isolated_build_root/qwendex.patch"
       # The temp tree lives below the outer Qwendex worktree. Give it its own
       # Git boundary so `git apply` cannot discover and target the parent repo.
       git -C "$isolated_build_root/source" init --quiet
@@ -1404,7 +1414,7 @@ def sha256_file(path: Path) -> str:
 
 
 source_diff = subprocess.run(
-    ["git", "-C", str(source_path), "diff", "HEAD", "--binary", "--no-ext-diff"],
+    ["git", "-C", str(source_path), "diff", "HEAD", "--binary", "--full-index", "--no-ext-diff"],
     capture_output=True,
     check=True,
     timeout=30,

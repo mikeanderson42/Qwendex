@@ -964,6 +964,13 @@ def test_qwendex_dev_env_public_surface_is_visible_and_isolated():
     assert "codex-code-mode-host" in doc
     assert "QWENDEX_DEV_ENABLE_PATCHED_TUI_CONFIG=1" in doc
     assert "patched-tui.example.toml" in doc
+    assert 'local patch_codex="${QWENDEX_DEV_CODEX_BIN:-$DEV_CODEX_DEFAULT}"' in text
+    assert 'if [[ ! -x "$patch_codex" ]]; then' in text
+    assert 'patch_codex="$MAIN_CODEX_BIN"' in text
+    assert "cargo metadata --format-version 1 >/dev/null" in text
+    assert "cargo metadata --no-deps --format-version 1" not in text
+    assert "diff HEAD --binary --full-index --no-ext-diff" in text
+    assert '"diff", "HEAD", "--binary", "--full-index", "--no-ext-diff"' in text
 
     agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
     assert "Connectedness Rule" in agents

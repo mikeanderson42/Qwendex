@@ -8,6 +8,9 @@ Qdex managed-session continuity hotfix.
 - Makes generated development hooks invoke the same dedicated Qwendex runtime
   that Qdex preflights, and rejects a source/dev hook-runtime split before a
   Manager session starts.
+- Restores fresh Codex `0.144.0` build reproducibility by explicitly
+  normalizing its release lockfile and hashing its patch with full Git object
+  identifiers before validating the pinned inputs.
 - Adds end-to-end regression coverage for a source edit between managed hooks.
 - Existing Qdex sessions must exit and relaunch after upgrade; reinstall and
   verify managed hooks after `scripts/qwendex_dev_env sync`.

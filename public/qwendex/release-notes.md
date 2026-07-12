@@ -11,6 +11,10 @@
   checks fail-closed.
 - Made generated development hooks invoke the same runtime Qdex preflights;
   hook verification now rejects a stale source/dev runtime split before launch.
+- Restored deterministic fresh Codex `0.144.0` build provenance by explicitly
+  normalizing the release lockfile and using a full-index Qwendex patch digest,
+  so builds no longer depend on stale local source state or Git abbreviation
+  settings.
 - Upgrade by exiting active Qdex sessions, running
   `scripts/qwendex_dev_env sync`, reinstalling and verifying managed hooks,
   then starting a new `qdex` session.
