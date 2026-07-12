@@ -7456,10 +7456,10 @@ def qwendex_search_module() -> Any:
 
 
 def experimental_search_candidate_context() -> str:
-    module = qwendex_search_module()
-    enabled = str(os.environ.get(module.SEARCH_CANDIDATE_ENV) or "").strip().lower()
+    enabled = str(os.environ.get("QWENDEX_SEARCH_EVIDENCE_COMPACTION") or "").strip().lower()
     if enabled not in {"1", "true", "yes", "on"}:
         return ""
+    module = qwendex_search_module()
     return str(module.SEARCH_CANDIDATE_MANAGED_INSTRUCTION)
 
 
