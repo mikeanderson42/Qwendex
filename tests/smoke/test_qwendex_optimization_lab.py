@@ -225,6 +225,8 @@ def test_paired_run_isolated_and_compare_validates_artifacts(tmp_path: Path) -> 
     artifact_dir = Path(paired["data"]["artifact_dir"])
     compared = lab.compare_run(artifact_dir)
     gate = json.loads((artifact_dir / "14_gate_decision.json").read_text(encoding="utf-8"))
+    environment = json.loads((artifact_dir / "02_environment_lock.json").read_text(encoding="utf-8"))
+    performance = json.loads((artifact_dir / "13_performance_summary.json").read_text(encoding="utf-8"))
 
     assert paired["status"] == "pass"
     assert paired["data"]["attempted_pairs"] == 12
@@ -234,6 +236,12 @@ def test_paired_run_isolated_and_compare_validates_artifacts(tmp_path: Path) -> 
     assert gate["hard_gates"]["privacy_boundary"] == "pass"
     assert compared["status"] == "pass"
     assert compared["data"]["schema_failures"] == 0
+    assert environment["started_at"]
+    assert environment["completed_at"]
+    assert environment["codex_runtime"]["version"]
+    assert environment["codex_runtime"]["digest"].startswith("sha256:")
+    assert performance["time_to_first_relevant_file_ms"] == "not_observed_controlled_runner"
+    assert set(performance["telemetry_instrumentation_overhead_ms"]) == {"p50", "p95"}
 
 
 def test_cli_validates_the_connected_optimization_lab_surface(tmp_path: Path) -> None:

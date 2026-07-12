@@ -52,6 +52,10 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def sha256_text(value: str) -> str:
+    return sha256_bytes(value.encode("utf-8", "replace"))
+
+
 def _script_module(name: str) -> Any:
     path = SCRIPT_ROOT / f"{name}.py"
     spec = importlib.util.spec_from_file_location(f"qwendex_{name}", path)
@@ -640,6 +644,8 @@ def _run_baseline_task(
             "search_calls": raw["process_count"],
             "read_calls": 0,
             "validation_calls": 0 if edit.get("validation_status") == "not_applicable" else 1,
+            "validation_duration_ms": edit.get("validation_duration_ms"),
+            "time_to_first_relevant_file_ms": "not_observed_controlled_runner",
             "candidate_invoked": False,
             "candidate_adopted": False,
             "truncated": False,
@@ -680,14 +686,44 @@ def _environment_lock(payload: Mapping[str, Any], manifest_path: Path) -> dict[s
     except LabError:
         qwendex_commit = "not_observed"
         qwendex_tree = "not_observed"
+    runtime_raw = str(
+        os.environ.get("QWENDEX_CODEX_RUNTIME")
+        or os.environ.get("QWENDEX_DEV_CODEX_BIN")
+        or shutil.which("codex")
+        or ""
+    ).strip()
+    runtime_version = "not_observed"
+    runtime_digest = "not_observed"
+    if runtime_raw:
+        runtime_path = Path(runtime_raw).expanduser()
+        if runtime_path.is_file():
+            runtime_digest = "sha256:" + sha256_file(runtime_path)
+        else:
+            runtime_digest = "sha256:" + sha256_text(runtime_raw)
+        try:
+            version_probe = subprocess.run(
+                [runtime_raw, "--version"],
+                cwd=REPOSITORY_ROOT,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=10,
+            )
+            version_text = (version_probe.stdout or version_probe.stderr).strip().splitlines()
+            if version_text:
+                runtime_version = version_text[0][:240]
+        except (OSError, subprocess.TimeoutExpired):
+            runtime_version = "unavailable"
     config = REPOSITORY_ROOT / "config" / "qwendex" / "qwendex.json"
     return {
         "schema_version": "qwendex.optimization_lab.environment_lock.v1",
         "created_at": utc_now(),
+        "started_at": utc_now(),
         "sources": repositories,
         "qwendex_commit": qwendex_commit,
         "qwendex_tree_digest": "git:" + qwendex_tree if qwendex_tree != "not_observed" else "not_observed",
-        "codex_runtime_digest": "not_observed",
+        "codex_runtime": {"version": runtime_version, "digest": runtime_digest},
         "model_policy": dict(payload.get("model_policy", {})),
         "candidate_mode": "baseline_raw_ripgrep",
         "workload_manifest_digest": "sha256:" + sha256_file(manifest_path),
@@ -758,7 +794,8 @@ def baseline_capture(
         raise LabError("generated baseline run directory already exists")
     run_dir.mkdir(parents=True)
     _write_text(run_dir / "00_scope_and_git_custody.md", _scope_document(payload, run_id))
-    _write_json(run_dir / "02_environment_lock.json", _environment_lock(payload, manifest))
+    environment_lock = _environment_lock(payload, manifest)
+    _write_json(run_dir / "02_environment_lock.json", environment_lock)
     shutil.copyfile(manifest, run_dir / "03_workload_manifest.json")
     _write_text(run_dir / "04_workload_manifest.sha256", f"{sha256_file(manifest)}  03_workload_manifest.json\n")
     repository_by_id = {str(item.get("id") or ""): item for item in payload.get("repositories", []) if isinstance(item, Mapping)}
@@ -785,6 +822,8 @@ def baseline_capture(
         "claim_ceiling": "Baseline retrieval and telemetry capture only; this is not an end-to-end model or promotion result.",
     }
     _write_json(run_dir / "13_performance_summary.json", summary)
+    environment_lock["completed_at"] = utc_now()
+    _write_json(run_dir / "02_environment_lock.json", environment_lock)
     _write_json(run_dir / "manifest.json", _artifact_manifest(run_dir))
     return {
         "schema_version": BASELINE_CAPTURE_SCHEMA_VERSION,
@@ -921,6 +960,8 @@ def _run_candidate_task(
             "search_calls": raw["process_count"],
             "read_calls": 0,
             "validation_calls": 0 if edit.get("validation_status") == "not_applicable" else 1,
+            "validation_duration_ms": edit.get("validation_duration_ms"),
+            "time_to_first_relevant_file_ms": "not_observed_controlled_runner",
             "candidate_invoked": candidate_expected,
             "candidate_adopted": candidate_expected,
             "candidate_status": candidate_status,
@@ -1192,15 +1233,32 @@ def _performance_summary(baselines: list[Mapping[str, Any]], candidates: list[Ma
     wall_ratios = [float(pair.get("wall_time_ratio") or 0.0) for pair in pairs]
     candidate_processing = [float(row.get("candidate_processing_ms") or 0.0) for row in candidates if row.get("candidate_invoked")]
     telemetry_overheads: list[float] = []
+    telemetry_p50_values: list[float] = []
     incomplete_rates: list[float] = []
-    for row in [*baselines, *candidates]:
+    duplicate_rates: list[float] = []
+    overlap_rates: list[float] = []
+    validation_durations = [
+        float(row["validation_duration_ms"])
+        for row in [*baselines, *candidates]
+        if isinstance(row.get("validation_duration_ms"), int | float)
+    ]
+    all_rows = [*baselines, *candidates]
+    for row in all_rows:
         summary = row.get("telemetry", {}).get("summary", {}) if isinstance(row.get("telemetry"), Mapping) else {}
         overhead = summary.get("instrumentation_overhead") if isinstance(summary, Mapping) else None
         incomplete = summary.get("incomplete_event_rate") if isinstance(summary, Mapping) else None
+        duplicate = summary.get("duplicate_query_rate") if isinstance(summary, Mapping) else None
+        overlap = summary.get("root_subagent_overlap") if isinstance(summary, Mapping) else None
         if isinstance(overhead, Mapping) and isinstance(overhead.get("p95_ms"), int | float):
             telemetry_overheads.append(float(overhead["p95_ms"]))
+        if isinstance(overhead, Mapping) and isinstance(overhead.get("median_ms"), int | float):
+            telemetry_p50_values.append(float(overhead["median_ms"]))
         if isinstance(incomplete, Mapping) and isinstance(incomplete.get("rate"), int | float):
             incomplete_rates.append(float(incomplete["rate"]))
+        if isinstance(duplicate, Mapping) and isinstance(duplicate.get("rate"), int | float):
+            duplicate_rates.append(float(duplicate["rate"]))
+        if isinstance(overlap, Mapping) and isinstance(overlap.get("rate"), int | float):
+            overlap_rates.append(float(overlap["rate"]))
     expected_adoptions = [row for row in candidates if bool(row.get("candidate_invoked"))]
     registry = search_module().candidate_registry()
     candidate = next(
@@ -1214,6 +1272,19 @@ def _performance_summary(baselines: list[Mapping[str, Any]], candidates: list[Ma
         "search_read_call_ratio": {"median": _median(call_ratios), "values": call_ratios},
         "total_tool_call_ratio": {"median": _median(tool_ratios), "values": tool_ratios},
         "wall_time_ratio": {"median": _median(wall_ratios), "max": max(wall_ratios) if wall_ratios else None, "values": wall_ratios},
+        "tool_calls": {
+            "baseline_total": sum(int(row.get("search_calls") or 0) + int(row.get("read_calls") or 0) + int(row.get("validation_calls") or 0) for row in baselines),
+            "candidate_total": sum(int(row.get("search_calls") or 0) + int(row.get("read_calls") or 0) + int(row.get("validation_calls") or 0) for row in candidates),
+            "baseline_search": sum(int(row.get("search_calls") or 0) for row in baselines),
+            "candidate_search": sum(int(row.get("search_calls") or 0) for row in candidates),
+            "baseline_read": sum(int(row.get("read_calls") or 0) for row in baselines),
+            "candidate_read": sum(int(row.get("read_calls") or 0) for row in candidates),
+            "baseline_validation": sum(int(row.get("validation_calls") or 0) for row in baselines),
+            "candidate_validation": sum(int(row.get("validation_calls") or 0) for row in candidates),
+        },
+        "validation_duration_ms": {"p50": _percentile(validation_durations, 0.5), "p95": _percentile(validation_durations, 0.95)},
+        "time_to_first_relevant_file_ms": "not_observed_controlled_runner",
+        "duplicate_query_rate": _median(duplicate_rates) if duplicate_rates else "not_observed",
         "candidate_adoption": {
             "expected_tasks": len(expected_adoptions),
             "adopted_tasks": sum(1 for row in expected_adoptions if row.get("candidate_adopted")),
@@ -1224,11 +1295,12 @@ def _performance_summary(baselines: list[Mapping[str, Any]], candidates: list[Ma
             "bytes": int(candidate.get("managed_instruction_bytes") or 0),
             "delivery": "not_observed_controlled_runner",
         },
+        "telemetry_instrumentation_overhead_ms": {"p50": _percentile(telemetry_p50_values, 0.5), "p95": _percentile(telemetry_overheads, 0.95)},
         "telemetry_instrumentation_p95_ms": _percentile(telemetry_overheads, 0.95),
         "incomplete_telemetry_rate": _median(incomplete_rates),
         "context_compaction_events": "not_observed_controlled_runner",
-        "root_subagent_overlap": "not_observed_controlled_runner",
-        "repeated_file_reads": "not_observed_controlled_runner",
+        "root_subagent_overlap": _median(overlap_rates) if overlap_rates else "not_observed_controlled_runner",
+        "repeated_file_or_range_reads": "not_observed_controlled_runner",
     }
 
 
@@ -1593,6 +1665,8 @@ def paired_run(
             performance=performance,
         ),
     )
+    environment["completed_at"] = utc_now()
+    _write_json(run_dir / "02_environment_lock.json", environment)
     _write_json(run_dir / "manifest.json", _artifact_manifest(run_dir))
     return {
         "schema_version": "qwendex.optimization_lab.paired_run.v1",
@@ -1691,6 +1765,17 @@ def compare_run(run_dir: Path | str) -> dict[str, Any]:
         schema_failures.append("03_workload_manifest.json")
     if not isinstance(manifest, Mapping) or manifest.get("schema_version") != ARTIFACT_MANIFEST_SCHEMA_VERSION:
         schema_failures.append("manifest.json")
+    environment_lock = parsed_json.get("02_environment_lock.json", {})
+    runtime_lock = environment_lock.get("codex_runtime", {}) if isinstance(environment_lock, Mapping) else {}
+    if (
+        not isinstance(environment_lock, Mapping)
+        or not str(environment_lock.get("started_at") or "")
+        or not str(environment_lock.get("completed_at") or "")
+        or not isinstance(runtime_lock, Mapping)
+        or str(runtime_lock.get("version") or "") in {"", "not_observed", "unavailable"}
+        or str(runtime_lock.get("digest") or "") in {"", "not_observed"}
+    ):
+        schema_failures.append("02_environment_lock.json")
     digest_line = (root / "04_workload_manifest.sha256").read_text(encoding="utf-8").strip().split()
     if len(digest_line) < 1 or digest_line[0] != sha256_file(root / "03_workload_manifest.json"):
         schema_failures.append("04_workload_manifest.sha256")
