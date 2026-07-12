@@ -170,6 +170,13 @@ accepted by Codex's per-event hook stdout schemas. Hook verification treats
 stale Qwendex lifecycle commands without `--codex-hook-output` as incompatible,
 even if every managed event is present.
 
+Update: when a generated development runtime is available, default managed hook
+commands target `$QWENDEX_DEV_ROOT/scripts/qwendex`, the same runtime used by
+Qdex preflight. Verification rejects a source/dev command split before launch
+and names the mismatched lifecycle events, so an operator can explicitly
+reinstall the managed entries instead of entering a session that will fail at
+its first hook.
+
 ## Manager Preflight Session Contract
 
 Decision: normal `qdex` launches in Manager Mode must run
@@ -338,6 +345,43 @@ Reason: interactive `qdex` launches do not know the prompt during preflight.
 Without hook-time attachment the persisted direct-work exception could diverge
 from an actual manager task, and without a digest the newest manager receipt
 caused `qwendex receipt latest` to fail its own verification contract.
+
+## Stable Manager Runtime Identity
+
+Decision: Qdex preflight and managed hooks bind a Manager runtime identity to
+the canonical resolved location of `qwendex_cli.py`, represented as a path
+digest. They do not bind it to that mutable file's content digest. Default
+generated hooks use the same dedicated runtime that Qdex preflight uses. An
+attached session may legitimately edit Qwendex itself; later hook processes
+must keep using the same runtime location rather than rejecting that in-place
+edit as a runtime substitution. The launch PID/start ticks/nonce/key,
+repository, Codex-home, state/ledger locations, policy, and verified-hook
+checks remain fail-closed.
+
+Reason: a file-content identity changes after a valid Qwendex self-edit. That
+made the next hook report `runtime_mismatch` and blocked every remaining tool,
+including the checks needed to finish the edit. A resolved runtime-location
+identity still rejects a different launcher/runtime path while preserving the
+expected managed-session workflow.
+
+## Reproducible Codex Build Inputs
+
+Decision: the Codex `0.144.0` build contract explicitly runs `cargo metadata`
+with an empty Cargo home to normalize the release workspace package versions in
+`Cargo.lock`, then pins that deterministic lock digest and a `git diff
+--full-index` Qwendex patch digest. The only permitted lockfile change is that
+normalization; all Qwendex source changes remain confined to the declared TUI
+and model-cache files. Before a dev Codex binary exists,
+`qwendex-dev codex-source patch` and `preflight` use the verified main Codex
+binary for version detection, then the build produces the dedicated binary.
+
+Reason: the prior metadata probe used `--no-deps`, so it never performed the
+normalization represented by the pinned lock digest. Its patch hash also used
+abbreviated Git object IDs, which varied by checkout configuration despite
+identical source files. Fresh release builds then failed before compilation
+while old local receipts masked the drift. The explicit metadata step and
+full-index diff restore a reproducible, fail-closed build boundary and keep
+unexpected lockfile mutation blocked.
 
 ## Published Configuration Schema Gate
 

@@ -33,6 +33,8 @@ def test_codex_build_contract_requires_the_versioned_model_cache_patch():
 
     assert path in release_gate.CODEX_ALLOWED_BUILD_PATHS
     assert path in release_gate.CODEX_REQUIRED_PATCH_PATHS
+    assert "codex-rs/Cargo.lock" in release_gate.CODEX_ALLOWED_BUILD_PATHS
+    assert "codex-rs/Cargo.lock" not in release_gate.CODEX_REQUIRED_PATCH_PATHS
 
 
 def run(*args: str, cwd: Path) -> str:

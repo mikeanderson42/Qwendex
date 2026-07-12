@@ -109,6 +109,12 @@ scripts/qwendex agent hook-config --install --codex-home "$CODEX_HOME" --json
 scripts/qwendex agent hook-config --verify --codex-home "$CODEX_HOME" --json
 ```
 
+In a generated Qwendex dev environment, these commands install the lifecycle
+hooks against the same `$QWENDEX_DEV_ROOT/scripts/qwendex` runtime that `qdex`
+preflights. After updating Qwendex, exit active Qdex sessions, run
+`scripts/qwendex_dev_env sync`, then reinstall and verify the managed entries
+before launching Qdex again.
+
 Qwendex does not silently install hooks. An operator can use
 `QWENDEX_MANAGER_ALLOW_UNHOOKED=1` to allow a launch without verified hooks; the
 preflight records `hook_override=true` and the reason from

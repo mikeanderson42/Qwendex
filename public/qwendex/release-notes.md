@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+## 0.5.7
+
+- Fixed Manager Mode sessions becoming permanently blocked with
+  `runtime_mismatch` after a valid in-place Qwendex source edit.
+- Bound runtime identity to the canonical Qwendex runtime location and kept the
+  existing process, launch, repository, state, policy, and verified-hook
+  checks fail-closed.
+- Made generated development hooks invoke the same runtime Qdex preflights;
+  hook verification now rejects a stale source/dev runtime split before launch.
+- Restored deterministic fresh Codex `0.144.0` build provenance by explicitly
+  normalizing the release lockfile and using a full-index Qwendex patch digest,
+  so builds no longer depend on stale local source state or Git abbreviation
+  settings.
+- Upgrade by exiting active Qdex sessions, running
+  `scripts/qwendex_dev_env sync`, reinstalling and verifying managed hooks,
+  then starting a new `qdex` session.
+
 ## 0.5.6
 
 - Fixed upgrades where an older generated environment supplied the removed
