@@ -437,6 +437,27 @@ def test_live_workload_schema_and_trace_summary_are_private_metadata_only(tmp_pa
     assert trace["token_usage"] == {"input_tokens": 11, "output_tokens": 7}
 
 
+def test_live_candidate_activation_respects_frozen_task_eligibility() -> None:
+    lab = load_module("qwendex_optimization_lab")
+    candidate_id = lab.search_module().SEARCH_V2_CANDIDATE_ID
+
+    assert lab._live_candidate_active(
+        {"live": {"candidate_eligible": True}},
+        variant="candidate",
+        candidate_id=candidate_id,
+    )
+    assert not lab._live_candidate_active(
+        {"live": {"candidate_eligible": False}},
+        variant="candidate",
+        candidate_id=candidate_id,
+    )
+    assert not lab._live_candidate_active(
+        {"live": {"candidate_eligible": True}},
+        variant="baseline",
+        candidate_id=candidate_id,
+    )
+
+
 def test_cli_validates_the_connected_optimization_lab_surface(tmp_path: Path) -> None:
     repository, commit, tree = make_repository(tmp_path)
     manifest = write_full_manifest(tmp_path, repository, commit, tree)

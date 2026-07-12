@@ -2343,7 +2343,7 @@ def _run_live_arm(
         _materialize_live_fixture(task, worktree)
         environment, setup = _prepare_live_manager(isolation_root, worktree)
         _copy_live_auth(auth_source, Path(environment["CODEX_HOME"]))
-        candidate_active = variant == "candidate" and candidate_id == search_module().SEARCH_V2_CANDIDATE_ID
+        candidate_active = _live_candidate_active(task, variant=variant, candidate_id=candidate_id)
         if candidate_active:
             environment["QWENDEX_SEARCH_EVIDENCE_COMPACTION"] = "v2"
             environment["QWENDEX_SEARCH_COMMAND"] = str(
@@ -2479,6 +2479,22 @@ def _run_live_arm(
     finally:
         _cleanup_live_isolation(isolation_root)
         _remove_worktree(source, worktree)
+
+
+def _live_candidate_active(task: Mapping[str, Any], *, variant: str, candidate_id: str) -> bool:
+    """Return whether this live arm may receive the explicit v2 instruction.
+
+    Narrow control tasks still run in the candidate-position worktree so order,
+    isolation, and grading remain paired, but they must not receive a broad
+    search instruction or contribute to the broad-task adoption denominator.
+    """
+
+    live = task.get("live") if isinstance(task.get("live"), Mapping) else {}
+    return (
+        variant == "candidate"
+        and candidate_id == search_module().SEARCH_V2_CANDIDATE_ID
+        and bool(live.get("candidate_eligible"))
+    )
 
 
 def _live_pair_result(task: Mapping[str, Any], baseline: Mapping[str, Any], candidate: Mapping[str, Any]) -> dict[str, Any]:
