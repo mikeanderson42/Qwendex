@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -574,6 +575,50 @@ def test_live_discordant_adjudication_requires_reproduced_candidate_failure() ->
     assert not lab._live_pair_has_reproducible_v2_regression(resolved)
     assert reproduced["adjudication"]["candidate_failure_reproducible"]
     assert lab._live_pair_has_reproducible_v2_regression(reproduced)
+
+
+def test_live_invalid_sample_precedes_unobservable_hard_gate_decision() -> None:
+    lab = load_module("qwendex_optimization_lab")
+    blocked_pair = {
+        "pair_id": "blocked",
+        "candidate_eligible": True,
+        "candidate_invoked": True,
+        "state": "invalid_pair",
+        "task_success": {"baseline": False, "candidate": False},
+        "relevant_file_recall": {"baseline": 1.0, "candidate": 1.0},
+        "relevant_region_recall": {"baseline": 1.0, "candidate": 1.0},
+    }
+    gate = lab._live_gate_decision(
+        baselines=[{"status": "blocked"}],
+        candidates=[{"status": "blocked", "candidate_eligible": True, "candidate_invoked": True}],
+        pairs=[blocked_pair],
+        freshness={"status": "pass"},
+        privacy={"status": "pass"},
+        raw_artifacts_valid=True,
+        performance={"candidate_adoption": {"rate": "not_observed"}},
+    )
+
+    assert gate["candidate_decision"] == "invalid_evaluation"
+    assert gate["status"] == "fail"
+
+
+def test_privacy_scan_does_not_mistake_allowed_telemetry_values_for_raw_queries(tmp_path: Path) -> None:
+    lab = load_module("qwendex_optimization_lab")
+    repository, commit, tree = make_repository(tmp_path)
+    manifest = write_full_manifest(tmp_path, repository, commit, tree)
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    query = str(payload["tasks"][0]["execution"]["search"]["pattern"])
+    database = tmp_path / "run" / "isolation" / "task" / "state" / "qwendex-performance.sqlite"
+    database.parent.mkdir(parents=True)
+    with sqlite3.connect(database) as connection:
+        connection.execute("CREATE TABLE telemetry (tool_family TEXT, allowed_value TEXT)")
+        connection.execute("INSERT INTO telemetry VALUES (?, ?)", ("search", query))
+
+    scan = lab._privacy_scan(tmp_path / "run", manifest, payload)
+
+    assert scan["status"] == "pass"
+    assert scan["leak_match_count"] == 0
+    assert scan["performance_db_checked"] is True
 
 
 def test_cli_validates_the_connected_optimization_lab_surface(tmp_path: Path) -> None:

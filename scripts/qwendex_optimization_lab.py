@@ -1754,21 +1754,16 @@ def _privacy_scan(run_dir: Path, manifest_path: Path, payload: Mapping[str, Any]
             except (UnicodeDecodeError, json.JSONDecodeError):
                 matched += 1
     performance_databases = [path for path in safe_files if path.name == "qwendex-performance.sqlite"]
-    query_bytes = {
-        str(task.get("execution", {}).get("search", {}).get("pattern") or "").encode("utf-8")
-        for task in payload.get("tasks", [])
-        if isinstance(task, Mapping)
-    }
-    database_query_matches = sum(
+    database_forbidden_matches = sum(
         1
         for path in performance_databases
-        if any(value and value in path.read_bytes() for value in query_bytes)
+        if any(value and value in path.read_bytes() for value in forbidden)
     )
     return {
         "schema_version": "qwendex.optimization_lab.privacy_scan.v1",
-        "status": "pass" if matched == 0 and structural_matches == 0 and database_query_matches == 0 else "fail",
+        "status": "pass" if matched == 0 and structural_matches == 0 and database_forbidden_matches == 0 else "fail",
         "scanned_safe_artifacts": scanned,
-        "leak_match_count": matched + structural_matches + database_query_matches,
+        "leak_match_count": matched + structural_matches + database_forbidden_matches,
         "raw_evidence_excluded": True,
         "performance_db_checked": bool(performance_databases),
     }
@@ -2794,10 +2789,10 @@ def _live_gate_decision(
     }
     hard_failed = any(value == "fail" for value in hard.values())
     efficiency_passed = all(value in {"pass", "not_observed"} for value in efficiency.values())
-    if hard_failed:
-        decision = "reject_candidate"
-    elif invalid:
+    if invalid:
         decision = "invalid_evaluation"
+    elif hard_failed:
+        decision = "reject_candidate"
     elif len(valid) >= 12 and efficiency_passed and all(value == "pass" for key, value in efficiency.items() if key != "context_compaction"):
         decision = "promote_opt_in_experimental"
     else:
@@ -3049,7 +3044,7 @@ def live_paired_run(
     )
     if pilot_hard_failure:
         gate["pilot_early_stop"] = True
-        gate["candidate_decision"] = "reject_candidate" if any(value == "fail" for value in gate["hard_gates"].values()) else "invalid_evaluation"
+        gate["candidate_decision"] = "invalid_evaluation" if gate.get("invalid_pairs") else "reject_candidate" if any(value == "fail" for value in gate["hard_gates"].values()) else "invalid_evaluation"
         gate["status"] = "fail"
     _write_json(run_dir / "14_gate_decision.json", gate)
     _write_text(run_dir / "15_angle_check_and_gap_analysis.md", "# Live angle check\n\n- Live adoption, tool counts, isolated Manager preflight, and paired wall time are measured from fresh arm receipts.\n- Metrics without a trusted producer remain `not_observed`.\n")
