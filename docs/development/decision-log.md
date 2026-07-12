@@ -170,6 +170,13 @@ accepted by Codex's per-event hook stdout schemas. Hook verification treats
 stale Qwendex lifecycle commands without `--codex-hook-output` as incompatible,
 even if every managed event is present.
 
+Update: when a generated development runtime is available, default managed hook
+commands target `$QWENDEX_DEV_ROOT/scripts/qwendex`, the same runtime used by
+Qdex preflight. Verification rejects a source/dev command split before launch
+and names the mismatched lifecycle events, so an operator can explicitly
+reinstall the managed entries instead of entering a session that will fail at
+its first hook.
+
 ## Manager Preflight Session Contract
 
 Decision: normal `qdex` launches in Manager Mode must run
@@ -338,6 +345,24 @@ Reason: interactive `qdex` launches do not know the prompt during preflight.
 Without hook-time attachment the persisted direct-work exception could diverge
 from an actual manager task, and without a digest the newest manager receipt
 caused `qwendex receipt latest` to fail its own verification contract.
+
+## Stable Manager Runtime Identity
+
+Decision: Qdex preflight and managed hooks bind a Manager runtime identity to
+the canonical resolved location of `qwendex_cli.py`, represented as a path
+digest. They do not bind it to that mutable file's content digest. Default
+generated hooks use the same dedicated runtime that Qdex preflight uses. An
+attached session may legitimately edit Qwendex itself; later hook processes
+must keep using the same runtime location rather than rejecting that in-place
+edit as a runtime substitution. The launch PID/start ticks/nonce/key,
+repository, Codex-home, state/ledger locations, policy, and verified-hook
+checks remain fail-closed.
+
+Reason: a file-content identity changes after a valid Qwendex self-edit. That
+made the next hook report `runtime_mismatch` and blocked every remaining tool,
+including the checks needed to finish the edit. A resolved runtime-location
+identity still rejects a different launcher/runtime path while preserving the
+expected managed-session workflow.
 
 ## Published Configuration Schema Gate
 

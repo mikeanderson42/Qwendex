@@ -1,6 +1,7 @@
 import json
 import os
 import shlex
+import shutil
 import sqlite3
 import subprocess
 import tempfile
@@ -233,18 +234,23 @@ class QdexManagerAttachmentTests(unittest.TestCase):
         self.assertEqual(payload["command"][-2:], ["-C", str(repo)])
         self.assertEqual(cd_selector_count(payload["command"]), 1)
 
-    def test_real_qdex_exec_boundary_preserves_launch_exports_into_hooks(self) -> None:
+    def test_real_qdex_exec_boundary_keeps_attachment_after_in_place_runtime_edit(self) -> None:
+        source_root = self.temp / "boundary-source"
+        source_scripts = source_root / "scripts"
         dev_root = self.temp / "boundary-dev"
         work_root = dev_root / ".qwendex-dev"
-        scripts = dev_root / "scripts"
+        dev_scripts = dev_root / "scripts"
         meta = work_root / "results" / "meta"
         codex_home = work_root / "codex_home"
         runtime = work_root / "bin" / "fake-codex"
         repo = self.temp / "boundary-repo"
-        for path in (scripts, meta, codex_home, runtime.parent, repo):
+        for path in (source_scripts, dev_scripts, meta, codex_home, runtime.parent, repo):
             path.mkdir(parents=True, exist_ok=True)
-        (scripts / "qwendex").symlink_to(QWENDEX)
-        (scripts / "qwendex_cli.py").symlink_to(ROOT / "scripts" / "qwendex_cli.py")
+        for root, scripts in ((source_root, source_scripts), (dev_root, dev_scripts)):
+            shutil.copy2(QWENDEX, scripts / "qwendex")
+            shutil.copy2(QDEX, scripts / "qdex")
+            shutil.copy2(ROOT / "scripts" / "qwendex_cli.py", scripts / "qwendex_cli.py")
+            shutil.copytree(ROOT / "config", root / "config")
         state_db = work_root / "state" / "qwendex.sqlite"
         ledger_db = work_root / "state" / "qwendex_ledger.sqlite"
         results_root = work_root / "results" / "qwendex"
@@ -279,6 +285,11 @@ class QdexManagerAttachmentTests(unittest.TestCase):
 
                 common = {"session_id": "root-session", "turn_id": "root-turn", "cwd": repo}
                 prompt_rc, prompt = run_hook("UserPromptSubmit", {**common, "prompt": "Inspect status."})
+                runtime_source = Path(os.environ["QWENDEX_RUNTIME_SOURCE_TO_EDIT"])
+                runtime_source.write_text(
+                    runtime_source.read_text(encoding="utf-8") + "\\n",
+                    encoding="utf-8",
+                )
                 pre_rc, pre = run_hook(
                     "PreToolUse",
                     {
@@ -324,7 +335,7 @@ class QdexManagerAttachmentTests(unittest.TestCase):
         runtime.chmod(0o755)
         exports = {
             "QWENDEX_DEV_ROOT": str(dev_root),
-            "QWENDEX_ROOT": str(ROOT),
+            "QWENDEX_ROOT": str(source_root),
             "QWENDEX_STATE_DB": str(state_db),
             "QWENDEX_LEDGER_DB": str(ledger_db),
             "QWENDEX_RESULTS_ROOT": str(results_root),
@@ -343,19 +354,78 @@ class QdexManagerAttachmentTests(unittest.TestCase):
             "CODEX_HOME": str(codex_home),
             "QWENDEX_AGENT_USE": "Manager",
             "QWENDEX_MANAGER_TARGET_REPO": str(repo),
+            "QWENDEX_RUNTIME_SOURCE_TO_EDIT": str(source_scripts / "qwendex_cli.py"),
         }
-        self.run_qwendex(
+        install_args = [
+            str(source_scripts / "qwendex"),
             "agent",
             "hook-config",
             "--install",
             "--codex-home",
             str(codex_home),
             "--json",
+        ]
+        install = subprocess.run(
+            install_args,
+            cwd=source_root,
             env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=60,
         )
+        self.assertEqual(install.returncode, 0, install.stderr or install.stdout)
+        hooks_path = codex_home / "hooks.json"
+        hooks = json.loads(hooks_path.read_text(encoding="utf-8"))
+        stale_hooks = json.loads(json.dumps(hooks))
+        for entries in stale_hooks["hooks"].values():
+            for entry in entries:
+                for hook in entry["hooks"]:
+                    hook["command"] = hook["command"].replace(
+                        str(dev_scripts / "qwendex"),
+                        str(source_scripts / "qwendex"),
+                    )
+        hooks_path.write_text(json.dumps(stale_hooks), encoding="utf-8")
+        stale_verify = subprocess.run(
+            [
+                str(source_scripts / "qwendex"),
+                "agent",
+                "hook-config",
+                "--verify",
+                "--codex-home",
+                str(codex_home),
+                "--json",
+            ],
+            cwd=source_root,
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=60,
+        )
+        self.assertNotEqual(stale_verify.returncode, 0)
+        stale_status = json.loads(stale_verify.stdout)["data"]["hook_status"]
+        self.assertEqual(
+            set(stale_status["runtime_command_mismatch_events"]),
+            set(hooks["hooks"]),
+        )
+        install = subprocess.run(
+            install_args,
+            cwd=source_root,
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=60,
+        )
+        self.assertEqual(install.returncode, 0, install.stderr or install.stdout)
+        hooks = json.loads(hooks_path.read_text(encoding="utf-8"))
+        pre_tool_command = hooks["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+        self.assertIn(str(dev_scripts / "qwendex"), pre_tool_command)
+        self.assertNotIn(str(source_scripts / "qwendex"), pre_tool_command)
 
         result = subprocess.run(
-            [str(QDEX)],
+            [str(source_scripts / "qdex")],
             cwd=repo,
             env=env,
             text=True,

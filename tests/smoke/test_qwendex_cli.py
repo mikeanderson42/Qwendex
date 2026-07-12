@@ -190,13 +190,57 @@ def test_qwendex_parser_exposes_public_commands():
     assert parser.parse_args(["version"]).command == "version"
 
 
+def test_manager_runtime_identity_allows_in_place_qwendex_source_edits(tmp_path, monkeypatch):
+    qwendex = load_qwendex()
+    runtime_source = tmp_path / "qwendex_cli.py"
+    runtime_source.write_text("before managed edit\n", encoding="utf-8")
+    monkeypatch.setattr(qwendex, "__file__", str(runtime_source))
+
+    config = qwendex.deep_merge(
+        qwendex.DEFAULT_CONFIG,
+        {"state": {"db": str(tmp_path / "qwendex.sqlite")}},
+    )
+    state_identity, ledger_identity = qwendex.manager_store_identities(config)
+    runtime_identity = qwendex.manager_runtime_identity()
+    env = {
+        qwendex.MANAGER_STATE_DB_IDENTITY_ENV: state_identity,
+        qwendex.MANAGER_LEDGER_DB_IDENTITY_ENV: ledger_identity,
+        qwendex.MANAGER_RUNTIME_IDENTITY_ENV: runtime_identity,
+        qwendex.MANAGER_LAUNCH_KEY_ENV: "launch-key",
+        qwendex.MANAGER_LAUNCH_NONCE_ENV: "launch-nonce",
+    }
+    decision = {
+        "state_db_identity": state_identity,
+        "ledger_db_identity": ledger_identity,
+        "runtime_identity": runtime_identity,
+        "launch_key": "launch-key",
+        "launch_nonce": "launch-nonce",
+    }
+
+    runtime_source.write_text("after managed edit\n", encoding="utf-8")
+    reason, details = qwendex.manager_decision_static_mismatch(
+        config,
+        decision,
+        env=env,
+    )
+
+    assert reason == ""
+    assert all(details.values())
+    assert qwendex.manager_runtime_identity() == runtime_identity
+
+    other_runtime = tmp_path / "other_qwendex_cli.py"
+    other_runtime.write_text("different runtime location\n", encoding="utf-8")
+    monkeypatch.setattr(qwendex, "__file__", str(other_runtime))
+    assert qwendex.manager_runtime_identity() != runtime_identity
+
+
 def test_qwendex_version_and_config_are_in_sync():
     qwendex = load_qwendex()
     project_config = json.loads((ROOT / "config" / "qwendex" / "qwendex.json").read_text(encoding="utf-8"))
     sample_config = json.loads((ROOT / "config" / "qwendex" / "qwendex.sample.json").read_text(encoding="utf-8"))
     version = json_result("version", "--json")
 
-    assert qwendex.VERSION == "0.5.6"
+    assert qwendex.VERSION == "0.5.7"
     assert version["data"]["version"] == qwendex.VERSION
     assert project_config["version"] == qwendex.VERSION
     assert sample_config["version"] == qwendex.VERSION
@@ -1617,7 +1661,7 @@ def assert_same_root_supports_quoted_path(tmp_path, path_fragment):
 
     assert config["projects"] == {str(checkout): {"trust_level": "trusted"}}
     assert qwendex.returncode == 0, qwendex.stderr or qwendex.stdout
-    assert json.loads(qwendex.stdout)["data"]["version"] == "0.5.6"
+    assert json.loads(qwendex.stdout)["data"]["version"] == "0.5.7"
     assert qwendex_dev.returncode == 0, qwendex_dev.stderr or qwendex_dev.stdout
     assert sourced_env.returncode == 0, sourced_env.stderr or sourced_env.stdout
     assert sourced_env.stdout.strip() == str(checkout)

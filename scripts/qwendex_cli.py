@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.5.6"
+VERSION = "0.5.7"
 CONFIG_DIR = ROOT / "config" / "qwendex"
 DEFAULT_PROJECT_CONFIG = CONFIG_DIR / "qwendex.json"
 DEFAULT_USER_CONFIG = Path.home() / ".config" / "qwendex" / "config.json"
@@ -2072,7 +2072,16 @@ def path_digest_policy(path: Path) -> str:
 
 
 def manager_runtime_identity() -> str:
-    return "sha256:" + sha256_file(Path(__file__).resolve())
+    """Return the stable runtime-location binding for one Qdex launch.
+
+    Hooks are separate Python processes and Qwendex is a valid target of a
+    managed editing session. A content digest therefore changes during a
+    legitimate in-place source edit and would strand the attached session.
+    Bind the preflight instead to the resolved runtime location; the launch
+    PID/start ticks/nonce, state and ledger locations, Codex home, repository,
+    policy, and verified hooks remain independently fail-closed.
+    """
+    return path_digest_policy(Path(__file__).resolve())
 
 
 def manager_store_identities(config: Mapping[str, Any]) -> tuple[str, str]:
@@ -8346,8 +8355,23 @@ def shell_env_prefix(runtime_env: Mapping[str, str]) -> str:
     return "env " + " ".join(f"{key}={shlex.quote(str(value))}" for key, value in runtime_env.items())
 
 
+def managed_agent_hook_command_base(
+    command_base: str,
+    runtime_env: Mapping[str, str] | None,
+) -> str:
+    explicit = str(command_base or "").strip()
+    if explicit:
+        return explicit
+    dev_root = str((runtime_env or {}).get("QWENDEX_DEV_ROOT") or "").strip()
+    if dev_root:
+        dev_command = Path(dev_root).expanduser() / "scripts" / "qwendex"
+        if dev_command.is_file():
+            return str(dev_command)
+    return str(ROOT / "scripts" / "qwendex")
+
+
 def managed_agent_hook_config(command_base: str = "", runtime_env: Mapping[str, str] | None = None) -> dict[str, Any]:
-    base = str(command_base or ROOT / "scripts" / "qwendex").strip()
+    base = managed_agent_hook_command_base(command_base, runtime_env)
     prefix = shell_env_prefix(runtime_env or {})
     command_base_text = f"{prefix} {shlex.quote(base)}" if prefix else shlex.quote(base)
     hooks: dict[str, list[dict[str, Any]]] = {}
@@ -8469,6 +8493,34 @@ def managed_hook_command_env(command: str) -> dict[str, str]:
     return runtime_env
 
 
+def managed_hook_command_base(command: str) -> str:
+    try:
+        tokens = shlex.split(command, posix=True)
+    except ValueError:
+        return ""
+    if not tokens:
+        return ""
+    index = 0
+    if tokens[0] == "env":
+        index = 1
+        while index < len(tokens):
+            token = tokens[index]
+            if "=" not in token or token.startswith("-"):
+                break
+            key, _value = token.split("=", 1)
+            if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key):
+                break
+            index += 1
+    return tokens[index] if index < len(tokens) else ""
+
+
+def managed_hook_uses_command_base(command: str, expected_base: str) -> bool:
+    actual_base = managed_hook_command_base(command)
+    if not actual_base or not expected_base:
+        return False
+    return Path(actual_base).expanduser().resolve(strict=False) == Path(expected_base).expanduser().resolve(strict=False)
+
+
 def hook_status_for_codex_home(
     codex_home: Path,
     *,
@@ -8533,6 +8585,19 @@ def hook_status_for_codex_home(
         for event in managed_events
         if not any(runtime_env.get("QWENDEX_STATE_DB") for runtime_env in runtime_env_by_event.get(event, []))
     )
+    expected_runtime_env = managed_hook_runtime_env(codex_home=codex_home)
+    expected_runtime_base = managed_agent_hook_command_base("", expected_runtime_env)
+    expected_dev_root = str(expected_runtime_env.get("QWENDEX_DEV_ROOT") or "").strip()
+    runtime_command_mismatch_events = sorted(
+        event
+        for event in managed_events
+        if expected_dev_root
+        and not any(
+            managed_hook_uses_command_base(command, expected_runtime_base)
+            for command in commands.get(event, [])
+            if is_codex_compatible_agent_hook_command(command)
+        )
+    )
     configured = target.is_file() and hook_source_count > 0
     verified = (
         configured
@@ -8540,6 +8605,7 @@ def hook_status_for_codex_home(
         and not missing_events
         and not incompatible_events
         and not missing_runtime_env_events
+        and not runtime_command_mismatch_events
         and not parse_error
     )
     return {
@@ -8555,6 +8621,7 @@ def hook_status_for_codex_home(
         "missing_events": missing_events,
         "incompatible_events": incompatible_events,
         "missing_runtime_env_events": missing_runtime_env_events,
+        "runtime_command_mismatch_events": runtime_command_mismatch_events,
         "runtime_env_keys_by_event": runtime_env_keys_by_event,
         "runtime_env_state_db_by_event": runtime_env_state_db_by_event,
         "required_for_write": required_for_write,
@@ -10542,6 +10609,8 @@ def command_agent(args: argparse.Namespace, config: dict[str, Any]) -> dict[str,
                 errors=[] if status["verified"] else [
                     f"missing managed hook events: {', '.join(status['missing_events']) or 'none detected'}",
                     f"missing runtime env events: {', '.join(status.get('missing_runtime_env_events', [])) or 'none detected'}",
+                    "managed hook runtime mismatch events: "
+                    f"{', '.join(status.get('runtime_command_mismatch_events', [])) or 'none detected'}",
                 ],
                 data={
                     "hook_status": status,
