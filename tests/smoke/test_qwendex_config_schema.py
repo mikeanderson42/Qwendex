@@ -73,6 +73,33 @@ def test_validator_blocks_config_that_violates_published_schema(tmp_path: Path) 
     assert any("fallback_seat" in item["path"] for item in payload["errors"])
 
 
+def test_optional_performance_config_keeps_older_v1_documents_valid(tmp_path: Path) -> None:
+    repo = isolated_surface(tmp_path)
+    config_path = repo / "config" / "qwendex" / "qwendex.json"
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    config.pop("performance")
+    write_json(config_path, config)
+
+    result, payload = run_validator(repo)
+
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert payload["status"] == "pass"
+
+
+def test_validator_blocks_unbounded_or_raw_performance_capture(tmp_path: Path) -> None:
+    repo = isolated_surface(tmp_path)
+    config_path = repo / "config" / "qwendex" / "qwendex.json"
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    config["performance"]["capture"] = "raw"
+    write_json(config_path, config)
+
+    result, payload = run_validator(repo)
+
+    assert result.returncode == 1
+    assert "config_schema_violation" in error_codes(payload)
+    assert any("performance/capture" in item["path"] for item in payload["errors"])
+
+
 @pytest.mark.parametrize(
     ("keys", "value", "needle"),
     [

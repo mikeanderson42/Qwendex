@@ -17,6 +17,30 @@ QWENDEX = ROOT / "scripts" / "qwendex"
 QWENDEX_MODULE = ROOT / "scripts" / "qwendex_cli.py"
 
 
+_AMBIENT_QWENDEX_RUNTIME_KEYS = {
+    "CODEX_AGENT_USE",
+    "QWENDEX_EFFECTIVE_AGENT_USE",
+    "QWENDEX_KAVEMAN_ENABLED",
+    "QWENDEX_KAVEMAN_DIRECTIVE",
+    "QWENDEX_LOCAL_SUBAGENTS",
+    "QWENDEX_ORCHESTRATION_MODE",
+    "QWENDEX_OUTPUT_POLICY",
+    "QWENDEX_RUN_ID",
+}
+
+
+def isolated_qwendex_runtime_env(overrides=None):
+    """Keep a parent managed Qdex launch out of direct CLI fixtures."""
+    environment = dict(os.environ)
+    for key in tuple(environment):
+        if key in _AMBIENT_QWENDEX_RUNTIME_KEYS or key.startswith(
+            ("QWENDEX_AGENT_", "QWENDEX_MANAGER_")
+        ):
+            environment.pop(key)
+    environment.update(overrides or {})
+    return environment
+
+
 def load_qwendex():
     spec = importlib.util.spec_from_file_location("qwendex_cli_test", QWENDEX_MODULE)
     assert spec is not None
@@ -42,7 +66,7 @@ def run_qwendex(*args, env=None):
     result = subprocess.run(
         [str(QWENDEX), *args],
         cwd=ROOT,
-        env={**os.environ, **(env or {})},
+        env=isolated_qwendex_runtime_env(env),
         text=True,
         capture_output=True,
         check=False,
@@ -62,7 +86,7 @@ def run_qwendex_concurrently(argument_sets, *, env):
         subprocess.Popen(
             [sys.executable, "-c", worker, str(QWENDEX), *arguments],
             cwd=ROOT,
-            env={**os.environ, **env},
+            env=isolated_qwendex_runtime_env(env),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -179,6 +203,11 @@ def test_qwendex_parser_exposes_public_commands():
     assert parser.parse_args(["codex-patch", "preflight", "--codex-bin", "codex"]).command == "codex-patch"
     assert parser.parse_args(["codex-patch", "apply", "--source", "/tmp/codex", "--dry-run"]).dry_run is True
     assert parser.parse_args(["estimate", "--prompt", "Fix a typo"]).command == "estimate"
+    assert parser.parse_args(["performance", "status"]).command == "performance"
+    assert parser.parse_args(["performance", "summary", "--repo-root", "/tmp/repo", "--since-days", "7"]).since_days == 7
+    assert parser.parse_args(["performance", "runs", "--limit", "5"]).limit == 5
+    assert parser.parse_args(["performance", "purge", "--approve"]).approve is True
+    assert parser.parse_args(["performance", "benchmark", "--suite", "exploration"]).suite == "exploration"
     assert parser.parse_args(["llmstack", "check"]).command == "llmstack"
     assert parser.parse_args(["llmstack", "check"]).action == "check"
     assert parser.parse_args(["llmstack", "doctor"]).action == "doctor"
@@ -881,6 +910,9 @@ def test_qwendex_dev_env_public_surface_is_visible_and_isolated():
     assert "QWENDEX_DEV_ROOT" in text
     assert "$HOME/qwendex-dev" in text
     assert "WORK_ROOT=\"$DEV_ROOT/.qwendex-dev\"" in text
+    assert 'PERFORMANCE_DB="$WORK_ROOT/state/qwendex-performance.sqlite"' in text
+    assert "QWENDEX_PERFORMANCE_DB" in text
+    assert "performance_db_under_work_root" in text
     assert "INSTALL_DEPS_JSON" in text
     assert "qwendex_install_deps" in text
     assert "install_deps.json" in text
@@ -1312,6 +1344,8 @@ def test_qwendex_dev_env_same_root_writes_one_parseable_project_table(tmp_path):
     config_path = checkout / ".qwendex-dev" / "codex_home" / "config.toml"
     config_text = config_path.read_text(encoding="utf-8")
     config = tomllib.loads(config_text)
+    assert config["model"] == "gpt-5.6-terra"
+    assert config["model_reasoning_effort"] == "max"
     assert config_text.count(f'[projects."{checkout}"]') == 1
     assert config["projects"] == {str(checkout): {"trust_level": "trusted"}}
 
@@ -1797,6 +1831,7 @@ def test_qdex_manager_preflight_blocks_and_exports_env_before_launch(tmp_path):
     fake_bin = tmp_path / "bin"
     fake_codex = fake_bin / "codex"
     args_file = tmp_path / "qdex-codex-call.json"
+    version_run_id_file = tmp_path / "qdex-version-run-id.txt"
 
     fake_bin.mkdir()
     fake_home.mkdir()
@@ -1808,6 +1843,9 @@ import sys
 from pathlib import Path
 
 if sys.argv[1:] == ["--version"]:
+    version_run_id_path = os.environ.get("QWENDEX_FAKE_CODEX_VERSION_RUN_ID")
+    if version_run_id_path:
+        Path(version_run_id_path).write_text(os.environ.get("QWENDEX_RUN_ID", ""), encoding="utf-8")
     print("codex-cli 0.143.0")
     raise SystemExit(0)
 
@@ -1825,6 +1863,7 @@ Path(os.environ["QWENDEX_FAKE_CODEX_ARGS"]).write_text(json.dumps({
     "effective_agent_use": os.environ.get("QWENDEX_EFFECTIVE_AGENT_USE", ""),
     "agent_policy_hash": os.environ.get("QWENDEX_AGENT_POLICY_HASH", ""),
     "agent_policy_source": os.environ.get("QWENDEX_AGENT_POLICY_SOURCE", ""),
+    "run_id": os.environ.get("QWENDEX_RUN_ID", ""),
 }), encoding="utf-8")
 """,
         encoding="utf-8",
@@ -1843,6 +1882,7 @@ Path(os.environ["QWENDEX_FAKE_CODEX_ARGS"]).write_text(json.dumps({
         "QWENDEX_MAIN_CODEX_BIN": str(fake_codex),
         "QWENDEX_DEV_CODEX_BIN": str(fake_codex),
         "QWENDEX_FAKE_CODEX_ARGS": str(args_file),
+        "QWENDEX_FAKE_CODEX_VERSION_RUN_ID": str(version_run_id_file),
     }
     for key in (
         "CODEX_HOME",
@@ -1996,6 +2036,7 @@ Path(os.environ["QWENDEX_FAKE_CODEX_ARGS"]).write_text(json.dumps({
     assert call["effective_agent_use"] == "Manager"
     assert call["agent_policy_hash"] == call["manager_policy_hash"]
     assert call["agent_policy_source"] == "manager-mode"
+    assert re.fullmatch(r"[0-9a-f]{32}", call["run_id"])
 
     compatible_env = {
         **env,
@@ -2015,6 +2056,8 @@ Path(os.environ["QWENDEX_FAKE_CODEX_ARGS"]).write_text(json.dumps({
     assert json_exec.returncode == 0, json_exec.stderr or json_exec.stdout
     json_call = json.loads(args_file.read_text(encoding="utf-8"))
     assert json_call["args"][-3:] == ["exec", "--json", "report status"]
+    assert re.fullmatch(r"[0-9a-f]{32}", json_call["run_id"])
+    assert json_call["run_id"] != call["run_id"]
 
     args_file.unlink()
     native_cd = subprocess.run(
@@ -2144,6 +2187,7 @@ Path(os.environ["QWENDEX_FAKE_CODEX_ARGS"]).write_text(json.dumps({
     assert version_result.stdout.strip() == "codex-cli 0.143.0"
     assert version_result.stderr == ""
     assert not args_file.exists()
+    assert version_run_id_file.read_text(encoding="utf-8") == ""
 
 
 def test_qwendex_codex_status_tracks_manager_state_and_writes_surface_file(tmp_path):

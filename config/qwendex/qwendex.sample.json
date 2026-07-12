@@ -62,6 +62,12 @@
   "state": {
     "db": "~/.local/state/qwendex/qwendex.sqlite"
   },
+  "performance": {
+    "capture": "off",
+    "retention_days": 14,
+    "max_events": 50000,
+    "query_fingerprints": true
+  },
   "eval": {
     "default_case": "all"
   },

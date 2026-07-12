@@ -331,12 +331,16 @@ MANAGER_DECISION_ATTACH_WINDOW_MINUTES = 24 * 60
 MANAGED_HOOK_RUNTIME_ENV_KEYS = (
     "CODEX_HOME",
     "QWENDEX_STATE_DB",
+    "QWENDEX_PERFORMANCE_DB",
     "QWENDEX_RESULTS_ROOT",
     "QWENDEX_LEDGER_DB",
     "QWENDEX_CODEX_STATUS_FILE",
     "QWENDEX_DEV_ROOT",
     "QWENDEX_ROOT",
 )
+PERFORMANCE_DB_ENV = "QWENDEX_PERFORMANCE_DB"
+DEFAULT_PERFORMANCE_DB = Path.home() / ".local" / "state" / "qwendex" / "qwendex-performance.sqlite"
+PERFORMANCE_CAPTURE_MODES = {"off", "metadata"}
 RELEASE_APPROVAL_ENV = "QWENDEX_RELEASE_APPROVED"
 GH_RELEASE_MUTATIONS = {"create", "new", "upload", "edit", "delete", "delete-asset"}
 GH_API_MUTATION_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
@@ -653,6 +657,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "state": {
         "db": "~/.local/state/qwendex/qwendex.sqlite",
+    },
+    "performance": {
+        "capture": "off",
+        "retention_days": 14,
+        "max_events": 50000,
+        "query_fingerprints": True,
     },
     "eval": {
         "default_case": "all",
@@ -1226,6 +1236,7 @@ def qwendex_dev_paths_from_codex_home(env: Mapping[str, str] | None = None) -> d
         "results_root": str(work_root / "results" / "qwendex"),
         "ledger_db": str(state_root / "qwendex_ledger.sqlite"),
         "state_db": str(state_root / "qwendex.sqlite"),
+        "performance_db": str(state_root / "qwendex-performance.sqlite"),
     }
 
 
@@ -1244,6 +1255,9 @@ def env_config(env: Mapping[str, str] | None = None) -> dict[str, Any]:
     state_db = source.get("QWENDEX_STATE_DB") or dev_paths.get("state_db")
     if state_db:
         data["state"] = {"db": state_db}
+    performance_capture = str(source.get("QWENDEX_PERFORMANCE_CAPTURE") or "").strip()
+    if performance_capture:
+        data["performance"] = {"capture": performance_capture}
     if source.get("QWENDEX_LEARNING_MODE"):
         data["learning"] = {"mode": source["QWENDEX_LEARNING_MODE"]}
     orchestration: dict[str, Any] = {}
@@ -1347,6 +1361,39 @@ def validate_qwendex_config(config: Mapping[str, Any]) -> list[str]:
     state_db = config.get("state", {}).get("db")
     if not isinstance(state_db, str) or not state_db:
         failures.append(f"invalid state.db: {state_db}")
+    performance = config.get("performance")
+    if performance is None:
+        # `performance` is optional in config v1. The loader merges its
+        # default-safe values before normal command execution, while this
+        # validator also remains usable against an older raw v1 document.
+        pass
+    elif not isinstance(performance, Mapping):
+        failures.append("invalid performance")
+    else:
+        capture = performance.get("capture")
+        if capture not in PERFORMANCE_CAPTURE_MODES:
+            failures.append(f"invalid performance.capture: {capture}")
+        retention_days = performance.get("retention_days")
+        if (
+            not isinstance(retention_days, int)
+            or isinstance(retention_days, bool)
+            or retention_days < 1
+            or retention_days > 3650
+        ):
+            failures.append(f"invalid performance.retention_days: {retention_days}")
+        max_events = performance.get("max_events")
+        if (
+            not isinstance(max_events, int)
+            or isinstance(max_events, bool)
+            or max_events < 1
+            or max_events > 5_000_000
+        ):
+            failures.append(f"invalid performance.max_events: {max_events}")
+        if not isinstance(performance.get("query_fingerprints"), bool):
+            failures.append(
+                "invalid performance.query_fingerprints: "
+                f"{performance.get('query_fingerprints')}"
+            )
     if config.get("learning", {}).get("mode") not in {"stage_only", "disabled"}:
         failures.append(f"invalid learning.mode: {config.get('learning', {}).get('mode')}")
     if config.get("learning", {}).get("default_backend") not in {"mock", "codex"}:
@@ -1550,6 +1597,37 @@ def state_db_path(config: Mapping[str, Any]) -> Path:
     raw = str(config.get("state", {}).get("db") or DEFAULT_CONFIG["state"]["db"])
     path = Path(raw).expanduser()
     return path if path.is_absolute() else ROOT / path
+
+
+def performance_config(config: Mapping[str, Any]) -> dict[str, Any]:
+    values = config.get("performance", {})
+    return {
+        "capture": str(values.get("capture") or "off"),
+        "retention_days": int(values.get("retention_days") or 14),
+        "max_events": int(values.get("max_events") or 50_000),
+        "query_fingerprints": bool(values.get("query_fingerprints", True)),
+    }
+
+
+def performance_db_path(config: Mapping[str, Any], *, env: Mapping[str, str] | None = None) -> Path:
+    """Resolve the isolated local telemetry store without sharing Manager state."""
+    _ = config
+    source = os.environ if env is None else env
+    raw = str(source.get(PERFORMANCE_DB_ENV) or "").strip()
+    if not raw:
+        raw = qwendex_dev_paths_from_codex_home(source).get("performance_db") or str(DEFAULT_PERFORMANCE_DB)
+    path = Path(raw).expanduser()
+    return path if path.is_absolute() else ROOT / path
+
+
+def performance_repository_scope_digest(
+    repo: Path | str | None = None,
+    *,
+    event: Mapping[str, Any] | None = None,
+    env: Mapping[str, str] | None = None,
+) -> str:
+    root = canonical_manager_repo_root(repo, event=event, env=env)
+    return "sha256:" + sha256_text(root)
 
 
 def routing_policy(config: Mapping[str, Any]) -> dict[str, Any]:
@@ -6242,6 +6320,90 @@ def command_estimate(args: argparse.Namespace, config: dict[str, Any]) -> dict[s
     )
 
 
+def command_performance(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, Any]:
+    """Expose local-only aggregate exploration telemetry without raw-event export."""
+    action = str(getattr(args, "action", "") or "status")
+    settings = performance_config(config)
+    module = performance_module()
+    database = performance_db_path(config)
+    if action == "status":
+        return stable_envelope(
+            command="performance",
+            status="pass",
+            summary="Loaded local Qwendex performance telemetry status.",
+            data={
+                "capture": settings["capture"],
+                "retention_days": settings["retention_days"],
+                "max_events": settings["max_events"],
+                "query_fingerprints": settings["query_fingerprints"],
+                "telemetry": module.status(database),
+            },
+        )
+    if action == "summary":
+        repo_root = str(getattr(args, "repo_root", "") or "").strip() or canonical_manager_repo_root()
+        repository_scope_digest = performance_repository_scope_digest(repo_root)
+        payload = module.summary(
+            database,
+            retention_days=settings["retention_days"],
+            max_events=settings["max_events"],
+            repository_scope_digest=repository_scope_digest,
+            since_days=max(0, int(getattr(args, "since_days", 0) or 0)),
+        )
+        return stable_envelope(
+            command="performance",
+            status="pass",
+            summary="Built deterministic local Qwendex performance summary.",
+            data={"summary": payload, "capture": settings["capture"]},
+        )
+    if action == "runs":
+        payload = module.runs(
+            database,
+            limit=max(1, min(100, int(getattr(args, "limit", 20) or 20))),
+            repository_scope_digest=performance_repository_scope_digest(),
+        )
+        return stable_envelope(
+            command="performance",
+            status="pass",
+            summary=f"Loaded {len(payload)} local Qwendex performance run summaries.",
+            data={"runs": payload, "capture": settings["capture"]},
+        )
+    if action == "purge":
+        if not bool(getattr(args, "approve", False)):
+            return stable_envelope(
+                command="performance",
+                status="blocked",
+                summary="Purging local performance telemetry requires --approve.",
+                errors=["explicit approval required"],
+            )
+        return stable_envelope(
+            command="performance",
+            status="pass",
+            summary="Purged local Qwendex performance telemetry.",
+            data={"purge": module.purge(database)},
+        )
+    if action == "benchmark":
+        if str(getattr(args, "suite", "") or "") != "exploration":
+            return stable_envelope(
+                command="performance",
+                status="blocked",
+                summary="Unsupported Qwendex performance benchmark suite.",
+                errors=[str(getattr(args, "suite", "") or "missing suite")],
+            )
+        payload = module.benchmark()
+        return stable_envelope(
+            command="performance",
+            status=str(payload.get("status") or "blocked"),
+            summary="Ran isolated Qwendex exploration telemetry benchmark.",
+            data={"benchmark": payload},
+        )
+    return stable_envelope(
+        command="performance",
+        status="blocked",
+        summary=f"Unknown Qwendex performance action: {action}",
+        errors=[action],
+    )
+
+
 def parse_timeout_ms(value: str, default_ms: int) -> int:
     text = str(value or "").strip().lower()
     if not text:
@@ -6919,6 +7081,318 @@ def event_is_write_attempt(tool_lower: str, command: str) -> bool:
         or segment_has_write_command(tokens)
         or any(segment_has_write_command(segment) for segment in command_segments(command))
     )
+
+
+def _performance_tool_tokens(event: Mapping[str, Any]) -> list[str]:
+    command = event_command_text(event)
+    for segment in command_segments(command):
+        tokens = strip_command_prefixes(segment)
+        if tokens:
+            return tokens
+    return []
+
+
+def _performance_event_is_write(event: Mapping[str, Any]) -> bool:
+    """Classify telemetry without weakening the stricter hook safety gate.
+
+    A shell-capable tool is conservatively write-capable for Manager safety,
+    even when its command is a read-only search. Telemetry instead classifies
+    its concrete command so `rg`, `git status`, and validation commands remain
+    measurable in their real families. Unknown shell syntax stays `other`.
+    """
+    tool = event_tool_name(event)
+    command = event_command_text(event)
+    if normalized_event_tool_name(tool) in WRITE_TOOL_NAMES:
+        return True
+    if event_uses_managed_shell(tool, command):
+        tokens = command_tokens(command)
+        return bool(
+            command_has_shell_redirection(command)
+            or segment_has_write_command(tokens)
+            or any(segment_has_write_command(segment) for segment in command_segments(command))
+        )
+    return event_tool_is_mutating(tool)
+
+
+def _performance_tool_family(event: Mapping[str, Any]) -> str:
+    tool = event_tool_name(event)
+    if _performance_event_is_write(event):
+        return "edit"
+    tokens = _performance_tool_tokens(event)
+    executable = command_name(tokens[0]).lower() if tokens else ""
+    if executable in {"rg", "grep", "ag", "ack", "find", "fd", "fdfind", "locate", "git-grep"}:
+        return "search"
+    if executable == "git" and len(tokens) > 1 and tokens[1] in {"grep", "ls-files"}:
+        return "search"
+    if executable in {"cat", "bat", "sed", "head", "tail", "less", "more", "awk"}:
+        return "read"
+    if executable in {"pytest", "ruff", "mypy", "pyright", "shellcheck", "flake8", "cargo", "npm", "pnpm", "yarn"}:
+        return "validation"
+    if executable == "python3" and any("py_compile" in token for token in tokens[1:]):
+        return "validation"
+    if executable == "bash" and "-n" in tokens[1:]:
+        return "validation"
+    if executable in {"qwendex", "qwendex_cli.py"} and any(
+        token in {"check", "doctor", "eval", "verify"} for token in tokens[1:]
+    ):
+        return "validation"
+    if event_tool_is_collaboration_lifecycle(tool):
+        return "collaboration"
+    normalized = normalized_event_tool_name(tool)
+    if normalized in {"read", "open", "read_mcp_resource", "screenshot"}:
+        return "read"
+    if normalized in {"search", "find"}:
+        return "search"
+    return "other"
+
+
+def _performance_query_details(event: Mapping[str, Any], tool_family: str) -> tuple[str, str]:
+    if tool_family != "search":
+        return "not_applicable", ""
+    tokens = _performance_tool_tokens(event)
+    executable = command_name(tokens[0]).lower() if tokens else ""
+    lowered = {token.lower() for token in tokens[1:]}
+    if executable in {"find", "fd", "fdfind", "locate"} or "--files" in lowered or "--files-with-matches" in lowered:
+        query_class = "path_lookup"
+    elif executable in {"rg", "grep", "ag", "ack", "git-grep"} or executable == "git":
+        query_class = "literal" if {"-f", "--fixed-strings", "--fixed-string"} & lowered else "regex"
+    else:
+        query_class = "unknown"
+    tool_input = event.get("tool_input")
+    if isinstance(tool_input, Mapping):
+        for key in ("query", "pattern", "search_query", "needle", "term"):
+            value = tool_input.get(key)
+            if isinstance(value, str) and value:
+                return query_class, value
+    option_values = {
+        "-a", "-b", "-c", "-e", "-g", "-m", "-t", "-tadd", "--after-context",
+        "--before-context", "--context", "--glob", "--max-count", "--regexp", "--type",
+        "--type-add", "--pre", "--pre-glob",
+    }
+    index = 1
+    while index < len(tokens):
+        token = tokens[index]
+        if token == "--":
+            return query_class, tokens[index + 1] if index + 1 < len(tokens) else ""
+        if token in {"-e", "--regexp"}:
+            return query_class, tokens[index + 1] if index + 1 < len(tokens) else ""
+        if token in option_values:
+            index += 2
+            continue
+        if token.startswith("-"):
+            index += 1
+            continue
+        return query_class, token
+    return query_class, ""
+
+
+def _performance_input_size_bucket(event: Mapping[str, Any], query_material: str) -> str:
+    size = len(event_command_text(event).encode("utf-8", "replace")) + len(query_material.encode("utf-8", "replace"))
+    if size <= 0:
+        return "none"
+    if size <= 32:
+        return "1-32"
+    if size <= 128:
+        return "33-128"
+    if size <= 512:
+        return "129-512"
+    return "513+"
+
+
+def _performance_output_value(event: Mapping[str, Any]) -> Any:
+    for key in ("updatedMCPToolOutput", "tool_output", "output", "result", "response"):
+        if key in event:
+            return event.get(key)
+    tool_result = event.get("tool_result")
+    return tool_result if tool_result is not None else None
+
+
+def _performance_value_bytes(value: Any, *, depth: int = 0) -> int:
+    if depth > 8 or value is None:
+        return 0
+    if isinstance(value, bytes):
+        return len(value)
+    if isinstance(value, str):
+        return len(value.encode("utf-8", "replace"))
+    if isinstance(value, Mapping):
+        return sum(
+            len(str(key).encode("utf-8", "replace")) + _performance_value_bytes(item, depth=depth + 1)
+            for key, item in value.items()
+        )
+    if isinstance(value, (list, tuple)):
+        return sum(_performance_value_bytes(item, depth=depth + 1) for item in value)
+    return len(str(value).encode("utf-8", "replace"))
+
+
+def _performance_result_count(value: Any) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, Mapping):
+        for key in ("results", "items", "matches"):
+            nested = value.get(key)
+            if isinstance(nested, (list, tuple)):
+                return len(nested)
+        return None
+    if isinstance(value, (list, tuple)):
+        return len(value)
+    if isinstance(value, str):
+        return len(value.splitlines()) if value else 0
+    return None
+
+
+def _performance_success(event: Mapping[str, Any]) -> bool | None:
+    for key in ("success", "ok"):
+        value = event.get(key)
+        if isinstance(value, bool):
+            return value
+    status = str(event.get("status") or "").strip().lower()
+    if status in {"success", "completed", "pass", "passed", "ok"}:
+        return True
+    if status in {"error", "failed", "fail", "blocked", "cancelled", "canceled"}:
+        return False
+    return None
+
+
+def _performance_truncated(event: Mapping[str, Any]) -> bool | None:
+    for key in ("truncated", "is_truncated", "output_truncated"):
+        value = event.get(key)
+        if isinstance(value, bool):
+            return value
+    return None
+
+
+def _performance_scope_class(event: Mapping[str, Any]) -> str:
+    cwd = str(event.get("cwd") or "").strip()
+    if not cwd:
+        return "unspecified"
+    root = Path(canonical_manager_repo_root(event=event))
+    candidate = Path(cwd).expanduser().resolve(strict=False)
+    try:
+        relative = candidate.relative_to(root)
+    except ValueError:
+        return "outside_repo"
+    return "repository_root" if not relative.parts else "known_subtree"
+
+
+def _performance_agent_role(event: Mapping[str, Any]) -> str:
+    if event_is_codex_root(event):
+        return "root"
+    if event_is_codex_subagent(event) or event_agent_id(event):
+        return "worker"
+    return "unknown"
+
+
+def _performance_material(event: Mapping[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = event.get(key)
+        if value not in (None, ""):
+            return str(value)
+    return ""
+
+
+def _performance_run_material(event: Mapping[str, Any]) -> str:
+    return str(
+        os.environ.get("QWENDEX_RUN_ID")
+        or _performance_material(event, "session_id", "run_id", "manager_session_id")
+        or os.environ.get("QWENDEX_MANAGER_SESSION_ID")
+        or make_id("performance-run")
+    )
+
+
+def _performance_event_key_material(event: Mapping[str, Any], canonical: str) -> str:
+    material = _performance_material(event, "tool_use_id", "tool_call_id", "event_id", "id")
+    return material or f"{canonical}:{make_id('performance-event')}"
+
+
+_PERFORMANCE_MODULE: Any | None = None
+
+
+def performance_module() -> Any:
+    global _PERFORMANCE_MODULE
+    if _PERFORMANCE_MODULE is None:
+        _PERFORMANCE_MODULE = script_module("qwendex_performance")
+    return _PERFORMANCE_MODULE
+
+
+def capture_performance_hook_event(
+    config: Mapping[str, Any],
+    *,
+    event_name: str,
+    event: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Record only normalized hook metadata; capture failures never affect hooks."""
+    settings = performance_config(config)
+    if settings["capture"] != "metadata":
+        return {"enabled": False, "capture": settings["capture"]}
+    canonical = event_name or str(event.get("hookEventName") or event.get("event") or "")
+    lifecycle = {
+        "SessionStart": ("startup", "startup", "startup_observation", "startup"),
+        "UserPromptSubmit": ("lifecycle", "session", "prompt_submit", "other"),
+        "SubagentStart": ("lifecycle", "subagent", "subagent_start", "collaboration"),
+        "SubagentStop": ("lifecycle", "subagent", "subagent_stop", "collaboration"),
+        "Stop": ("stop", "stop", "run_stop", "other"),
+        "PreCompact": ("lifecycle", "compaction", "context_pressure", "context"),
+        "PostCompact": ("lifecycle", "compaction", "context_pressure", "context"),
+    }
+    if canonical == "PreToolUse":
+        action, phase, event_kind = "tool_start", "tool", "tool_call"
+        tool_family = _performance_tool_family(event)
+    elif canonical == "PostToolUse":
+        action, phase, event_kind = "tool_finish", "tool", "tool_call"
+        tool_family = _performance_tool_family(event)
+    elif canonical in lifecycle:
+        action, phase, event_kind, tool_family = lifecycle[canonical]
+    else:
+        return {"enabled": True, "capture": "metadata", "captured": False, "reason": "unsupported_hook_event"}
+    query_class, query_material = _performance_query_details(event, tool_family)
+    record: dict[str, Any] = {
+        "action": action,
+        "repository_scope_digest": performance_repository_scope_digest(event=event),
+        "run_material": _performance_run_material(event),
+        "manager_launch_material": (
+            os.environ.get("QWENDEX_MANAGER_LEDGER_ID")
+            or _performance_material(event, "manager_ledger_id", "ledger_id", "launch_ledger_id")
+        ),
+        "turn_material": (
+            _performance_material(event, "turn_id", "agent_task_id", "session_id")
+            or os.environ.get("QWENDEX_MANAGER_SESSION_ID")
+        ),
+        "event_key_material": _performance_event_key_material(event, canonical),
+        "agent_role": _performance_agent_role(event),
+        "phase": phase,
+        "event_kind": event_kind,
+        "tool_family": tool_family,
+        "query_class": query_class,
+        "scope_class": _performance_scope_class(event),
+        "input_size_bucket": _performance_input_size_bucket(event, query_material),
+        "query_material": query_material,
+        "query_fingerprints": settings["query_fingerprints"],
+    }
+    if canonical == "PostToolUse":
+        output = _performance_output_value(event)
+        record.update({
+            "completed_at": utc_now(),
+            "output_bytes": _performance_value_bytes(output),
+            "result_count": _performance_result_count(output),
+            "success": _performance_success(event),
+            "truncated": _performance_truncated(event),
+        })
+    elif canonical == "SessionStart":
+        duration = event.get("duration_ms")
+        if isinstance(duration, int | float) and not isinstance(duration, bool):
+            record["duration_ms"] = float(duration)
+    try:
+        result = performance_module().record_event(performance_db_path(config), record)
+    except Exception:
+        return {"enabled": True, "capture": "metadata", "captured": False, "reason": "instrumentation_unavailable"}
+    return {
+        "enabled": True,
+        "capture": "metadata",
+        "captured": bool(result.get("captured")),
+        "matched_pre_event": bool(result.get("matched_pre_event")),
+        "instrumentation_duration_ms": result.get("instrumentation_duration_ms"),
+        "reason": result.get("reason", ""),
+    }
 
 
 def command_tokens(command: str) -> list[str]:
@@ -8329,6 +8803,9 @@ def managed_hook_runtime_env(
     state_db = str(source.get("QWENDEX_STATE_DB") or dev_paths.get("state_db") or "").strip()
     if state_db:
         values["QWENDEX_STATE_DB"] = state_db
+    performance_db = str(source.get(PERFORMANCE_DB_ENV) or dev_paths.get("performance_db") or "").strip()
+    if performance_db:
+        values[PERFORMANCE_DB_ENV] = performance_db
     results_root = str(source.get("QWENDEX_RESULTS_ROOT") or dev_paths.get("results_root") or "").strip()
     if results_root:
         values["QWENDEX_RESULTS_ROOT"] = results_root
@@ -10562,13 +11039,33 @@ def command_agent(args: argparse.Namespace, config: dict[str, Any]) -> dict[str,
         return stable_envelope(command="agent", status="blocked", summary="Invalid Qwendex agent policy.", errors=list(agent_policy["errors"]), data={"agent_policy": agent_policy})
     if action == "hook":
         event = read_hook_event(args)
+        hook_event_name = args.target or str(event.get("hookEventName") or event.get("event") or "")
         status, hook_result, extra = evaluate_agent_hook(
             config,
-            event_name=args.target or str(event.get("hookEventName") or event.get("event") or ""),
+            event_name=hook_event_name,
             event=event,
             agent_policy=agent_policy,
         )
-        data = {"hook_result": hook_result, "event": event, "agent_policy": agent_policy, **extra}
+        if status == "blocked":
+            performance_capture = {
+                "enabled": performance_config(config)["capture"] == "metadata",
+                "capture": performance_config(config)["capture"],
+                "captured": False,
+                "reason": "hook_blocked",
+            }
+        else:
+            performance_capture = capture_performance_hook_event(
+                config,
+                event_name=hook_event_name,
+                event=event,
+            )
+        data = {
+            "hook_result": hook_result,
+            "event": event,
+            "agent_policy": agent_policy,
+            "performance_capture": performance_capture,
+            **extra,
+        }
         if getattr(args, "codex_hook_output", False):
             data["codex_hook_output"] = codex_hook_output(
                 args.target or str(event.get("hookEventName") or event.get("event") or ""),
@@ -12042,6 +12539,24 @@ def command_line() -> argparse.ArgumentParser:
     estimate.add_argument("--prompt", default="")
     estimate.add_argument("--json", action="store_true")
 
+    performance = sub.add_parser("performance")
+    performance_sub = performance.add_subparsers(dest="action", required=True)
+    performance_status = performance_sub.add_parser("status")
+    performance_status.add_argument("--json", action="store_true")
+    performance_summary = performance_sub.add_parser("summary")
+    performance_summary.add_argument("--repo-root", default="")
+    performance_summary.add_argument("--since-days", type=int, default=0)
+    performance_summary.add_argument("--json", action="store_true")
+    performance_runs = performance_sub.add_parser("runs")
+    performance_runs.add_argument("--limit", type=int, default=20)
+    performance_runs.add_argument("--json", action="store_true")
+    performance_purge = performance_sub.add_parser("purge")
+    performance_purge.add_argument("--approve", action="store_true")
+    performance_purge.add_argument("--json", action="store_true")
+    performance_benchmark = performance_sub.add_parser("benchmark")
+    performance_benchmark.add_argument("--suite", choices=["exploration"], required=True)
+    performance_benchmark.add_argument("--json", action="store_true")
+
     agent = sub.add_parser("agent")
     agent.add_argument(
         "action",
@@ -12226,6 +12741,11 @@ def human_print(data: dict[str, Any]) -> None:
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
     config = load_qwendex_config(project_config=args.config)
+    # Performance telemetry is deliberately outside the Manager data plane.
+    # Keep its status, summary, purge, and isolated benchmark commands from
+    # creating or migrating the Manager state database just to resolve policy.
+    if args.command == "performance":
+        return command_performance(args, config)
     manager_hook_launch = bool(
         getattr(args, "command", "") == "agent"
         and getattr(args, "action", "") == "hook"

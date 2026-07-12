@@ -14,6 +14,23 @@ Decision: mutable dev state lives under `.qwendex-dev/`.
 Reason: development receipts, ledgers, Codex home, source builds, and snapshots
 must not mix with normal user harness state or public release artifacts.
 
+## Exploration Telemetry Data Plane
+
+Decision: exploration-performance telemetry uses a separate local SQLite
+database, is disabled by default, accepts only privacy-minimized metadata after
+an existing hook decision passes, and exposes aggregate-only CLI summaries.
+
+Reason: high-frequency measurement must not contend with the correctness-critical
+Manager ledger, and event input may contain prompts, commands, paths, outputs,
+or credentials. Qwendex derives only repository-scope and locally HMACed
+correlation digests, bounded classes/counts/timings, and in-memory output sizes.
+It never persists raw event content or exports a telemetry stream. A blocked
+hook produces no event and telemetry failure cannot alter Manager safety.
+
+The Phase 1 benchmark is intentionally synthetic and isolated. Its timing and
+privacy scan validate instrumentation only; search, startup, validation, model,
+and end-to-end performance claims require a later paired evaluation.
+
 ## Patched Codex Contract
 
 Decision: Qwendex patches Codex source by versioned anchors, not by mutating the

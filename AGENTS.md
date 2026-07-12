@@ -89,6 +89,13 @@ public doc claim should be visible unless it is connected end to end:
 If a feature is only a mock, placeholder, planned patch, or depends on a custom
 Codex build, label that boundary explicitly in docs and status output.
 
+Exploration-performance telemetry is a separate local data plane. Keep its
+capture default-off and metadata-only: never route raw prompts, commands,
+paths, tool input, tool output, transcripts, credentials, or tokens into its
+database or aggregate CLI. Preserve hook decisions, record only after an
+accepted event, and run the privacy/benchmark coverage before changing its
+schema, hook ingestion, or retention behavior.
+
 ### Product Guardrails
 
 - Keep private machine paths, credentials, local logs, transcripts, model

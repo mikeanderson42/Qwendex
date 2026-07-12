@@ -63,6 +63,39 @@ blocking a daily operator loop. Strict health is the mode for staging and
 release claims: missing required surface, public documentation audit failures,
 or Manager Mode health issues such as stale writer lanes must fail the command.
 
+## Local Exploration Telemetry
+
+Exploration telemetry is optional, local-only metadata capture. It is disabled
+by default and is separate from Manager state. When a trusted Qwendex build is
+configured with `performance.capture: "metadata"`, inspect only aggregate-safe
+results with:
+
+```bash
+scripts/qwendex performance status --json
+scripts/qwendex performance summary --json
+scripts/qwendex performance summary --repo-root <path> --since-days 7 --json
+scripts/qwendex performance runs --limit 20 --json
+scripts/qwendex performance purge --approve --json
+```
+
+The output contains counts, timing distributions, classes, and local digest
+comparisons rather than prompts, commands, paths, queries, or tool output.
+`summary` and `runs` default to the canonical current repository; use
+`summary --repo-root` to inspect another root. `summary` also enforces the
+configured retention and event-count limits.
+`purge` requires explicit approval and deletes the local telemetry data.
+Unavailable metrics are explicitly `not_observed`, not reported as zero.
+
+Run the isolated instrumentation check with:
+
+```bash
+scripts/qwendex performance benchmark --suite exploration --json
+```
+
+That benchmark proves synthetic capture coverage, local raw-sentinel absence,
+and instrumentation timing only. It does not establish that Qwendex, search,
+startup, validation, model behavior, or end-to-end tasks are faster.
+
 ## Stack Control
 
 ```bash

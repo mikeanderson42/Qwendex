@@ -11,6 +11,7 @@ for a scoped change.
 | Shell execution | Local Qwen routes through guarded launchers; finite run budgets must be configured when needed |
 | Network tools | Search and inspect are read-only by default |
 | Receipt leakage | Receipt reads verify schema and digest; receipts may still contain redacted output snippets, so do not publish without review |
+| Telemetry leakage | Exploration telemetry is default-off, local-only metadata in a separate database; raw prompts, commands, paths, queries, tool output, and transcripts are discarded before persistence |
 | Model-output injection | Guard markers detect malformed tool markup and loop patterns before acceptance |
 | Learned-skill poisoning | Qwendex never auto-applies proposals; its adopt command only performs a denied-path allowlist preflight |
 | Public-doc overclaiming | Public docs are naming-audited and release-reviewed |
@@ -41,6 +42,15 @@ because some local checks are intentionally long-running. Set finite values in a
 bounded run when wall-clock or tool-call limits are required. Qwendex redacts
 known secret-shaped strings, but receipts can still contain non-secret private
 context in output snippets.
+
+Exploration-performance telemetry is not a transcript or generic tool-call
+recorder. Its hook adapter captures only after the normal hook decision passes,
+uses local HMAC digests for correlation and duplicate comparison, and exposes
+aggregate-safe summaries only. A blocked hook produces no telemetry, storage
+failure cannot change the hook decision, and `QWENDEX_PERFORMANCE_DB` controls
+only the local store location. Operators should keep that database local and
+use `performance purge --approve` when its aggregate history is no longer
+needed.
 
 Tool capability manifests with per-tool network/write scopes are planned but not
 yet enforced as a general permission engine. The public CLI does enforce the

@@ -34,7 +34,8 @@ unset \
   QWENDEX_MANAGER_LEDGER_DB_IDENTITY \
   QWENDEX_MANAGER_RUNTIME_IDENTITY \
   QWENDEX_MANAGER_POLICY_HASH \
-  QWENDEX_MANAGER_STOP_STATUS
+  QWENDEX_MANAGER_STOP_STATUS \
+  QWENDEX_RUN_ID
 
 export QWENDEX_MANAGER_LAUNCH_PID="$$"
 QWENDEX_MANAGER_LAUNCH_START_TICKS="$(python3 - "$$" <<'PY'
@@ -205,6 +206,15 @@ if [[ "$informational_only" == "1" ]]; then
   fi
   exec "$QWENDEX_CODEX_RUNTIME" "${codex_args[@]}"
 fi
+
+# A run id is an opaque per-launch correlation value. Performance hooks HMAC it
+# locally before persistence; never create it for help/version inspection.
+export QWENDEX_RUN_ID="$(python3 - <<'PY'
+import uuid
+
+print(uuid.uuid4().hex)
+PY
+)"
 
 "$QWENDEX_DEV_ROOT/scripts/qwendex" codex-status \
   --write "$QWENDEX_CODEX_STATUS_FILE" \

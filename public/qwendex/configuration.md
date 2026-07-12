@@ -36,6 +36,8 @@ Supported environment overrides:
 QWENDEX_DEFAULT_SEAT=qwen
 QWENDEX_RESULTS_ROOT=results/qwendex
 QWENDEX_STATE_DB=~/.local/state/qwendex/qwendex.sqlite
+QWENDEX_PERFORMANCE_CAPTURE=metadata
+QWENDEX_PERFORMANCE_DB=~/.local/state/qwendex/qwendex-performance.sqlite
 QWENDEX_LEARNING_MODE=stage_only
 QWENDEX_ORCHESTRATION_MODE=auto
 QWENDEX_MANAGER_MODE=heavy
@@ -74,6 +76,39 @@ Use a temporary DB for isolated probes:
 ```bash
 QWENDEX_STATE_DB=/tmp/qwendex.sqlite scripts/qwendex task status --json
 ```
+
+## Exploration Performance Telemetry
+
+The optional `performance` object controls a separate local telemetry database;
+it is not part of `state.db` or the Manager ledger:
+
+```json
+{
+  "performance": {
+    "capture": "off",
+    "retention_days": 14,
+    "max_events": 50000,
+    "query_fingerprints": true
+  }
+}
+```
+
+`capture` is either `off` or `metadata`, and defaults to `off`. Metadata mode
+never enables a raw-content mode or a network exporter. It retains only safe
+event classes, timing/count fields, repository-scope digests, and locally
+HMACed correlation/query fingerprints; it does not retain prompts, commands,
+paths, tool input/output, stdout, stderr, or transcripts.
+
+`retention_days` and `max_events` bound local storage. Retention runs during an
+aggregate summary, never on every hook event.
+Older v1 config documents may omit `performance`; the built-in safe defaults
+continue to apply.
+
+`QWENDEX_PERFORMANCE_CAPTURE=metadata` is the scoped runtime opt-in for a
+Qdex or evaluation launch. `QWENDEX_PERFORMANCE_DB` overrides only the local
+database path; it does not enable capture. The development environment resolves
+this database under its isolated `.qwendex-dev/state/` directory; normal
+installs default to `~/.local/state/qwendex/qwendex-performance.sqlite`.
 
 ## Context Reminders
 

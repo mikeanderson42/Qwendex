@@ -250,8 +250,10 @@ class QdexManagerAttachmentTests(unittest.TestCase):
             shutil.copy2(QWENDEX, scripts / "qwendex")
             shutil.copy2(QDEX, scripts / "qdex")
             shutil.copy2(ROOT / "scripts" / "qwendex_cli.py", scripts / "qwendex_cli.py")
+            shutil.copy2(ROOT / "scripts" / "qwendex_performance.py", scripts / "qwendex_performance.py")
             shutil.copytree(ROOT / "config", root / "config")
         state_db = work_root / "state" / "qwendex.sqlite"
+        performance_db = work_root / "state" / "qwendex-performance.sqlite"
         ledger_db = work_root / "state" / "qwendex_ledger.sqlite"
         results_root = work_root / "results" / "qwendex"
         status_file = work_root / "codex_status.json"
@@ -323,6 +325,7 @@ class QdexManagerAttachmentTests(unittest.TestCase):
                 ]
                 print(json.dumps({
                     "exports_present": all(os.environ.get(key) for key in required),
+                    "performance_run_id": os.environ.get("QWENDEX_RUN_ID", ""),
                     "returncodes": [prompt_rc, pre_rc, post_rc, stop_rc],
                     "prompt_blocked": prompt.get("decision") == "block",
                     "pre_blocked": pre.get("decision") == "block",
@@ -337,6 +340,7 @@ class QdexManagerAttachmentTests(unittest.TestCase):
             "QWENDEX_DEV_ROOT": str(dev_root),
             "QWENDEX_ROOT": str(source_root),
             "QWENDEX_STATE_DB": str(state_db),
+            "QWENDEX_PERFORMANCE_DB": str(performance_db),
             "QWENDEX_LEDGER_DB": str(ledger_db),
             "QWENDEX_RESULTS_ROOT": str(results_root),
             "QWENDEX_CODEX_STATUS_FILE": str(status_file),
@@ -353,6 +357,7 @@ class QdexManagerAttachmentTests(unittest.TestCase):
             **exports,
             "CODEX_HOME": str(codex_home),
             "QWENDEX_AGENT_USE": "Manager",
+            "QWENDEX_PERFORMANCE_CAPTURE": "metadata",
             "QWENDEX_MANAGER_TARGET_REPO": str(repo),
             "QWENDEX_RUNTIME_SOURCE_TO_EDIT": str(source_scripts / "qwendex_cli.py"),
         }
@@ -437,10 +442,29 @@ class QdexManagerAttachmentTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
         boundary = json.loads(result.stdout)
         self.assertTrue(boundary["exports_present"])
+        self.assertRegex(str(boundary["performance_run_id"]), r"^[0-9a-f]{32}$")
         self.assertEqual(boundary["returncodes"], [0, 0, 0, 0])
         self.assertFalse(boundary["prompt_blocked"])
         self.assertFalse(boundary["pre_blocked"])
         self.assertFalse(boundary["stop_blocked"])
+        performance_summary = subprocess.run(
+            [str(dev_scripts / "qwendex"), "performance", "summary", "--json"],
+            cwd=repo,
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=60,
+        )
+        self.assertEqual(
+            performance_summary.returncode,
+            0,
+            performance_summary.stderr or performance_summary.stdout,
+        )
+        aggregate = json.loads(performance_summary.stdout)["data"]["summary"]
+        self.assertEqual(aggregate["runs_observed"], 1)
+        self.assertEqual(aggregate["tool_calls_by_family"], {"edit": 1})
+        self.assertEqual(aggregate["telemetry_coverage"]["rate"], 1.0)
         with sqlite3.connect(state_db) as conn:
             row = conn.execute(
                 "SELECT root_session_id, turn_id, final_status, stop_status FROM qwendex_manager_decisions"

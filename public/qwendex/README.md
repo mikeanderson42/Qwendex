@@ -35,6 +35,7 @@ seat for a run with `exec --seat <name>` or `exec --seat auto`.
 - [LLMStack](llmstack.md)
 - [Configuration](configuration.md)
 - [Operations](operations.md)
+- [Exploration Telemetry](operations.md#local-exploration-telemetry)
 - [Seat Handoff](seat-handoff.md)
 - [Learning Loop](learning-loop.md)
 - [Agent Management](agent-management.md)

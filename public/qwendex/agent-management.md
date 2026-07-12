@@ -235,6 +235,17 @@ Supported events are `SessionStart`, `UserPromptSubmit`, `SubagentStart`,
 `SubagentStop`, `Stop`, `PreToolUse`, `PostToolUse`, `PreCompact`, and
 `PostCompact`.
 
+When `performance.capture` is `metadata`, an accepted native hook event also
+writes privacy-minimized exploration metadata to the separate local performance
+database. This happens after the gate decision and never changes it: blocked
+events create no telemetry, and telemetry storage failure remains non-blocking.
+The adapter keeps only safe class/count/timing fields and local HMAC digests;
+it discards prompts, commands, paths, raw queries, tool input/output, and
+transcripts. Generated managed hooks carry the performance-database location
+alongside the fixed state/ledger paths. `SessionStart` can be ingested when a
+trusted integration emits it, but generated wiring does not invent a startup
+probe, so an unavailable startup duration is reported as `not_observed`.
+
 The gates enforce the current CLI policy boundary:
 
 - prompt hooks inject the active mode contract, Qwendex model/reasoning policy,
@@ -300,7 +311,7 @@ Manual `agent hook ... --json` commands return the stable Qwendex diagnostic
 envelope. Managed Codex hook config uses `agent hook ... --codex-hook-output`
 so hook stdout contains only the raw Codex event schema accepted by the Codex
 hook parser. Generated hook commands carry fixed Qwendex state DB, ledger DB,
-receipt root, status file, and root hints. Dynamic Qdex launch identity must
+performance DB, receipt root, status file, and root hints. Dynamic Qdex launch identity must
 still be inherited from the live process; fixed state paths cannot substitute
 for that identity.
 

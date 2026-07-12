@@ -39,6 +39,14 @@ named `status-json`, `doctor`, and `review` commands for posture checks.
 Use `qwendex-dev verify --tier quick` before staging and
 `qwendex-dev verify --tier release` before release-readiness claims.
 
+## Exploration Telemetry
+
+Exploration-performance capture is a separate, local, default-off metadata
+store. Its aggregates are attribution evidence, not a performance-improvement
+claim. Before changing it, read
+`docs/development/exploration-performance.md`; preserve the no-raw-content
+boundary and run the privacy and benchmark coverage with the hook regressions.
+
 ## Connectedness Check
 
 Before adding or advertising a Qwendex control, status label, hotkey, wrapper

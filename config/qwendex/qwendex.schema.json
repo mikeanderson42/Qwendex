@@ -84,6 +84,17 @@
         "db": {"type": "string", "minLength": 1}
       }
     },
+    "performance": {
+      "type": "object",
+      "required": ["capture", "retention_days", "max_events", "query_fingerprints"],
+      "additionalProperties": false,
+      "properties": {
+        "capture": {"enum": ["off", "metadata"]},
+        "retention_days": {"type": "integer", "minimum": 1, "maximum": 3650},
+        "max_events": {"type": "integer", "minimum": 1, "maximum": 5000000},
+        "query_fingerprints": {"type": "boolean"}
+      }
+    },
     "eval": {
       "type": "object",
       "required": ["default_case"],
