@@ -250,6 +250,7 @@ class QdexManagerAttachmentTests(unittest.TestCase):
             shutil.copy2(QWENDEX, scripts / "qwendex")
             shutil.copy2(QDEX, scripts / "qdex")
             shutil.copy2(ROOT / "scripts" / "qwendex_cli.py", scripts / "qwendex_cli.py")
+            shutil.copy2(ROOT / "scripts" / "qwendex_search.py", scripts / "qwendex_search.py")
             shutil.copy2(ROOT / "scripts" / "qwendex_performance.py", scripts / "qwendex_performance.py")
             shutil.copytree(ROOT / "config", root / "config")
         state_db = work_root / "state" / "qwendex.sqlite"

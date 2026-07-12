@@ -118,7 +118,8 @@ privacy-safe runs demonstrate a bottleneck and a separate task defines paired
 quality and performance gates.
 
 The v0.6.0 developer-only paired workflow and its explicitly activated
-`search_evidence_compaction_v1` candidate are documented in
-[Optimization Lab And Search-Evidence Candidate](optimization-lab.md). The
-candidate is default-off, raw search evidence stays under ignored run artifacts,
-and a controlled runner does not make a live-model or production-speed claim.
+`search_evidence_compaction_v2` candidate are documented in
+[Optimization Lab And Search-Evidence Candidate](optimization-lab.md). V2 is
+default-off and currently held pending a valid live sample; raw search evidence
+stays under ignored run artifacts, and neither controlled nor invalid live runs
+make a live-model or production-speed claim.

@@ -47,6 +47,22 @@ cost. Separating the candidate from normal search behavior retains a reversible
 experimental boundary while reproducible gates establish the next measured
 frontier.
 
+## Search Evidence Compaction V2 Recall Contract
+
+Decision: retain `search_evidence_compaction_v2` as an explicit, default-off
+experimental candidate. V2 uses definition-aware, cross-file coverage with a
+snapshot-bound cursor, explicit completeness states, stale-cursor rejection,
+and conservative baseline fallback. Full raw search and live-agent traces stay
+only in ignored artifacts; telemetry remains metadata-only.
+
+Reason: v1 reduced bytes but omitted a required broad-definition region. V2
+must prove recall through direct inclusion, deterministic cursor retrieval, or
+fallback before it can claim any efficiency benefit. Controlled regression and
+repair evidence can establish that contract, but a live sample with invalid
+pairs cannot reject or promote the candidate. V2 remains held until a frozen
+live workload completes enough valid paired tasks; it must never become the
+default as a consequence of this decision.
+
 ## Patched Codex Contract
 
 Decision: Qwendex patches Codex source by versioned anchors, not by mutating the

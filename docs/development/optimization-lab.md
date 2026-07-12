@@ -19,7 +19,7 @@ Run an explicit candidate pair and verify its generated artifacts:
 ```bash
 scripts/qwendex performance lab run \
   --manifest /ignored/workload.json \
-  --candidate search_evidence_compaction_v1 \
+  --candidate search_evidence_compaction_v2 \
   --json
 scripts/qwendex performance lab compare --run-dir /ignored/paired-run --json
 ```
@@ -46,21 +46,34 @@ evidence directory, and fixture write surface. The lab installs verified managed
 hooks into that isolated home and runs an isolated Manager preflight before
 searching. It also probes read-only write denial and Local-off routing.
 
-The current v0.6.0 runner is deliberately a controlled search-evidence runner:
+The controlled v0.6.0 runner is deliberately a search-evidence runner:
 it exercises live `rg`, Qwendex hooks/preflight, telemetry, freshness fixtures,
 and deterministic task rubrics, but it does not send a prompt to a live model.
 It therefore cannot prove live model adoption, live root-session binding, model
 task success, API latency, or a production speedup. Those values are emitted
 as `not_observed`, and a controlled-only result cannot promote a candidate.
 
-## First Candidate: `search_evidence_compaction_v1`
+The separate `live-run` surface accepts only a frozen live-agent manifest and
+creates a fresh detached worktree, Codex home, Manager state, performance DB,
+and ephemeral conversation for every arm. It preserves raw prompts and events
+only in ignored local artifacts; safe receipts contain counts, digests, and
+grades. A live timeout or other invalid pair is not a candidate rejection. It
+requires a valid rerun/adjudication path and still cannot promote a candidate
+without at least 12 valid pairs.
 
-The candidate remains default-off. Nothing changes normal Codex search behavior
-and no hook automatically substitutes this command. A scoped Qdex launch can
-opt in to one short managed instruction without persisting the setting:
+## V2 Candidate: `search_evidence_compaction_v2`
+
+The v1 candidate was retained only as historical controlled evidence after its
+broad-definition recall failure. V2 repairs that failure with definition-aware,
+cross-file coverage and a deterministic retrieval contract. V2 remains
+default-off and is currently held for valid live evidence; it is not a
+supported opt-in workflow or a performance claim. Nothing changes normal Codex
+search behavior and no hook automatically substitutes this command. A scoped
+development launch can opt in to one short managed instruction without
+persisting the setting:
 
 ```bash
-QWENDEX_SEARCH_EVIDENCE_COMPACTION=1 qdex -C <repo>
+QWENDEX_SEARCH_EVIDENCE_COMPACTION=v2 qdex -C <repo>
 ```
 
 That instruction tells the agent to use compact content search for broad
@@ -73,6 +86,8 @@ invoke one of these experimental commands:
 ```bash
 scripts/qwendex search content <pattern> --root <repo-or-subtree> --literal --json
 scripts/qwendex search content <pattern> --root <repo-or-subtree> --regex --json
+scripts/qwendex search content <pattern> --root <repo-or-subtree> --regex --candidate v2 --json
+scripts/qwendex search next <pattern> --root <repo-or-subtree> --regex --candidate v2 --cursor <cursor> --json
 scripts/qwendex search paths <pattern> --root <repo-or-subtree> --json
 ```
 
@@ -85,12 +100,12 @@ whose resolved target escapes that repository. Internal symlinks are searched
 as current worktree content. It does not create a persistent index or cache
 search content.
 
-The compact form groups matches by file, deduplicates identical line matches,
+The v2 compact form groups matches by file, deduplicates identical line matches,
 adds two lines of context, merges nearby ranges deterministically, and caps a
-merged range at 24 lines. It ranks likely definitions before exact identifiers
-and literals, then regex matches. For equally ranked broad matches it spreads
-retained ranges through a file before allowing a definition-dense file to take
-additional evidence slots. Per-file, file, total, and page budgets are explicit.
+merged range at 24 lines. It prioritizes likely definitions, establishes a
+per-file coverage floor, and round-robins across files before allowing a
+definition-dense file to consume additional evidence slots. Per-file, file,
+total, and page budgets are explicit.
 The model-facing form is stable:
 
 ```text
@@ -98,8 +113,10 @@ path:start-end — match-class
 ```
 
 Results report retained/omitted ranges and files, raw/compact bytes, compression
-ratio, candidate duration, binary handling, truncation, and a stable
-continuation token. Qwendex never silently middle-truncates ranked evidence.
+ratio, candidate duration, binary handling, truncation, and a stable,
+snapshot-bound continuation cursor. A response explicitly says whether it is
+`complete`, `partial_requires_next_cursor`, or a conservative
+`baseline_fallback`; Qwendex never silently middle-truncates ranked evidence.
 
 Use direct `rg -F` for a narrow exact check. Use compact search for broad
 discovery that would otherwise return substantial evidence, begin at a known
@@ -132,7 +149,7 @@ privacy, Manager/Local safety, default-off behavior, schema validity, and raw
 artifact hashes. A hard failure rejects the candidate regardless of byte
 reduction.
 
-Performance gates require 12 valid pairs for an opt-in promotion decision, a
+Performance gates require 12 valid live pairs for an opt-in promotion decision, a
 median search-evidence reduction of at least 70%, broad-search adoption of at
 least 80%, no material call/wall-time regression, telemetry p95 below 5 ms,
 and honest `not_observed` values. The aggregate decision is exactly one of
@@ -146,3 +163,10 @@ JSONL, pair CSV, quality/freshness/privacy/Manager results, performance summary,
 gate decision, angle check, next goal, final report, raw artifacts, and a
 digest manifest. `compare` validates required artifacts, JSONL/CSV row counts,
 CSV width, and every companion hash.
+
+For a live baseline-pass/candidate-fail or baseline-fail/candidate-pass pair,
+the lab preserves both initial receipts and reruns each arm once under the same
+frozen contract when the budget permits. Only a reproduced candidate-only
+failure, or direct private evidence tying the failure to search evidence, can
+be treated as a candidate correctness regression. Incomplete live samples are
+held rather than converted into a speed or support claim.
