@@ -2343,6 +2343,7 @@ def _run_live_arm(
         _materialize_live_fixture(task, worktree)
         environment, setup = _prepare_live_manager(isolation_root, worktree)
         _copy_live_auth(auth_source, Path(environment["CODEX_HOME"]))
+        candidate_eligible = _live_candidate_eligible(task)
         candidate_active = _live_candidate_active(task, variant=variant, candidate_id=candidate_id)
         if candidate_active:
             environment["QWENDEX_SEARCH_EVIDENCE_COMPACTION"] = "v2"
@@ -2412,6 +2413,7 @@ def _run_live_arm(
             "task_id": task_id,
             "variant": variant,
             "candidate_id": candidate_id if candidate_active else "baseline_raw_tools",
+            "candidate_eligible": candidate_eligible,
             "status": status,
             "returncode": launch["returncode"],
             "timed_out": launch["timed_out"],
@@ -2442,6 +2444,7 @@ def _run_live_arm(
             "variant": variant,
             "candidate_id": candidate_id if candidate_active else "baseline_raw_tools",
             "candidate_version": "2" if candidate_active else "not_applicable",
+            "candidate_eligible": candidate_eligible,
             "status": status,
             "task_success": task_success,
             "quality_status": evidence["quality_status"],
@@ -2481,6 +2484,13 @@ def _run_live_arm(
         _remove_worktree(source, worktree)
 
 
+def _live_candidate_eligible(task: Mapping[str, Any]) -> bool:
+    """Return the frozen workload's task-level v2 eligibility decision."""
+
+    live = task.get("live") if isinstance(task.get("live"), Mapping) else {}
+    return bool(live.get("candidate_eligible"))
+
+
 def _live_candidate_active(task: Mapping[str, Any], *, variant: str, candidate_id: str) -> bool:
     """Return whether this live arm may receive the explicit v2 instruction.
 
@@ -2489,11 +2499,10 @@ def _live_candidate_active(task: Mapping[str, Any], *, variant: str, candidate_i
     search instruction or contribute to the broad-task adoption denominator.
     """
 
-    live = task.get("live") if isinstance(task.get("live"), Mapping) else {}
     return (
         variant == "candidate"
         and candidate_id == search_module().SEARCH_V2_CANDIDATE_ID
-        and bool(live.get("candidate_eligible"))
+        and _live_candidate_eligible(task)
     )
 
 
@@ -2514,6 +2523,7 @@ def _live_pair_result(task: Mapping[str, Any], baseline: Mapping[str, Any], cand
         "repository": str(task.get("repository") or ""),
         "stratum": str(task.get("stratum") or ""),
         "pair_order": str(task.get("pair_order") or ""),
+        "candidate_eligible": _live_candidate_eligible(task),
         "state": "invalid_pair" if "blocked" in {baseline.get("status"), candidate.get("status")} else "pass" if baseline.get("status") == candidate.get("status") == "pass" else "fail",
         "baseline_status": baseline.get("status"),
         "candidate_status": candidate.get("status"),
@@ -2547,18 +2557,20 @@ def _live_privacy_scan(run_dir: Path, manifest_path: Path, payload: Mapping[str,
 
 
 def _live_performance_summary(baselines: list[Mapping[str, Any]], candidates: list[Mapping[str, Any]], pairs: list[Mapping[str, Any]]) -> dict[str, Any]:
+    v2_pairs = [pair for pair in pairs if bool(pair.get("candidate_invoked"))]
     reductions = [
         float(value)
-        for pair in pairs
+        for pair in v2_pairs
         for value in [pair.get("search_output_bytes", {}).get("reduction") if isinstance(pair.get("search_output_bytes"), Mapping) else None]
         if isinstance(value, int | float)
     ]
-    search_ratios = [float(pair.get("search_read_call_ratio") or 0.0) for pair in pairs]
-    tool_ratios = [float(pair.get("total_tool_call_ratio") or 0.0) for pair in pairs]
-    wall_ratios = [float(pair.get("wall_time_ratio") or 0.0) for pair in pairs]
-    eligible = [row for row in candidates if bool(row.get("candidate_invoked"))]
-    fallback_count = sum(int(row.get("fallback_count") or 0) for row in candidates)
-    pagination_calls = sum(int(row.get("pagination_calls") or 0) for row in candidates)
+    search_ratios = [float(pair.get("search_read_call_ratio") or 0.0) for pair in v2_pairs]
+    tool_ratios = [float(pair.get("total_tool_call_ratio") or 0.0) for pair in v2_pairs]
+    wall_ratios = [float(pair.get("wall_time_ratio") or 0.0) for pair in v2_pairs]
+    eligible = [row for row in candidates if bool(row.get("candidate_eligible"))]
+    delivered = [row for row in eligible if bool(row.get("candidate_invoked"))]
+    fallback_count = sum(int(row.get("fallback_count") or 0) for row in delivered)
+    pagination_calls = sum(int(row.get("pagination_calls") or 0) for row in delivered)
     validation_durations = [float(row["validation_duration_ms"]) for row in [*baselines, *candidates] if isinstance(row.get("validation_duration_ms"), int | float)]
     p95_values: list[float] = []
     p50_values: list[float] = []
@@ -2585,6 +2597,7 @@ def _live_performance_summary(baselines: list[Mapping[str, Any]], candidates: li
         "wall_time_ratio": {"median": _median(wall_ratios), "max": max(wall_ratios) if wall_ratios else "not_observed", "values": wall_ratios},
         "candidate_adoption": {
             "eligible_tasks": len(eligible),
+            "instruction_delivered_tasks": len(delivered),
             "adopted_tasks": sum(1 for row in eligible if row.get("candidate_adopted")),
             "rate": round(sum(1 for row in eligible if row.get("candidate_adopted")) / len(eligible), 6) if eligible else "not_observed",
         },
@@ -2615,9 +2628,12 @@ def _live_gate_decision(
 ) -> dict[str, Any]:
     valid = [pair for pair in pairs if pair.get("state") != "invalid_pair"]
     invalid = [pair for pair in pairs if pair.get("state") == "invalid_pair"]
-    file_ok = all(float(pair.get("relevant_file_recall", {}).get("candidate") or 0.0) >= float(pair.get("relevant_file_recall", {}).get("baseline") or 0.0) for pair in valid)
-    region_ok = all(float(pair.get("relevant_region_recall", {}).get("candidate") or 0.0) >= float(pair.get("relevant_region_recall", {}).get("baseline") or 0.0) for pair in valid)
-    task_ok = all(bool(pair.get("task_success", {}).get("candidate")) >= bool(pair.get("task_success", {}).get("baseline")) for pair in valid)
+    v2_pairs = [pair for pair in valid if bool(pair.get("candidate_eligible"))]
+    control_pairs = [pair for pair in valid if not bool(pair.get("candidate_eligible"))]
+    candidate_delivery_ok = bool(v2_pairs) and all(bool(pair.get("candidate_invoked")) for pair in v2_pairs)
+    file_ok = all(float(pair.get("relevant_file_recall", {}).get("candidate") or 0.0) >= float(pair.get("relevant_file_recall", {}).get("baseline") or 0.0) for pair in v2_pairs)
+    region_ok = all(float(pair.get("relevant_region_recall", {}).get("candidate") or 0.0) >= float(pair.get("relevant_region_recall", {}).get("baseline") or 0.0) for pair in v2_pairs)
+    task_ok = all(bool(pair.get("task_success", {}).get("candidate")) >= bool(pair.get("task_success", {}).get("baseline")) for pair in v2_pairs)
     manager_ok = all(
         row.get("manager_preflight", {}).get("actual_status") == "pass"
         and row.get("manager_preflight", {}).get("stop_status") == "STOP_MANAGER_PREFLIGHT_READY"
@@ -2630,6 +2646,7 @@ def _live_gate_decision(
         "relevant_file_recall": "pass" if file_ok else "fail",
         "relevant_region_recall": "pass" if region_ok else "fail",
         "live_task_and_validation_noninferior": "pass" if task_ok else "fail",
+        "eligible_v2_instruction_delivery": "pass" if candidate_delivery_ok else "fail",
         "dirty_untracked_freshness": str(freshness.get("status") or "fail"),
         "privacy_boundary": str(privacy.get("status") or "fail"),
         "manager_live_root_binding": "pass" if manager_ok else "fail",
@@ -2672,6 +2689,9 @@ def _live_gate_decision(
         "performance_gates": efficiency,
         "valid_pairs": len(valid),
         "invalid_pairs": len(invalid),
+        "eligible_v2_pair_count": len(v2_pairs),
+        "control_pair_count": len(control_pairs),
+        "control_pair_discordance_count": sum(1 for pair in control_pairs if pair.get("state") == "fail"),
         "claim_ceiling": "Live Codex evidence is isolated and paired; promotion still requires every reported hard and observable efficiency gate.",
     }
 
@@ -2783,12 +2803,12 @@ def live_paired_run(
     remaining = [task for task in tasks if str(task.get("id") or "") not in {str(item.get("id") or "") for item in pilot}]
     for task in pilot:
         execute(task)
-    pilot_hard_failure = any(
-        pair.get("state") == "invalid_pair"
-        or float(pair.get("relevant_file_recall", {}).get("candidate") or 0.0) < float(pair.get("relevant_file_recall", {}).get("baseline") or 0.0)
+    pilot_hard_failure = any(pair.get("state") == "invalid_pair" for pair in pairs) or any(
+        float(pair.get("relevant_file_recall", {}).get("candidate") or 0.0) < float(pair.get("relevant_file_recall", {}).get("baseline") or 0.0)
         or float(pair.get("relevant_region_recall", {}).get("candidate") or 0.0) < float(pair.get("relevant_region_recall", {}).get("baseline") or 0.0)
         or (bool(pair.get("task_success", {}).get("baseline")) and not bool(pair.get("task_success", {}).get("candidate")))
         for pair in pairs
+        if bool(pair.get("candidate_eligible"))
     )
     if not pilot_hard_failure:
         for task in remaining:
@@ -2832,7 +2852,7 @@ def live_paired_run(
     )
     if pilot_hard_failure:
         gate["pilot_early_stop"] = True
-        gate["candidate_decision"] = "reject_candidate"
+        gate["candidate_decision"] = "reject_candidate" if any(value == "fail" for value in gate["hard_gates"].values()) else "invalid_evaluation"
         gate["status"] = "fail"
     _write_json(run_dir / "14_gate_decision.json", gate)
     _write_text(run_dir / "15_angle_check_and_gap_analysis.md", "# Live angle check\n\n- Live adoption, tool counts, isolated Manager preflight, and paired wall time are measured from fresh arm receipts.\n- Metrics without a trusted producer remain `not_observed`.\n")

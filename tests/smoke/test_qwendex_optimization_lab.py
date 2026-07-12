@@ -458,6 +458,92 @@ def test_live_candidate_activation_respects_frozen_task_eligibility() -> None:
     )
 
 
+def test_live_v2_gates_and_metrics_exclude_ineligible_control_pairs() -> None:
+    lab = load_module("qwendex_optimization_lab")
+    manager_preflight = {
+        "actual_status": "pass",
+        "stop_status": "STOP_MANAGER_PREFLIGHT_READY",
+        "hook_verified": True,
+    }
+    manager = {"stale_count": 0}
+    eligible_pair = {
+        "pair_id": "broad",
+        "candidate_eligible": True,
+        "candidate_invoked": True,
+        "state": "pass",
+        "task_success": {"baseline": True, "candidate": True},
+        "relevant_file_recall": {"baseline": 1.0, "candidate": 1.0},
+        "relevant_region_recall": {"baseline": 1.0, "candidate": 1.0},
+        "search_output_bytes": {"reduction": 0.8},
+        "search_read_call_ratio": 1.0,
+        "total_tool_call_ratio": 1.0,
+        "wall_time_ratio": 1.0,
+    }
+    control_pair = {
+        "pair_id": "narrow-control",
+        "candidate_eligible": False,
+        "candidate_invoked": False,
+        "state": "fail",
+        "task_success": {"baseline": True, "candidate": False},
+        "relevant_file_recall": {"baseline": 1.0, "candidate": 0.0},
+        "relevant_region_recall": {"baseline": 1.0, "candidate": 0.0},
+        "search_output_bytes": {"reduction": -1.0},
+        "search_read_call_ratio": 9.0,
+        "total_tool_call_ratio": 9.0,
+        "wall_time_ratio": 9.0,
+    }
+    rows = [
+        {
+            "candidate_eligible": False,
+            "candidate_invoked": False,
+            "candidate_adopted": False,
+            "fallback_count": 0,
+            "pagination_calls": 0,
+            "manager_preflight": manager_preflight,
+            "manager": manager,
+            "guard_marker": False,
+            "validation_duration_ms": "not_applicable",
+            "telemetry": {},
+            "token_usage": "not_observed",
+        },
+        {
+            "candidate_eligible": True,
+            "candidate_invoked": True,
+            "candidate_adopted": True,
+            "fallback_count": 0,
+            "pagination_calls": 0,
+            "manager_preflight": manager_preflight,
+            "manager": manager,
+            "guard_marker": False,
+            "validation_duration_ms": "not_applicable",
+            "telemetry": {},
+            "token_usage": "not_observed",
+        },
+    ]
+    performance = lab._live_performance_summary(rows, rows, [eligible_pair, control_pair])
+    gate = lab._live_gate_decision(
+        baselines=rows,
+        candidates=rows,
+        pairs=[eligible_pair, control_pair],
+        freshness={"status": "pass"},
+        privacy={"status": "pass"},
+        raw_artifacts_valid=True,
+        performance=performance,
+    )
+
+    assert performance["search_output_reduction"]["median"] == 0.8
+    assert performance["search_read_call_ratio"]["median"] == 1.0
+    assert performance["candidate_adoption"] == {
+        "eligible_tasks": 1,
+        "instruction_delivered_tasks": 1,
+        "adopted_tasks": 1,
+        "rate": 1.0,
+    }
+    assert gate["hard_gates"]["live_task_and_validation_noninferior"] == "pass"
+    assert gate["hard_gates"]["eligible_v2_instruction_delivery"] == "pass"
+    assert gate["control_pair_discordance_count"] == 1
+
+
 def test_cli_validates_the_connected_optimization_lab_surface(tmp_path: Path) -> None:
     repository, commit, tree = make_repository(tmp_path)
     manifest = write_full_manifest(tmp_path, repository, commit, tree)
