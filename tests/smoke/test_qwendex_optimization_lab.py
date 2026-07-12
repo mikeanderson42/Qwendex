@@ -9,6 +9,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[2]
 QWENDEX = ROOT / "scripts" / "qwendex"
@@ -216,6 +218,138 @@ def test_compaction_is_deterministic_paginated_and_freshness_complete(tmp_path: 
     assert search.freshness_matrix()["status"] == "pass"
 
 
+def test_v2_preserves_dense_definition_coverage_and_rejects_stale_cursors(tmp_path: Path) -> None:
+    search = load_module("qwendex_search")
+    repository, _, _ = make_repository(tmp_path)
+    source_dir = repository / "path with space" / "unicodé"
+    source_dir.mkdir(parents=True)
+    dense = source_dir / "dense definitions.py"
+    dense.write_text(
+        "".join(f"def shared_{index}():\n    return {index}\n\n" for index in range(48))
+        + "def required_definition():\n    return 'required'\n",
+        encoding="utf-8",
+    )
+    (repository / "low_density.py").write_text("def required_low_density():\n    return True\n", encoding="utf-8")
+    (repository / "references.py").write_text("value = shared_1()\n# reference to required_definition\n", encoding="utf-8")
+    (repository / "long.py").write_text("needle-long " + "x" * 20_000 + "\n", encoding="utf-8")
+    (repository / "binary.bin").write_bytes(b"\x00needle-binary payload")
+    (repository / "generated.txt").write_text("def ignored_definition():\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repository), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(repository), "commit", "-m", "v2 adversarial fixture"], check=True, text=True, capture_output=True)
+    (repository / "tracked.txt").write_text("def modified_definition():\n", encoding="utf-8")
+    (repository / "untracked.py").write_text("def untracked_definition():\n", encoding="utf-8")
+
+    first_payload = search.content_search_payload(
+        "def ",
+        root=repository,
+        mode="regex",
+        candidate_id="v2",
+        per_file_ranges=4,
+        total_ranges=4,
+        page_size=1,
+    )
+    first = first_payload["result"]
+    repeated = search.content_search_payload(
+        "def ",
+        root=repository,
+        mode="regex",
+        candidate_id="v2",
+        per_file_ranges=4,
+        total_ranges=4,
+        page_size=1,
+    )["result"]
+
+    assert first["candidate_id"] == "search_evidence_compaction_v2"
+    assert first["query_class"] == "broad_definition"
+    assert first["model_evidence"] == repeated["model_evidence"]
+    assert first["cursor"] == repeated["cursor"]
+    assert first["completeness"]["state"] == "partial_requires_next_cursor"
+    assert first["cursor"]
+    assert "def " not in first["cursor"]
+    assert str(repository) not in first["cursor"]
+    assert first["file_inventory_complete"] is True
+    assert any(item["path"].endswith("dense definitions.py") for item in first["file_inventory"])
+    assert "ranges" not in first
+
+    pages = [first]
+    cursor = first["cursor"]
+    while cursor:
+        next_payload = search.content_search_next_payload(
+            "def ",
+            root=repository,
+            mode="regex",
+            cursor=cursor,
+            per_file_ranges=4,
+            total_ranges=4,
+            page_size=1,
+        )
+        next_result = next_payload["result"]
+        pages.append(next_result)
+        cursor = next_result["cursor"]
+    def evidence_ranges(page: dict[str, Any]) -> list[dict[str, Any]]:
+        values: list[dict[str, Any]] = []
+        for evidence in page["model_evidence"]:
+            location, _, reason = evidence.partition(" — ")
+            path, _, span = location.rpartition(":")
+            start, _, end = span.partition("-")
+            values.append({"path": path, "start_line": int(start), "end_line": int(end), "reason": reason})
+        return values
+
+    all_ranges = [item for page in pages for item in evidence_ranges(page)]
+    raw_definitions = search.raw_content_search("def ", root=repository, mode="regex")
+
+    def included_anchor(path_suffix: str, anchor: str) -> bool:
+        lines = [
+            item["line_number"]
+            for item in raw_definitions["matches"]
+            if item.get("kind") == "match" and str(item.get("path") or "").endswith(path_suffix) and anchor in str(item.get("line_text") or "")
+        ]
+        return any(
+            str(item.get("path") or "").endswith(path_suffix)
+            and any(item["start_line"] <= line <= item["end_line"] for line in lines)
+            for item in all_ranges
+        )
+
+    assert included_anchor("dense definitions.py", "def required_definition")
+    assert included_anchor("low_density.py", "def required_low_density")
+    assert included_anchor("tracked.txt", "def modified_definition")
+    assert included_anchor("untracked.py", "def untracked_definition")
+    assert pages[-1]["completeness"]["state"] == "complete"
+    assert pages[-1]["cursor"] is None
+
+    stale = search.content_search_payload(
+        "def ",
+        root=repository,
+        mode="regex",
+        candidate_id="v2",
+        per_file_ranges=4,
+        total_ranges=4,
+        page_size=1,
+    )["result"]
+    dense.rename(source_dir / "renamed definitions.py")
+    with pytest.raises(search.SearchError, match="stale"):
+        search.content_search_next_payload(
+            "def ",
+            root=repository,
+            mode="regex",
+            cursor=stale["cursor"],
+            per_file_ranges=4,
+            total_ranges=4,
+            page_size=1,
+        )
+
+    binary = search.content_search_payload("needle-binary", root=repository, mode="literal", candidate_id="v2")["result"]
+    long_line = search.content_search_payload("needle-long", root=repository, mode="literal", candidate_id="v2")["result"]
+    ignored = search.content_search_payload("ignored_definition", root=repository, mode="literal", candidate_id="v2")["result"]
+    fallback = search.content_search_payload("def ", root=repository, mode="regex", candidate_id="v2", max_files=1)["result"]
+    assert binary["binary_file_count"] + binary["raw_match_count"] >= 1
+    assert long_line["model_evidence"]
+    assert long_line["model_visible_bytes"] < long_line["raw_output_bytes"]
+    assert not any("generated.txt" in item for item in ignored["model_evidence"])
+    assert fallback["result_mode"] == "baseline_fallback"
+    assert fallback["fallback_count"] == 1
+
+
 def test_paired_run_isolated_and_compare_validates_artifacts(tmp_path: Path) -> None:
     lab = load_module("qwendex_optimization_lab")
     repository, commit, tree = make_repository(tmp_path)
@@ -242,6 +376,22 @@ def test_paired_run_isolated_and_compare_validates_artifacts(tmp_path: Path) -> 
     assert environment["codex_runtime"]["digest"].startswith("sha256:")
     assert performance["time_to_first_relevant_file_ms"] == "not_observed_controlled_runner"
     assert set(performance["telemetry_instrumentation_overhead_ms"]) == {"p50", "p95"}
+
+
+def test_v2_paired_run_validates_cursor_coverage_contract(tmp_path: Path) -> None:
+    lab = load_module("qwendex_optimization_lab")
+    repository, commit, tree = make_repository(tmp_path)
+    manifest = write_full_manifest(tmp_path, repository, commit, tree)
+
+    paired = lab.paired_run(manifest, candidate_id="search_evidence_compaction_v2", output_root=tmp_path / "paired-v2-artifacts")
+    artifact_dir = Path(paired["data"]["artifact_dir"])
+    gate = json.loads((artifact_dir / "14_gate_decision.json").read_text(encoding="utf-8"))
+    rows = [json.loads(line) for line in (artifact_dir / "07_candidate_runs.jsonl").read_text(encoding="utf-8").splitlines()]
+
+    assert paired["data"]["valid_pairs"] == 12
+    assert gate["hard_gates"]["v2_cursor_coverage_contract"] == "pass"
+    assert all(row["candidate_id"] == "search_evidence_compaction_v2" for row in rows)
+    assert all(row["retrieval_contract"]["cursor_contract_complete"] for row in rows)
 
 
 def test_cli_validates_the_connected_optimization_lab_surface(tmp_path: Path) -> None:

@@ -6489,11 +6489,32 @@ def command_search(args: argparse.Namespace, config: dict[str, Any]) -> dict[str
                 max_files_evidence=max(1, int(getattr(args, "max_evidence_files", 64) or 64)),
                 page_size=max(1, int(getattr(args, "page_size", 96) or 96)),
                 page_token=str(getattr(args, "page_token", "") or ""),
+                candidate_id=str(getattr(args, "candidate", "v1") or "v1"),
             )
             return stable_envelope(
                 command="search",
                 status="pass",
                 summary="Ran explicit experimental Qwendex compact content search.",
+                data={"search": payload},
+            )
+        if action == "next":
+            payload = module.content_search_next_payload(
+                str(getattr(args, "pattern", "") or ""),
+                root=Path(getattr(args, "root", "")),
+                mode=mode,
+                cursor=str(getattr(args, "cursor", "") or ""),
+                include_ignored=bool(getattr(args, "include_ignored", False)),
+                max_files=max(1, int(getattr(args, "max_files", 100_000) or 100_000)),
+                per_file_ranges=max(1, int(getattr(args, "per_file_ranges", 12) or 12)),
+                total_ranges=max(1, int(getattr(args, "total_ranges", 96) or 96)),
+                max_files_evidence=max(1, int(getattr(args, "max_evidence_files", 64) or 64)),
+                page_size=max(1, int(getattr(args, "page_size", 96) or 96)),
+                candidate_id=str(getattr(args, "candidate", "v2") or "v2"),
+            )
+            return stable_envelope(
+                command="search",
+                status="pass",
+                summary="Retrieved the next explicit recall-preserving Qwendex search page.",
                 data={"search": payload},
             )
         if action == "paths":
@@ -7456,11 +7477,14 @@ def qwendex_search_module() -> Any:
 
 
 def experimental_search_candidate_context() -> str:
-    enabled = str(os.environ.get("QWENDEX_SEARCH_EVIDENCE_COMPACTION") or "").strip().lower()
-    if enabled not in {"1", "true", "yes", "on"}:
-        return ""
     module = qwendex_search_module()
-    return str(module.SEARCH_CANDIDATE_MANAGED_INSTRUCTION)
+    candidate_id = module.selected_candidate_from_environment()
+    if not candidate_id:
+        return ""
+    for candidate in module.candidate_registry().get("candidates", []):
+        if isinstance(candidate, Mapping) and str(candidate.get("candidate_id") or "") == candidate_id:
+            return str(candidate.get("managed_instruction") or "")
+    return ""
 
 
 def capture_performance_hook_event(
@@ -12738,7 +12762,23 @@ def command_line() -> argparse.ArgumentParser:
     search_content.add_argument("--max-evidence-files", type=int, default=64)
     search_content.add_argument("--page-size", type=int, default=96)
     search_content.add_argument("--page-token", default="")
+    search_content.add_argument("--candidate", choices=["v1", "v2"], default="v1")
     search_content.add_argument("--json", action="store_true")
+    search_next = search_sub.add_parser("next")
+    search_next.add_argument("pattern")
+    search_next.add_argument("--root", type=Path, required=True)
+    search_next_mode = search_next.add_mutually_exclusive_group(required=True)
+    search_next_mode.add_argument("--literal", action="store_true")
+    search_next_mode.add_argument("--regex", action="store_true")
+    search_next.add_argument("--cursor", required=True)
+    search_next.add_argument("--include-ignored", action="store_true")
+    search_next.add_argument("--max-files", type=int, default=100_000)
+    search_next.add_argument("--per-file-ranges", type=int, default=12)
+    search_next.add_argument("--total-ranges", type=int, default=96)
+    search_next.add_argument("--max-evidence-files", type=int, default=64)
+    search_next.add_argument("--page-size", type=int, default=96)
+    search_next.add_argument("--candidate", choices=["v2"], default="v2")
+    search_next.add_argument("--json", action="store_true")
     search_paths = search_sub.add_parser("paths")
     search_paths.add_argument("pattern")
     search_paths.add_argument("--root", type=Path, required=True)

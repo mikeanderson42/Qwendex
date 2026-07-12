@@ -839,19 +839,47 @@ def baseline_capture(
     }
 
 
-def _grade_compact_evidence(task: Mapping[str, Any], compact: Mapping[str, Any]) -> dict[str, Any]:
+def _grade_compact_evidence(
+    task: Mapping[str, Any],
+    compact: Mapping[str, Any],
+    *,
+    retrieved_pages: list[Mapping[str, Any]] | None = None,
+    raw: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     expected_files = [str(item) for item in task.get("expected_relevant_files", [])]
     regions = [item for item in task.get("expected_relevant_regions", []) if isinstance(item, Mapping)]
-    ranges = [item for item in compact.get("ranges", []) if isinstance(item, Mapping)]
+    pages = retrieved_pages or [compact]
+    ranges = [
+        item
+        for page in pages
+        for item in page.get("ranges", [])
+        if isinstance(item, Mapping)
+    ]
     returned_paths = {str(item.get("path") or "") for item in ranges}
     file_hits = [path for path in expected_files if path in returned_paths]
     region_hits: list[dict[str, Any]] = []
+    raw_anchor_lines: dict[tuple[str, str], list[int]] = {}
+    if raw is not None:
+        for region in regions:
+            path = str(region.get("path") or "")
+            anchor = str(region.get("anchor") or "")
+            raw_anchor_lines[(path, anchor)] = [
+                int(item.get("line_number") or 0)
+                for item in raw.get("matches", [])
+                if isinstance(item, Mapping)
+                and str(item.get("path") or "") == path
+                and anchor in str(item.get("line_text") or "")
+            ]
     for region in regions:
         path = str(region.get("path") or "")
         anchor = str(region.get("anchor") or "")
+        anchor_lines = raw_anchor_lines.get((path, anchor), [])
         observed = any(
             str(item.get("path") or "") == path
-            and any(anchor in str(evidence.get("excerpt") or "") for evidence in item.get("line_evidence", []) if isinstance(evidence, Mapping))
+            and (
+                any(anchor in str(evidence.get("excerpt") or "") for evidence in item.get("line_evidence", []) if isinstance(evidence, Mapping))
+                or any(int(item.get("start_line") or 0) <= line <= int(item.get("end_line") or 0) for line in anchor_lines)
+            )
             for item in ranges
         )
         region_hits.append({"path": path, "anchor": anchor, "observed": observed})
@@ -868,8 +896,51 @@ def _grade_compact_evidence(task: Mapping[str, Any], compact: Mapping[str, Any])
         "region_hits": sum(1 for item in region_hits if item["observed"]),
         "region_expected": len(region_hits),
         "region_evidence": region_hits,
+        "retrieval": {
+            "page_count": len(pages),
+            "cursor_contract_complete": bool(pages)
+            and not str(pages[-1].get("cursor") or pages[-1].get("continuation_token") or ""),
+            "initial_completeness": compact.get("completeness", {}).get("state") if isinstance(compact.get("completeness"), Mapping) else "not_applicable_v1",
+        },
         "quality_status": "pass" if file_recall >= required_files and region_recall >= required_regions else "fail",
     }
+
+
+def _retrieve_v2_evidence(
+    *,
+    raw: Mapping[str, Any],
+    compact: Mapping[str, Any],
+    pattern: str,
+    mode: str,
+    budget: Mapping[str, Any],
+    snapshot_digest: str,
+) -> list[Mapping[str, Any]]:
+    """Follow the candidate's own cursor contract for deterministic grading."""
+
+    pages: list[Mapping[str, Any]] = [compact]
+    cursor = str(compact.get("cursor") or "")
+    expected_pages = max(1, int(compact.get("page_count") or 1))
+    while cursor:
+        if len(pages) >= expected_pages + 1:
+            raise LabError("v2 cursor did not terminate within its declared page count")
+        next_page = search_module().compact_content_search_v2(
+            raw,
+            pattern=pattern,
+            mode=mode,
+            per_file_ranges=int(budget.get("per_file_ranges") or 12),
+            total_ranges=int(budget.get("total_ranges") or 96),
+            page_size=int(budget.get("page_size") or 96),
+            cursor=cursor,
+            snapshot_digest=snapshot_digest,
+        )
+        next_cursor = str(next_page.get("cursor") or "")
+        if next_cursor == cursor:
+            raise LabError("v2 cursor repeated a page")
+        pages.append(next_page)
+        cursor = next_cursor
+    if not pages[-1].get("completeness", {}).get("state") == "complete":
+        raise LabError("v2 cursor sequence ended without a complete evidence state")
+    return pages
 
 
 def _run_candidate_task(
@@ -878,6 +949,7 @@ def _run_candidate_task(
     repository: Mapping[str, Any],
     run_dir: Path,
     run_id: str,
+    candidate_id: str,
 ) -> dict[str, Any]:
     task_id = str(task.get("id") or "unknown")
     source = Path(str(repository.get("source_path") or "")).expanduser()
@@ -889,27 +961,51 @@ def _run_candidate_task(
         environment, manager_preflight = _prepare_isolated_manager(isolation_root, worktree)
         execution = task.get("execution", {}) if isinstance(task.get("execution"), Mapping) else {}
         search_spec = execution.get("search", {}) if isinstance(execution.get("search"), Mapping) else {}
+        search_root = worktree / str(search_spec.get("root") or ".")
         raw = search_module().raw_content_search(
             str(search_spec.get("pattern") or ""),
-            root=worktree / str(search_spec.get("root") or "."),
+            root=search_root,
             mode=str(search_spec.get("mode") or ""),
             timeout_seconds=int(task.get("timeout_seconds") or 30),
         )
         candidate_expected = bool(task.get("candidate_expected"))
         compact: Mapping[str, Any] | None = None
+        retrieved_pages: list[Mapping[str, Any]] = []
         if candidate_expected:
             budget = execution.get("candidate_budget", {}) if isinstance(execution.get("candidate_budget"), Mapping) else {}
-            compact = search_module().compact_content_search(
-                raw,
-                pattern=str(search_spec.get("pattern") or ""),
-                mode=str(search_spec.get("mode") or ""),
-                per_file_ranges=int(budget.get("per_file_ranges") or 12),
-                total_ranges=int(budget.get("total_ranges") or 96),
-                page_size=int(budget.get("page_size") or 96),
-            )
-            grade = _grade_compact_evidence(task, compact)
+            if candidate_id == search_module().SEARCH_V2_CANDIDATE_ID:
+                snapshot_digest = search_module().relevant_worktree_snapshot_digest(raw, root=search_root)
+                compact = search_module().compact_content_search_v2(
+                    raw,
+                    pattern=str(search_spec.get("pattern") or ""),
+                    mode=str(search_spec.get("mode") or ""),
+                    per_file_ranges=int(budget.get("per_file_ranges") or 12),
+                    total_ranges=int(budget.get("total_ranges") or 96),
+                    page_size=int(budget.get("page_size") or 96),
+                    snapshot_digest=snapshot_digest,
+                )
+                retrieved_pages = _retrieve_v2_evidence(
+                    raw=raw,
+                    compact=compact,
+                    pattern=str(search_spec.get("pattern") or ""),
+                    mode=str(search_spec.get("mode") or ""),
+                    budget=budget,
+                    snapshot_digest=snapshot_digest,
+                )
+                grade = _grade_compact_evidence(task, compact, retrieved_pages=retrieved_pages, raw=raw)
+            else:
+                compact = search_module().compact_content_search(
+                    raw,
+                    pattern=str(search_spec.get("pattern") or ""),
+                    mode=str(search_spec.get("mode") or ""),
+                    per_file_ranges=int(budget.get("per_file_ranges") or 12),
+                    total_ranges=int(budget.get("total_ranges") or 96),
+                    page_size=int(budget.get("page_size") or 96),
+                )
+                retrieved_pages = [compact]
+                grade = _grade_compact_evidence(task, compact)
             model_bytes = int(compact.get("compact_output_bytes") or 0)
-            model_truncated = bool(compact.get("truncated"))
+            model_truncated = bool(compact.get("truncated")) or bool(compact.get("cursor"))
             candidate_processing = float(compact.get("candidate_duration_ms") or 0.0)
             candidate_status = "invoked"
         else:
@@ -927,6 +1023,7 @@ def _run_candidate_task(
             pair_id=task_id,
             run_id=run_id,
             variant="candidate",
+            candidate_id=candidate_id,
         )
         telemetry = _record_telemetry(
             Path(environment["QWENDEX_PERFORMANCE_DB"]),
@@ -943,12 +1040,15 @@ def _run_candidate_task(
             "repository": str(task.get("repository") or ""),
             "stratum": str(task.get("stratum") or ""),
             "variant": "candidate",
+            "candidate_id": candidate_id,
+            "candidate_version": compact.get("candidate_version") if compact else "not_applicable",
             "status": "pass" if quality_status == "pass" and telemetry["capture_status"] == "pass" else "fail",
             "quality_status": quality_status,
             "task_success": quality_status == "pass",
             "validation_status": edit.get("validation_status"),
             "relevant_file_recall": grade["relevant_file_recall"],
             "relevant_region_recall": grade["relevant_region_recall"],
+            "retrieval_contract": grade.get("retrieval", {"page_count": 0, "cursor_contract_complete": True}),
             "raw_output_bytes": raw["raw_output_bytes"],
             "model_facing_search_bytes": model_bytes,
             "compact_output_bytes": model_bytes if candidate_expected else "not_applicable",
@@ -956,6 +1056,11 @@ def _run_candidate_task(
             "retained_range_count": int(compact.get("retained_range_count") or 0) if compact else "not_applicable",
             "omitted_range_count": int(compact.get("omitted_range_count") or 0) if compact else "not_applicable",
             "continuation_requests": int(compact.get("continuation_requests") or 0) if compact else 0,
+            "pagination_calls_for_verified_retrieval": max(0, len(retrieved_pages) - 1),
+            "verified_retrieval_model_visible_bytes": sum(int(page.get("compact_output_bytes") or 0) for page in retrieved_pages) if retrieved_pages else model_bytes,
+            "result_mode": compact.get("result_mode") if compact else "not_applicable",
+            "coverage_mode": compact.get("coverage_mode") if compact else "not_applicable",
+            "fallback_count": int(compact.get("fallback_count") or 0) if compact else 0,
             "candidate_processing_ms": candidate_processing,
             "search_calls": raw["process_count"],
             "read_calls": 0,
@@ -1013,6 +1118,12 @@ def _pair_result(task: Mapping[str, Any], baseline: Mapping[str, Any], candidate
         "candidate_invoked": bool(candidate.get("candidate_invoked")),
         "candidate_adopted": bool(candidate.get("candidate_adopted")),
         "candidate_processing_ms": candidate.get("candidate_processing_ms"),
+        "candidate_id": candidate.get("candidate_id"),
+        "candidate_version": candidate.get("candidate_version"),
+        "pagination_calls_for_verified_retrieval": candidate.get("pagination_calls_for_verified_retrieval", 0),
+        "result_mode": candidate.get("result_mode", "not_applicable"),
+        "coverage_mode": candidate.get("coverage_mode", "not_applicable"),
+        "fallback_count": candidate.get("fallback_count", 0),
         "context_compaction_events": {"baseline": 0, "candidate": 0},
     }
 
@@ -1043,13 +1154,14 @@ def _run_pair(
     repository: Mapping[str, Any],
     run_dir: Path,
     run_id: str,
+    candidate_id: str,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     if str(task.get("pair_order") or "") == "candidate_first":
-        candidate = _run_candidate_task(task=task, repository=repository, run_dir=run_dir, run_id=run_id)
+        candidate = _run_candidate_task(task=task, repository=repository, run_dir=run_dir, run_id=run_id, candidate_id=candidate_id)
         baseline = _run_baseline_task(task=task, repository=repository, run_dir=run_dir, run_id=run_id)
     else:
         baseline = _run_baseline_task(task=task, repository=repository, run_dir=run_dir, run_id=run_id)
-        candidate = _run_candidate_task(task=task, repository=repository, run_dir=run_dir, run_id=run_id)
+        candidate = _run_candidate_task(task=task, repository=repository, run_dir=run_dir, run_id=run_id, candidate_id=candidate_id)
     return baseline, candidate, _pair_result(task, baseline, candidate)
 
 
@@ -1226,7 +1338,13 @@ def _manager_security_probe(run_dir: Path) -> dict[str, Any]:
     }
 
 
-def _performance_summary(baselines: list[Mapping[str, Any]], candidates: list[Mapping[str, Any]], pairs: list[Mapping[str, Any]]) -> dict[str, Any]:
+def _performance_summary(
+    baselines: list[Mapping[str, Any]],
+    candidates: list[Mapping[str, Any]],
+    pairs: list[Mapping[str, Any]],
+    *,
+    candidate_id: str,
+) -> dict[str, Any]:
     reductions = [float(pair.get("search_output_bytes", {}).get("reduction") or 0.0) for pair in pairs if isinstance(pair.get("search_output_bytes"), Mapping)]
     call_ratios = [float(pair.get("search_read_call_ratio") or 0.0) for pair in pairs]
     tool_ratios = [float(pair.get("total_tool_call_ratio") or 0.0) for pair in pairs]
@@ -1262,9 +1380,16 @@ def _performance_summary(baselines: list[Mapping[str, Any]], candidates: list[Ma
     expected_adoptions = [row for row in candidates if bool(row.get("candidate_invoked"))]
     registry = search_module().candidate_registry()
     candidate = next(
-        (item for item in registry.get("candidates", []) if isinstance(item, Mapping) and item.get("candidate_id") == "search_evidence_compaction_v1"),
+        (item for item in registry.get("candidates", []) if isinstance(item, Mapping) and item.get("candidate_id") == candidate_id),
         {},
     )
+    result_mode_counts: dict[str, int] = {}
+    for row in candidates:
+        mode = str(row.get("result_mode") or "not_observed")
+        result_mode_counts[mode] = result_mode_counts.get(mode, 0) + 1
+    pagination_calls = sum(int(row.get("pagination_calls_for_verified_retrieval") or 0) for row in candidates)
+    fallback_count = sum(int(row.get("fallback_count") or 0) for row in candidates)
+    retrieval_bytes = [int(row.get("verified_retrieval_model_visible_bytes") or 0) for row in candidates if row.get("candidate_invoked")]
     return {
         "schema_version": "qwendex.optimization_lab.performance_summary.v1",
         "pair_count": len(pairs),
@@ -1290,6 +1415,13 @@ def _performance_summary(baselines: list[Mapping[str, Any]], candidates: list[Ma
             "adopted_tasks": sum(1 for row in expected_adoptions if row.get("candidate_adopted")),
             "rate": round(sum(1 for row in expected_adoptions if row.get("candidate_adopted")) / len(expected_adoptions), 6) if expected_adoptions else "not_observed",
         },
+        "candidate_id": candidate_id,
+        "candidate_version": candidate.get("candidate_version", "not_observed"),
+        "v2_result_mode_counts": result_mode_counts,
+        "pagination_calls_for_verified_retrieval": pagination_calls,
+        "fallback_count": fallback_count,
+        "fallback_rate": round(fallback_count / len(expected_adoptions), 6) if expected_adoptions else "not_observed",
+        "verified_retrieval_model_visible_bytes": {"p50": _percentile([float(value) for value in retrieval_bytes], 0.5), "p95": _percentile([float(value) for value in retrieval_bytes], 0.95)},
         "candidate_processing_ms": {"p50": _percentile(candidate_processing, 0.5), "p95": _percentile(candidate_processing, 0.95)},
         "candidate_instruction_context": {
             "bytes": int(candidate.get("managed_instruction_bytes") or 0),
@@ -1335,6 +1467,12 @@ def _gate_decision(
         == str(candidate.get("manager_preflight", {}).get("policy_hash") or "")
         for baseline, candidate in zip(baselines, candidates, strict=True)
     ) if len(baselines) == len(candidates) else False
+    v2_rows = [row for row in candidates if str(row.get("candidate_id") or "") == "search_evidence_compaction_v2"]
+    cursor_contract_ok = all(
+        isinstance(row.get("retrieval_contract"), Mapping)
+        and bool(row["retrieval_contract"].get("cursor_contract_complete"))
+        for row in v2_rows
+    )
     hard = {
         "relevant_file_recall": "pass" if file_ok else "fail",
         "relevant_region_recall": "pass" if region_ok else "fail",
@@ -1344,6 +1482,7 @@ def _gate_decision(
         "manager_policy_and_local_routing": "pass" if manager.get("status") == "pass" and manager_run_ok and policy_hashes_match else "fail",
         "raw_artifact_digests": "pass" if raw_artifacts_valid else "fail",
         "candidate_default_off": "pass",
+        "v2_cursor_coverage_contract": "pass" if not v2_rows or cursor_contract_ok else "fail",
         "live_manager_root_binding": "not_observed",
     }
     median_reduction = performance.get("search_output_reduction", {}).get("median") if isinstance(performance.get("search_output_reduction"), Mapping) else None
@@ -1598,7 +1737,13 @@ def paired_run(
             pairs.append({"pair_id": str(task.get("id") or "unknown"), "state": "invalid_pair"})
             return
         try:
-            baseline, candidate, pair = _run_pair(task=task, repository=repository, run_dir=run_dir, run_id=run_id)
+            baseline, candidate, pair = _run_pair(
+                task=task,
+                repository=repository,
+                run_dir=run_dir,
+                run_id=run_id,
+                candidate_id=candidate_id,
+            )
         except (LabError, OSError, ValueError) as exc:
             baseline = {"task_id": str(task.get("id") or "unknown"), "variant": "baseline", "status": "blocked", "reason": str(exc)}
             candidate = {"task_id": str(task.get("id") or "unknown"), "variant": "candidate", "status": "blocked", "reason": str(exc)}
@@ -1632,7 +1777,7 @@ def paired_run(
     _write_json(run_dir / "10_freshness_matrix.json", freshness)
     _write_json(run_dir / "12_manager_and_security_regressions.json", manager)
     raw_artifacts_valid = _raw_artifact_hashes_valid(run_dir, [*baselines, *candidates])
-    performance = _performance_summary(baselines, candidates, pairs)
+    performance = _performance_summary(baselines, candidates, pairs, candidate_id=candidate_id)
     _write_json(run_dir / "13_performance_summary.json", performance)
     privacy = _privacy_scan(run_dir, manifest, payload)
     _write_json(run_dir / "11_privacy_scan.json", privacy)

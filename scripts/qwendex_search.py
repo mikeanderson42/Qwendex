@@ -24,15 +24,27 @@ from typing import Any, Iterable, Mapping
 RAW_SEARCH_SCHEMA_VERSION = "qwendex.search_raw_result.v1"
 RAW_ARTIFACT_SCHEMA_VERSION = "qwendex.search_raw_artifact.v1"
 COMPACT_SEARCH_SCHEMA_VERSION = "qwendex.search_compact_result.v1"
+COMPACT_SEARCH_V2_SCHEMA_VERSION = "qwendex.search_compact_result.v2"
 PATH_SEARCH_SCHEMA_VERSION = "qwendex.search_path_result.v1"
 FRESHNESS_SCHEMA_VERSION = "qwendex.search_freshness_matrix.v1"
-SEARCH_CANDIDATE_ID = "search_evidence_compaction_v1"
-SEARCH_CANDIDATE_VERSION = "1"
+SEARCH_V1_CANDIDATE_ID = "search_evidence_compaction_v1"
+SEARCH_V1_CANDIDATE_VERSION = "1"
+SEARCH_V2_CANDIDATE_ID = "search_evidence_compaction_v2"
+SEARCH_V2_CANDIDATE_VERSION = "2"
+# Keep the v1 aliases stable: historic lab artifacts and callers use them.
+SEARCH_CANDIDATE_ID = SEARCH_V1_CANDIDATE_ID
+SEARCH_CANDIDATE_VERSION = SEARCH_V1_CANDIDATE_VERSION
 SEARCH_CANDIDATE_ENV = "QWENDEX_SEARCH_EVIDENCE_COMPACTION"
 SEARCH_CANDIDATE_MANAGED_INSTRUCTION = (
     "Experimental search compaction is enabled for this launch. For broad repository discovery likely to return many matches, "
     "use `scripts/qwendex search content <pattern> --root <repo-or-subtree> --literal|--regex --json`; "
     "use direct `rg -F` for a narrow exact check, and do not repeat unchanged broad searches."
+)
+SEARCH_V2_CANDIDATE_MANAGED_INSTRUCTION = (
+    "Experimental recall-preserving search compaction v2 is enabled for this launch. For broad discovery, use "
+    "`scripts/qwendex search content <pattern> --root <repo-or-subtree> --literal|--regex --candidate v2 --json`; "
+    "use direct `rg -F` for a narrow exact check. Honor the v2 completeness state: when it says a next cursor is "
+    "required, request the next page before concluding omitted evidence is absent; accept a baseline fallback as complete."
 )
 
 _MAX_SAFE_FILES = 100_000
@@ -44,6 +56,9 @@ _DEFINITION_PREFIX = re.compile(
     r"^\s*(?:def|class|function|fn|interface|struct|enum|type|const|let|var)\b",
     re.IGNORECASE,
 )
+_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_DEFINITION_QUERY = re.compile(r"(?:^|[^A-Za-z0-9_])(def|class|function|fn|interface|struct|enum|type)\b", re.IGNORECASE)
+_REFERENCE_QUERY = re.compile(r"(?:reference|usage|uses|callers?|imports?|where\s+used)", re.IGNORECASE)
 
 
 class SearchError(ValueError):
@@ -326,15 +341,138 @@ def raw_content_search(
     }
 
 
+def _canonical_raw_result_digest(raw: Mapping[str, Any]) -> str:
+    """Digest stable parsed results rather than timing-bearing ripgrep JSONL."""
+
+    matches: list[dict[str, Any]] = []
+    for item in raw.get("matches", []):
+        if not isinstance(item, Mapping):
+            continue
+        kind = str(item.get("kind") or "")
+        if kind == "match":
+            matches.append(
+                {
+                    "kind": kind,
+                    "path": str(item.get("path") or ""),
+                    "line_number": int(item.get("line_number") or 0),
+                    "line_text": str(item.get("line_text") or ""),
+                    "submatches": [
+                        {
+                            "start": int(submatch.get("start") or 0),
+                            "end": int(submatch.get("end") or 0),
+                            "text": str(submatch.get("text") or ""),
+                        }
+                        for submatch in item.get("submatches", [])
+                        if isinstance(submatch, Mapping)
+                    ],
+                }
+            )
+        elif kind == "binary":
+            matches.append(
+                {
+                    "kind": kind,
+                    "path": str(item.get("path") or ""),
+                    "binary_offset": int(item.get("binary_offset") or 0),
+                }
+            )
+    material = {
+        "repository_scope_digest": raw.get("repository_scope_digest"),
+        "root_relative": raw.get("root_relative"),
+        "mode": raw.get("mode"),
+        "query_fingerprint": raw.get("query_fingerprint"),
+        "matches": sorted(matches, key=lambda item: json.dumps(item, sort_keys=True, ensure_ascii=False, separators=(",", ":"))),
+    }
+    return "sha256:" + sha256_text(json.dumps(material, sort_keys=True, ensure_ascii=False, separators=(",", ":")))
+
+
+def relevant_worktree_snapshot_digest(raw: Mapping[str, Any], *, root: Path | str | None = None) -> str:
+    """Return a content-bound digest for the files relevant to one raw result.
+
+    The digest is computed only in process and is suitable for a continuation
+    signature.  It deliberately returns no path or source content.  With a
+    live root it detects changes to every file that supplied a match (including
+    context-only edits); callers without a root retain the raw-result fallback
+    used by direct unit-level compaction calls.
+    """
+
+    material = hashlib.sha256()
+    material.update(b"qwendex-search-v2-relevant-worktree-snapshot\x00")
+    material.update(str(raw.get("repository_scope_digest") or "").encode("utf-8", "surrogateescape"))
+    material.update(b"\x00")
+    material.update(_canonical_raw_result_digest(raw).encode("ascii"))
+    if root is None:
+        return "sha256:" + material.hexdigest()
+
+    requested = Path(root).expanduser().resolve(strict=False)
+    repository = canonical_repository_root(requested)
+    material.update(b"\x00")
+    material.update(str(requested.relative_to(repository) if requested != repository else ".").encode("utf-8", "surrogateescape"))
+    paths = sorted(
+        {
+            str(item.get("path") or "")
+            for item in raw.get("matches", [])
+            if isinstance(item, Mapping) and str(item.get("path") or "")
+        }
+    )
+    for relative in paths:
+        candidate = repository / relative
+        material.update(b"\x00")
+        material.update(relative.encode("utf-8", "surrogateescape"))
+        resolved = candidate.resolve(strict=False)
+        if not _within(candidate, requested) or not _within(resolved, repository) or not candidate.is_file():
+            material.update(b"\x00missing-or-outside")
+            continue
+        material.update(b"\x00")
+        material.update(sha256_file(candidate).encode("ascii"))
+    return "sha256:" + material.hexdigest()
+
+
+def classify_content_query(pattern: str, *, mode: str) -> str:
+    """Classify a live query in memory without retaining its text in telemetry."""
+
+    value = str(pattern).strip()
+    if mode == "literal":
+        if _IDENTIFIER.fullmatch(value):
+            return "narrow_exact_identifier"
+        if len(value) >= 3:
+            return "narrow_literal"
+        return "low_confidence_or_mixed"
+    if _DEFINITION_QUERY.search(value):
+        return "broad_definition"
+    if _REFERENCE_QUERY.search(value):
+        return "broad_reference"
+    if any(token in value for token in (".*", ".+", "|", "[", "(", "\\b", "\\s")):
+        return "broad_regex"
+    return "low_confidence_or_mixed"
+
+
+def _candidate_record(candidate_id: str) -> dict[str, Any]:
+    for item in candidate_registry()["candidates"]:
+        if str(item.get("candidate_id") or "") == candidate_id:
+            return dict(item)
+    raise SearchError("unknown experimental search candidate")
+
+
+def selected_candidate_from_environment(value: str | None = None) -> str | None:
+    """Resolve an explicitly requested managed candidate without enabling one."""
+
+    requested = str(value if value is not None else os.environ.get(SEARCH_CANDIDATE_ENV) or "").strip().lower()
+    if requested in {"v2", "2", SEARCH_V2_CANDIDATE_ID}:
+        return SEARCH_V2_CANDIDATE_ID
+    if requested in {"1", "true", "yes", "on", "v1", SEARCH_V1_CANDIDATE_ID}:
+        return SEARCH_V1_CANDIDATE_ID
+    return None
+
+
 def candidate_registry() -> dict[str, Any]:
-    """Return the single narrow, default-off candidate declaration."""
+    """Return default-off search candidates without changing historic v1."""
 
     return {
         "schema_version": "qwendex.optimization_lab.candidate_registry.v1",
         "candidates": [
             {
-                "candidate_id": SEARCH_CANDIDATE_ID,
-                "candidate_version": SEARCH_CANDIDATE_VERSION,
+                "candidate_id": SEARCH_V1_CANDIDATE_ID,
+                "candidate_version": SEARCH_V1_CANDIDATE_VERSION,
                 "activation_mechanism": "scoped `QWENDEX_SEARCH_EVIDENCE_COMPACTION=1` Qdex launch, explicit `performance lab run --candidate search_evidence_compaction_v1`, or direct experimental `search` command",
                 "default_state": "off",
                 "managed_instruction": SEARCH_CANDIDATE_MANAGED_INSTRUCTION,
@@ -365,6 +503,48 @@ def candidate_registry() -> dict[str, Any]:
                 ],
                 "known_limitations": [
                     "No content-result cache or persistent index is used.",
+                    "A direct command does not prove live model adoption.",
+                    "Raw evidence is retained only in ignored local evaluation artifacts.",
+                ],
+            },
+            {
+                "candidate_id": SEARCH_V2_CANDIDATE_ID,
+                "candidate_version": SEARCH_V2_CANDIDATE_VERSION,
+                "activation_mechanism": "explicit `--candidate v2`, scoped `QWENDEX_SEARCH_EVIDENCE_COMPACTION=v2` Qdex launch, or explicit `performance lab run --candidate search_evidence_compaction_v2`",
+                "default_state": "off",
+                "managed_instruction": SEARCH_V2_CANDIDATE_MANAGED_INSTRUCTION,
+                "managed_instruction_bytes": len(SEARCH_V2_CANDIDATE_MANAGED_INSTRUCTION.encode("utf-8")),
+                "expected_affected_tool_families": ["search", "read", "context"],
+                "required_metrics": [
+                    "candidate_version",
+                    "result_mode",
+                    "raw_bytes",
+                    "model_visible_bytes",
+                    "selected_file_count",
+                    "selected_region_count",
+                    "omitted_file_count",
+                    "omitted_region_count",
+                    "page_count",
+                    "fallback_count",
+                    "coverage_mode",
+                ],
+                "hard_quality_gates": [
+                    "relevant_file_recall_non_inferior",
+                    "relevant_region_recall_non_inferior_or_retrievable",
+                    "modified_and_untracked_visibility",
+                    "repository_and_symlink_boundary",
+                    "privacy_boundary",
+                    "stale_cursor_rejection",
+                ],
+                "performance_gates": [
+                    "search_evidence_reduction",
+                    "tool_call_non_regression",
+                    "wall_time_non_regression",
+                    "fallback_rate",
+                ],
+                "known_limitations": [
+                    "No content-result cache, persistent index, structural-search dependency, or Codex Rust patch is used.",
+                    "A cursor is validated against a live relevant-worktree snapshot and must be replayed with the original caller-supplied root/query arguments.",
                     "A direct command does not prove live model adoption.",
                     "Raw evidence is retained only in ignored local evaluation artifacts.",
                 ],
@@ -637,6 +817,336 @@ def compact_content_search(
     }
 
 
+def _v2_pagination_signature(
+    raw: Mapping[str, Any],
+    *,
+    mode: str,
+    budgets: Mapping[str, int],
+    snapshot_digest: str,
+) -> str:
+    material = {
+        "candidate_id": SEARCH_V2_CANDIDATE_ID,
+        "candidate_version": SEARCH_V2_CANDIDATE_VERSION,
+        "repository_scope_digest": raw.get("repository_scope_digest"),
+        "worktree_snapshot_digest": snapshot_digest,
+        "query_fingerprint": raw.get("query_fingerprint"),
+        "raw_result_digest": _canonical_raw_result_digest(raw),
+        "mode": mode,
+        "ordering_contract": "v2-definition-first-file-round-robin-all-regions",
+        "budgets": dict(sorted(budgets.items())),
+    }
+    return sha256_text(json.dumps(material, sort_keys=True, separators=(",", ":")))[:32]
+
+
+def _v2_page_offset(cursor: str, signature: str) -> int:
+    if not cursor:
+        return 0
+    parts = cursor.split(":")
+    if len(parts) != 3 or parts[0] != "v2" or parts[2] != signature:
+        raise SearchError("invalid or stale v2 search cursor")
+    try:
+        offset = int(parts[1])
+    except ValueError as exc:
+        raise SearchError("invalid v2 search cursor offset") from exc
+    if offset < 0:
+        raise SearchError("invalid v2 search cursor offset")
+    return offset
+
+
+def _v2_spread_order(values: list[dict[str, Any]], *, coverage_width: int) -> list[dict[str, Any]]:
+    """Return early first/last/even coverage without discarding any range."""
+
+    if len(values) <= coverage_width:
+        return list(values)
+    indices = {round(slot * (len(values) - 1) / (coverage_width - 1)) for slot in range(coverage_width)} if coverage_width > 1 else {0}
+    coverage = [item for index, item in enumerate(values) if index in indices]
+    remainder = [item for index, item in enumerate(values) if index not in indices]
+    return [*coverage, *remainder]
+
+
+def _v2_ordered_ranges(
+    ranges: list[dict[str, Any]],
+    *,
+    coverage_width: int,
+) -> tuple[list[dict[str, Any]], list[str], dict[str, list[dict[str, Any]]]]:
+    """Interleave all files so coverage is a deterministic ordering, not a cap."""
+
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for item in ranges:
+        grouped.setdefault(str(item["path"]), []).append(item)
+    paths = sorted(
+        grouped,
+        key=lambda path: (
+            min(int(item["score"]) for item in grouped[path]),
+            -sum(1 for item in grouped[path] if int(item["score"]) == 0),
+            path,
+        ),
+    )
+    queues: dict[str, list[dict[str, Any]]] = {}
+    for path in paths:
+        file_ranges = sorted(grouped[path], key=lambda item: (int(item["score"]), int(item["start_line"]), int(item["end_line"])))
+        queues[path] = _v2_spread_order(file_ranges, coverage_width=coverage_width)
+    ordered: list[dict[str, Any]] = []
+    offset = 0
+    while True:
+        emitted = False
+        for path in paths:
+            queue = queues[path]
+            if offset < len(queue):
+                ordered.append(queue[offset])
+                emitted = True
+        if not emitted:
+            break
+        offset += 1
+    return ordered, paths, queues
+
+
+def _v2_file_inventory(paths: list[str], queues: Mapping[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "path": path,
+            "match_count": sum(len(item.get("match_lines", [])) for item in queues[path]),
+            "region_count": len(queues[path]),
+            "definition_region_count": sum(1 for item in queues[path] if item.get("reason") == "likely_definition"),
+        }
+        for path in paths
+    ]
+
+
+def _v2_model_range(item: Mapping[str, Any]) -> dict[str, Any]:
+    """Keep source excerpts out of the compact model-facing evidence form."""
+
+    return {
+        "path": str(item.get("path") or ""),
+        "start_line": int(item.get("start_line") or 0),
+        "end_line": int(item.get("end_line") or 0),
+        "reason": str(item.get("reason") or ""),
+    }
+
+
+def _v2_baseline_fallback(
+    raw: Mapping[str, Any],
+    *,
+    ranges: list[dict[str, Any]],
+    binary_file_count: int,
+    pattern: str,
+    mode: str,
+) -> dict[str, Any]:
+    """Return all available evidence when a configured scope cap blocks compaction."""
+
+    paths = sorted({str(item["path"]) for item in ranges})
+    queues = {path: [item for item in ranges if str(item["path"]) == path] for path in paths}
+    inventory = _v2_file_inventory(paths, queues)
+    visible_ranges = [_v2_model_range(item) for item in ranges]
+    model_evidence = [f"{item['path']}:{item['start_line']}-{item['end_line']} — {item['reason']}" for item in visible_ranges]
+    completeness = {
+        "state": "baseline_fallback",
+        "next_cursor_required": False,
+        "contract": "Compaction was disabled and every available scoped range is returned. The caller-selected max-files limit remains explicit in source_scope.",
+    }
+    model_visible = {"completeness": completeness, "file_inventory": inventory, "model_evidence": model_evidence}
+    model_visible_bytes = len(json.dumps(model_visible, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+    safety = raw.get("safety", {}) if isinstance(raw.get("safety"), Mapping) else {}
+    return {
+        "schema_version": COMPACT_SEARCH_V2_SCHEMA_VERSION,
+        "candidate_id": SEARCH_V2_CANDIDATE_ID,
+        "candidate_version": SEARCH_V2_CANDIDATE_VERSION,
+        "repository_scope_digest": raw.get("repository_scope_digest"),
+        "query_fingerprint": raw.get("query_fingerprint"),
+        "query_class": classify_content_query(pattern, mode=mode),
+        "mode": mode,
+        "result_mode": "baseline_fallback",
+        "coverage_mode": "baseline_fallback_file_limit",
+        "completeness": completeness,
+        "source_scope": {"file_limit_omitted": int(safety.get("file_limit_omitted") or 0), "complete": False},
+        "raw_match_count": int(raw.get("match_count") or 0),
+        "raw_file_count": int(raw.get("file_count") or 0),
+        "raw_output_bytes": int(raw.get("raw_output_bytes") or 0),
+        "raw_bytes": int(raw.get("raw_output_bytes") or 0),
+        "compact_output_bytes": model_visible_bytes,
+        "model_visible_bytes": model_visible_bytes,
+        "compression_ratio": round(model_visible_bytes / int(raw.get("raw_output_bytes") or 1), 6),
+        "selected_file_count": len(paths),
+        "selected_region_count": len(ranges),
+        "shown_file_count": len(paths),
+        "shown_region_count": len(ranges),
+        "omitted_file_count": 0,
+        "omitted_region_count": 0,
+        "retained_range_count": len(ranges),
+        "retained_file_count": len(paths),
+        "retained_files": paths,
+        "ranges": visible_ranges,
+        "model_evidence": model_evidence,
+        "file_inventory": inventory,
+        "file_inventory_complete": True,
+        "inventory_omitted_file_count": 0,
+        "page_count": 1,
+        "page_index": 1,
+        "page_size": len(ranges),
+        "cursor": None,
+        "continuation_token": None,
+        "continuation_requests": 0,
+        "fallback_count": 1,
+        "binary_file_count": binary_file_count,
+        "candidate_duration_ms": 0.0,
+    }
+
+
+def compact_content_search_v2(
+    raw: Mapping[str, Any],
+    *,
+    pattern: str,
+    mode: str,
+    per_file_ranges: int = 12,
+    total_ranges: int = 96,
+    max_files: int = 64,
+    page_size: int = 96,
+    cursor: str = "",
+    context_lines: int = 2,
+    merge_gap: int = 2,
+    max_range_lines: int = 24,
+    snapshot_digest: str = "",
+) -> dict[str, Any]:
+    """Compact live evidence with complete, snapshot-bound retrieval semantics.
+
+    Unlike v1, `per_file_ranges` and `total_ranges` only influence ordering
+    and the first response budget.  They never remove a matching region from
+    the cursor sequence.  A response is therefore either complete or plainly
+    asks the caller to continue with its opaque v2 cursor.
+    """
+
+    started = time.monotonic()
+    if raw.get("schema_version") != RAW_SEARCH_SCHEMA_VERSION:
+        raise SearchError("raw search result schema is unsupported")
+    if mode not in {"literal", "regex"}:
+        raise SearchError("content search mode must be literal or regex")
+    safety = raw.get("safety", {}) if isinstance(raw.get("safety"), Mapping) else {}
+
+    per_file = _bounded(per_file_ranges, default=12, maximum=_MAX_PER_FILE_RANGES)
+    total = _bounded(total_ranges, default=96, maximum=_MAX_TOTAL_RANGES)
+    inventory_limit = _bounded(max_files, default=64, maximum=_MAX_SAFE_FILES)
+    requested_page = _bounded(page_size, default=96, maximum=_MAX_PAGE_SIZE)
+    ranges, binary_file_count = _compact_ranges(
+        raw,
+        pattern=pattern,
+        mode=mode,
+        context_lines=max(0, min(20, int(context_lines))),
+        merge_gap=max(0, min(20, int(merge_gap))),
+        max_range_lines=max(3, min(500, int(max_range_lines))),
+    )
+    if int(safety.get("file_limit_omitted") or 0) > 0:
+        fallback = _v2_baseline_fallback(
+            raw,
+            ranges=ranges,
+            binary_file_count=binary_file_count,
+            pattern=pattern,
+            mode=mode,
+        )
+        fallback["candidate_duration_ms"] = round((time.monotonic() - started) * 1000, 3)
+        return fallback
+    ordered, paths, queues = _v2_ordered_ranges(ranges, coverage_width=per_file)
+    coverage_floor = min(len(paths), inventory_limit)
+    configured_page = min(requested_page, total)
+    effective_page = min(_MAX_PAGE_SIZE, max(configured_page, coverage_floor))
+    expanded_budget = effective_page > configured_page
+    budgets = {
+        "per_file_ranges": per_file,
+        "total_ranges": total,
+        "max_files": inventory_limit,
+        "page_size": requested_page,
+        "effective_page_size": effective_page,
+    }
+    snapshot = snapshot_digest or relevant_worktree_snapshot_digest(raw)
+    signature = _v2_pagination_signature(raw, mode=mode, budgets=budgets, snapshot_digest=snapshot)
+    offset = _v2_page_offset(cursor, signature)
+    if offset > len(ordered):
+        raise SearchError("v2 search cursor offset exceeds available evidence")
+    retained = ordered[offset : offset + effective_page]
+    next_offset = offset + len(retained)
+    next_cursor = f"v2:{next_offset}:{signature}" if next_offset < len(ordered) else None
+    shown_files = sorted({str(item["path"]) for item in retained})
+    inventory = _v2_file_inventory(paths, queues)
+    visible_inventory = inventory[:inventory_limit]
+    omitted_regions = max(0, len(ordered) - next_offset)
+    omitted_files = max(0, len(paths) - len(shown_files))
+    complete = omitted_regions == 0
+    if complete:
+        result_mode = "expanded_budget" if expanded_budget else "compact"
+        completeness_state = "complete"
+        coverage_mode = "all_regions_shown"
+    elif len(paths) <= inventory_limit:
+        result_mode = "pagination_required"
+        completeness_state = "partial_requires_next_cursor"
+        coverage_mode = "all_regions_cursor_retrievable"
+    else:
+        result_mode = "pagination_required"
+        completeness_state = "partial_requires_next_cursor"
+        coverage_mode = "paged_file_inventory_and_regions"
+    visible_ranges = [_v2_model_range(item) for item in retained]
+    model_evidence = [f"{item['path']}:{item['start_line']}-{item['end_line']} — {item['reason']}" for item in visible_ranges]
+    completeness = {
+        "state": completeness_state,
+        "next_cursor_required": bool(next_cursor),
+        "contract": "Every matching compact region is in this deterministic cursor ordering; no region is silently dropped.",
+    }
+    model_visible = {
+        "completeness": completeness,
+        "file_inventory": visible_inventory,
+        "model_evidence": model_evidence,
+    }
+    model_visible_bytes = len(json.dumps(model_visible, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+    return {
+        "schema_version": COMPACT_SEARCH_V2_SCHEMA_VERSION,
+        "candidate_id": SEARCH_V2_CANDIDATE_ID,
+        "candidate_version": SEARCH_V2_CANDIDATE_VERSION,
+        "repository_scope_digest": raw.get("repository_scope_digest"),
+        "worktree_snapshot_digest": snapshot,
+        "query_fingerprint": raw.get("query_fingerprint"),
+        "query_class": classify_content_query(pattern, mode=mode),
+        "mode": mode,
+        "deterministic_rule": {
+            "context_lines": max(0, min(20, int(context_lines))),
+            "merge_gap_lines": max(0, min(20, int(merge_gap))),
+            "max_range_lines": max(3, min(500, int(max_range_lines))),
+            "ordering": "likely declarations before references, evenly spread representatives within each file, then file round-robin without discarding any range",
+            "cursor": "opaque v2 offset and signature bound to candidate version, relevant worktree snapshot, query fingerprint, ordering, and budgets",
+        },
+        "result_mode": result_mode,
+        "coverage_mode": coverage_mode,
+        "completeness": completeness,
+        "raw_match_count": int(raw.get("match_count") or 0),
+        "raw_file_count": int(raw.get("file_count") or 0),
+        "raw_output_bytes": int(raw.get("raw_output_bytes") or 0),
+        "raw_bytes": int(raw.get("raw_output_bytes") or 0),
+        "compact_output_bytes": model_visible_bytes,
+        "model_visible_bytes": model_visible_bytes,
+        "compression_ratio": round(model_visible_bytes / int(raw.get("raw_output_bytes") or 1), 6),
+        "selected_file_count": len(paths),
+        "selected_region_count": len(ordered),
+        "shown_file_count": len(shown_files),
+        "shown_region_count": len(retained),
+        "omitted_file_count": omitted_files,
+        "omitted_region_count": omitted_regions,
+        "retained_range_count": len(retained),
+        "retained_file_count": len(shown_files),
+        "retained_files": shown_files,
+        "ranges": visible_ranges,
+        "model_evidence": model_evidence,
+        "file_inventory": visible_inventory,
+        "file_inventory_complete": len(visible_inventory) == len(inventory),
+        "inventory_omitted_file_count": max(0, len(inventory) - len(visible_inventory)),
+        "page_count": (len(ordered) + effective_page - 1) // effective_page if ordered else 0,
+        "page_index": offset // effective_page + 1 if retained or not ordered else 0,
+        "page_size": effective_page,
+        "cursor": next_cursor,
+        "continuation_token": next_cursor,
+        "continuation_requests": 1 if cursor else 0,
+        "fallback_count": 0,
+        "binary_file_count": binary_file_count,
+        "candidate_duration_ms": round((time.monotonic() - started) * 1000, 3),
+    }
+
+
 def _write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     encoded = json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
@@ -660,14 +1170,16 @@ def write_raw_evidence_artifact(
     pair_id: str,
     run_id: str,
     variant: str,
+    candidate_id: str = SEARCH_V1_CANDIDATE_ID,
 ) -> dict[str, Any]:
     """Persist raw evidence only at an ignored artifact path selected by a lab."""
 
     target = Path(path)
+    selected_candidate = _candidate_record(candidate_id) if variant == "candidate" else {}
     payload = {
         "schema_version": RAW_ARTIFACT_SCHEMA_VERSION,
-        "candidate_id": SEARCH_CANDIDATE_ID if variant == "candidate" else "baseline_raw_ripgrep",
-        "candidate_version": SEARCH_CANDIDATE_VERSION if variant == "candidate" else "not_applicable",
+        "candidate_id": selected_candidate.get("candidate_id") if variant == "candidate" else "baseline_raw_ripgrep",
+        "candidate_version": selected_candidate.get("candidate_version") if variant == "candidate" else "not_applicable",
         "repository_scope_digest": raw.get("repository_scope_digest"),
         "pair_association": {"run_id": run_id, "pair_id": pair_id, "variant": variant},
         "query_fingerprint": raw.get("query_fingerprint"),
@@ -683,6 +1195,32 @@ def write_raw_evidence_artifact(
     }
 
 
+def _normalized_candidate_id(value: str) -> str:
+    requested = str(value or "").strip().lower()
+    aliases = {
+        "": SEARCH_V1_CANDIDATE_ID,
+        "v1": SEARCH_V1_CANDIDATE_ID,
+        "1": SEARCH_V1_CANDIDATE_ID,
+        SEARCH_V1_CANDIDATE_ID: SEARCH_V1_CANDIDATE_ID,
+        "v2": SEARCH_V2_CANDIDATE_ID,
+        "2": SEARCH_V2_CANDIDATE_ID,
+        SEARCH_V2_CANDIDATE_ID: SEARCH_V2_CANDIDATE_ID,
+    }
+    candidate_id = aliases.get(requested)
+    if candidate_id is None:
+        raise SearchError("unknown experimental search candidate")
+    return candidate_id
+
+
+def _model_facing_result(compact: Mapping[str, Any]) -> dict[str, Any]:
+    """Hide lab-only range geometry from the direct compact-search response."""
+
+    payload = dict(compact)
+    if payload.get("candidate_id") == SEARCH_V2_CANDIDATE_ID:
+        payload.pop("ranges", None)
+    return payload
+
+
 def content_search_payload(
     pattern: str,
     *,
@@ -695,6 +1233,8 @@ def content_search_payload(
     max_files_evidence: int = 64,
     page_size: int = 96,
     page_token: str = "",
+    candidate_id: str = SEARCH_V1_CANDIDATE_ID,
+    activation_source: str = "explicit_direct_command",
 ) -> dict[str, Any]:
     raw = raw_content_search(
         pattern,
@@ -703,21 +1243,35 @@ def content_search_payload(
         include_ignored=include_ignored,
         max_files=max_files,
     )
-    compact = compact_content_search(
-        raw,
-        pattern=pattern,
-        mode=mode,
-        per_file_ranges=per_file_ranges,
-        total_ranges=total_ranges,
-        max_files=max_files_evidence,
-        page_size=page_size,
-        page_token=page_token,
-    )
+    selected = _normalized_candidate_id(candidate_id)
+    if selected == SEARCH_V2_CANDIDATE_ID:
+        compact = compact_content_search_v2(
+            raw,
+            pattern=pattern,
+            mode=mode,
+            per_file_ranges=per_file_ranges,
+            total_ranges=total_ranges,
+            max_files=max_files_evidence,
+            page_size=page_size,
+            cursor=page_token,
+            snapshot_digest=relevant_worktree_snapshot_digest(raw, root=root),
+        )
+    else:
+        compact = compact_content_search(
+            raw,
+            pattern=pattern,
+            mode=mode,
+            per_file_ranges=per_file_ranges,
+            total_ranges=total_ranges,
+            max_files=max_files_evidence,
+            page_size=page_size,
+            page_token=page_token,
+        )
     return {
-        "schema_version": COMPACT_SEARCH_SCHEMA_VERSION,
-        "candidate": candidate_registry()["candidates"][0],
-        "activation": {"default_state": "off", "active": True, "source": "explicit_direct_command"},
-        "result": compact,
+        "schema_version": compact["schema_version"],
+        "candidate": _candidate_record(selected),
+        "activation": {"default_state": "off", "active": True, "source": activation_source},
+        "result": _model_facing_result(compact),
         "raw_statistics": {
             "raw_match_count": raw["match_count"],
             "raw_file_count": raw["file_count"],
@@ -726,6 +1280,43 @@ def content_search_payload(
             "safety": raw["safety"],
         },
     }
+
+
+def content_search_next_payload(
+    pattern: str,
+    *,
+    root: Path | str,
+    mode: str,
+    cursor: str,
+    include_ignored: bool = False,
+    max_files: int = _MAX_SAFE_FILES,
+    per_file_ranges: int = 12,
+    total_ranges: int = 96,
+    max_files_evidence: int = 64,
+    page_size: int = 96,
+    candidate_id: str = SEARCH_V2_CANDIDATE_ID,
+) -> dict[str, Any]:
+    """Recompute a live v2 page and reject the cursor if its snapshot moved."""
+
+    selected = _normalized_candidate_id(candidate_id)
+    if selected != SEARCH_V2_CANDIDATE_ID:
+        raise SearchError("search next supports only the recall-preserving v2 cursor")
+    if not cursor:
+        raise SearchError("v2 search next requires a cursor")
+    return content_search_payload(
+        pattern,
+        root=root,
+        mode=mode,
+        include_ignored=include_ignored,
+        max_files=max_files,
+        per_file_ranges=per_file_ranges,
+        total_ranges=total_ranges,
+        max_files_evidence=max_files_evidence,
+        page_size=page_size,
+        page_token=cursor,
+        candidate_id=selected,
+        activation_source="explicit_cursor_continuation",
+    )
 
 
 def path_search_payload(
@@ -762,6 +1353,7 @@ def path_search_payload(
     continuation = f"v1:{next_offset}:{signature}" if next_offset < len(matches) else None
     return {
         "schema_version": PATH_SEARCH_SCHEMA_VERSION,
+        "query_class": "path_name_search",
         "repository_scope_digest": "sha256:" + sha256_text(str(repository)),
         "root_relative": root_relative,
         "mode": mode,
