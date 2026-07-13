@@ -22,7 +22,7 @@ from typing import Any, Mapping
 EVENT_SCHEMA_VERSION = "qwendex.performance_event.v1"
 SUMMARY_SCHEMA_VERSION = "qwendex.performance_summary.v1"
 BENCHMARK_SCHEMA_VERSION = "qwendex.performance_benchmark.v1"
-DATABASE_SCHEMA_VERSION = 1
+DATABASE_SCHEMA_VERSION = 2
 BUSY_TIMEOUT_MS = 250
 
 _REPOSITORY_SCOPE_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -71,6 +71,15 @@ _TERMINAL_VALUES = {
     "completed_without_start",
 }
 _INPUT_BUCKET_VALUES = {"none", "1-32", "33-128", "129-512", "513+"}
+_WAIT_TIMEOUT_BUCKET_VALUES = {
+    "not_applicable",
+    "not_provided",
+    "at_most_30s",
+    "31_to_60s",
+    "61_to_120s",
+    "over_120s",
+    "invalid",
+}
 
 
 def utc_now() -> str:
@@ -183,6 +192,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
           terminal_classification TEXT NOT NULL,
           query_fingerprint TEXT NOT NULL DEFAULT '',
           event_key_digest TEXT NOT NULL DEFAULT '',
+          wait_timeout_bucket TEXT NOT NULL DEFAULT 'not_applicable',
           instrumentation_duration_ms REAL NOT NULL DEFAULT 0
         );
         CREATE INDEX IF NOT EXISTS qwendex_performance_events_run_started
@@ -195,6 +205,15 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
           ON qwendex_performance_events(run_id, query_fingerprint);
         """
     )
+    columns = {
+        str(row["name"])
+        for row in conn.execute("PRAGMA table_info(qwendex_performance_events)").fetchall()
+    }
+    if "wait_timeout_bucket" not in columns:
+        conn.execute(
+            "ALTER TABLE qwendex_performance_events "
+            "ADD COLUMN wait_timeout_bucket TEXT NOT NULL DEFAULT 'not_applicable'"
+        )
     if version < DATABASE_SCHEMA_VERSION:
         conn.execute(f"PRAGMA user_version = {DATABASE_SCHEMA_VERSION}")
     conn.commit()
@@ -285,6 +304,11 @@ def _event_values(conn: sqlite3.Connection, record: Mapping[str, Any]) -> dict[s
         "terminal_classification": _known(record.get("terminal_classification"), _TERMINAL_VALUES, "observed"),
         "query_fingerprint": query_fingerprint,
         "event_key_digest": _fingerprint(salt, record.get("event_key_material"), prefix="hmac-sha256"),
+        "wait_timeout_bucket": _known(
+            record.get("wait_timeout_bucket"),
+            _WAIT_TIMEOUT_BUCKET_VALUES,
+            "not_applicable",
+        ),
         "instrumentation_duration_ms": 0.0,
     }
 

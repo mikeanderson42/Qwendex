@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import math
 import os
 import re
 import shlex
@@ -7401,6 +7402,35 @@ def _performance_query_details(event: Mapping[str, Any], tool_family: str) -> tu
     return query_class, ""
 
 
+def _performance_wait_timeout_bucket(event: Mapping[str, Any]) -> str:
+    """Reduce a collaboration wait timeout to a fixed, non-identifying bucket.
+
+    Hook input can contain arbitrary content, so this function inspects only
+    the numeric timeout field transiently. The database receives neither the
+    raw input object nor the numeric value.
+    """
+
+    tool = normalized_event_tool_name(event_tool_name(event))
+    if tool not in {"wait", "wait_agent"}:
+        return "not_applicable"
+    tool_input = event.get("tool_input")
+    if not isinstance(tool_input, Mapping) or "timeout_ms" not in tool_input:
+        return "not_provided"
+    raw = tool_input.get("timeout_ms")
+    if isinstance(raw, bool) or not isinstance(raw, int | float):
+        return "invalid"
+    timeout_ms = float(raw)
+    if not math.isfinite(timeout_ms) or timeout_ms <= 0:
+        return "invalid"
+    if timeout_ms <= 30_000:
+        return "at_most_30s"
+    if timeout_ms <= 60_000:
+        return "31_to_60s"
+    if timeout_ms <= 120_000:
+        return "61_to_120s"
+    return "over_120s"
+
+
 def _performance_input_size_bucket(event: Mapping[str, Any], query_material: str) -> str:
     size = len(event_command_text(event).encode("utf-8", "replace")) + len(query_material.encode("utf-8", "replace"))
     if size <= 0:
@@ -7607,6 +7637,7 @@ def capture_performance_hook_event(
         "query_class": query_class,
         "scope_class": _performance_scope_class(event),
         "input_size_bucket": _performance_input_size_bucket(event, query_material),
+        "wait_timeout_bucket": _performance_wait_timeout_bucket(event),
         "query_material": query_material,
         "query_fingerprints": settings["query_fingerprints"],
     }

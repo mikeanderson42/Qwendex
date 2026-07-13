@@ -28,7 +28,8 @@ migration risk, or retention growth to correctness-critical Manager state.
 
 The event schema is `qwendex.performance_event.v1`; the aggregate schema is
 `qwendex.performance_summary.v1`; the local database schema version is held in
-SQLite's `user_version` pragma. Events contain safe metadata such as:
+SQLite's `user_version` pragma (currently `2`). Events contain safe metadata
+such as:
 
 - a random event identifier and locally HMAC-derived run, launch, turn, and
   query identifiers;
@@ -43,6 +44,13 @@ tool-input JSON, tool output, stdout, stderr, transcripts, credentials, or
 tokens. Query comparison uses an install-local random salt and HMAC-SHA-256;
 the query itself is immediately discarded. Output content is counted in memory
 and immediately discarded.
+
+For an accepted native `wait` or `wait_agent` tool call, the adapter may also
+derive one fixed `timeout_ms` bucket (`at_most_30s`, `31_to_60s`,
+`61_to_120s`, `over_120s`, or a missing/invalid category). It stores neither
+the input object nor the numeric timeout. This diagnostic is omitted from
+aggregate commands and is consumed only as a bounded count in an ignored live
+runtime profile.
 
 Public summary and run commands omit event, run, and launch identifiers. A
 blocked hook does not create telemetry; capture runs only after the existing
@@ -85,6 +93,10 @@ completed tool/subagent lifecycle categories from that arm's metadata database
 after the Codex root starts. This is a one-way timing input: it stores fixed
 counts in the private runtime profile, never reads raw fields, never changes a
 hook decision, and never treats a pending wait as progress.
+
+When a pending collaboration wait is present, its fixed timeout bucket can be
+counted for diagnosis only. It cannot extend inactivity, alter a supervisor
+budget, or grant the hook/Manager any authority.
 
 The Manager safety classifier remains stricter than telemetry classification.
 For example, a shell-capable tool is still treated conservatively by the safety

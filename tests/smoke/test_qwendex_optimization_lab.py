@@ -743,7 +743,8 @@ def _create_hook_lifecycle_database(path: Path) -> None:
               phase TEXT NOT NULL,
               event_kind TEXT NOT NULL,
               tool_family TEXT NOT NULL,
-              terminal_classification TEXT NOT NULL
+              terminal_classification TEXT NOT NULL,
+              wait_timeout_bucket TEXT NOT NULL DEFAULT 'not_applicable'
             )
             """
         )
@@ -776,8 +777,8 @@ def test_live_supervisor_uses_only_completed_isolated_hook_lifecycle_progress(tm
             time.sleep(0.1)
             with sqlite3.connect(os.environ["QWENDEX_PERFORMANCE_DB"]) as connection:
                 connection.execute(
-                    "INSERT INTO qwendex_performance_events VALUES (?, ?, ?, ?)",
-                    ("tool", "tool_call", "search", "completed"),
+                    "INSERT INTO qwendex_performance_events VALUES (?, ?, ?, ?, ?)",
+                    ("tool", "tool_call", "search", "completed", "not_applicable"),
                 )
         time.sleep(0.12)
         """,
@@ -791,7 +792,7 @@ def test_live_supervisor_uses_only_completed_isolated_hook_lifecycle_progress(tm
     assert "allowlisted_hook_lifecycle_counts" in lab.live_runtime_profile_contract()["privacy_boundary"]["safe_diagnostics"]
 
 
-def test_live_supervisor_does_not_treat_pending_hook_wait_as_progress(tmp_path: Path) -> None:
+def test_live_supervisor_records_pending_wait_bucket_without_treating_it_as_progress(tmp_path: Path) -> None:
     lab = load_module("qwendex_optimization_lab")
     hook_database = tmp_path / "hook-pending.sqlite"
     _create_hook_lifecycle_database(hook_database)
@@ -817,8 +818,8 @@ def test_live_supervisor_does_not_treat_pending_hook_wait_as_progress(tmp_path: 
         time.sleep(0.04)
         with sqlite3.connect(os.environ["QWENDEX_PERFORMANCE_DB"]) as connection:
             connection.execute(
-                "INSERT INTO qwendex_performance_events VALUES (?, ?, ?, ?)",
-                ("tool", "tool_call", "other", "pending"),
+                "INSERT INTO qwendex_performance_events VALUES (?, ?, ?, ?, ?)",
+                ("tool", "tool_call", "collaboration", "pending", "over_120s"),
             )
         time.sleep(0.3)
         """,
@@ -828,6 +829,8 @@ def test_live_supervisor_does_not_treat_pending_hook_wait_as_progress(tmp_path: 
 
     assert result["timed_out"] is True
     assert profile["hook_lifecycle_event_counts"] == {}
+    assert profile["collaboration_wait_timeout_bucket_counts"] == {"over_120s": 1}
+    assert "hook_tool_completed" not in profile["trusted_progress_event_counts"]
     assert profile["termination"]["timeout_classification"] == "timeout_due_to_inactivity"
 
 
@@ -859,22 +862,41 @@ def test_hook_lifecycle_reader_handles_late_lower_rowid_commits_and_terminal_upd
             (10, "subagent", "subagent_start", "collaboration", "observed"),
         )
     row_states: dict[int, str] = {}
+    wait_timeout_rows: dict[int, str] = {}
     now = float(profile["_runtime_start_monotonic"]) + 1.0
-    lab._consume_live_hook_lifecycle(profile, hook_database, row_states=row_states, now=now)
+    lab._consume_live_hook_lifecycle(
+        profile,
+        hook_database,
+        row_states=row_states,
+        wait_timeout_rows=wait_timeout_rows,
+        now=now,
+    )
 
     with sqlite3.connect(hook_database) as connection:
         connection.execute(
             "INSERT INTO qwendex_performance_events (rowid, phase, event_kind, tool_family, terminal_classification) VALUES (?, ?, ?, ?, ?)",
             (1, "tool", "tool_call", "search", "pending"),
         )
-    lab._consume_live_hook_lifecycle(profile, hook_database, row_states=row_states, now=now + 1.0)
+    lab._consume_live_hook_lifecycle(
+        profile,
+        hook_database,
+        row_states=row_states,
+        wait_timeout_rows=wait_timeout_rows,
+        now=now + 1.0,
+    )
 
     with sqlite3.connect(hook_database) as connection:
         connection.execute(
             "UPDATE qwendex_performance_events SET terminal_classification = ? WHERE rowid = ?",
             ("completed", 1),
         )
-    lab._consume_live_hook_lifecycle(profile, hook_database, row_states=row_states, now=now + 2.0)
+    lab._consume_live_hook_lifecycle(
+        profile,
+        hook_database,
+        row_states=row_states,
+        wait_timeout_rows=wait_timeout_rows,
+        now=now + 2.0,
+    )
 
     assert profile["hook_lifecycle_event_counts"] == {"subagent_start": 1, "tool_completed": 1}
     assert row_states == {1: "completed", 10: "observed"}

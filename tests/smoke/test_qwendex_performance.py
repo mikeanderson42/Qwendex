@@ -592,6 +592,110 @@ def test_metadata_hook_capture_preserves_gate_outcomes_and_excludes_raw_values(t
     assert all(payload["data"]["hook_result"] != {"decision": "block"} for payload in payloads)
 
 
+def test_metadata_hook_buckets_wait_timeout_without_storing_tool_input(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    database = tmp_path / "qwendex-performance.sqlite"
+    raw_note = "performance-wait-private-tool-input"
+    raw_timeout = 180_001
+    env = {
+        "HOME": str(home),
+        "QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite"),
+        "QWENDEX_PERFORMANCE_DB": str(database),
+        "QWENDEX_PERFORMANCE_CAPTURE": "metadata",
+        "QWENDEX_MANAGER_MODE": "off",
+        "QWENDEX_RUN_ID": "performance-wait-run",
+    }
+    event = {
+        "session_id": "performance-wait-session",
+        "turn_id": "performance-wait-turn",
+        "cwd": str(ROOT),
+        "tool_name": "wait_agent",
+        "tool_use_id": "performance-wait",
+        "tool_input": {"timeout_ms": raw_timeout, "operator_note": raw_note},
+    }
+
+    result, payload = run_qwendex(
+        "agent",
+        "hook",
+        "PreToolUse",
+        "--event-json",
+        json.dumps(event),
+        "--json",
+        env=env,
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert payload["status"] == "pass"
+    assert payload["data"]["performance_capture"]["captured"] is True
+    with sqlite3.connect(database) as connection:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(qwendex_performance_events)")}
+        bucket = connection.execute(
+            "SELECT wait_timeout_bucket FROM qwendex_performance_events"
+        ).fetchone()
+        schema_version = connection.execute("PRAGMA user_version").fetchone()
+    assert "wait_timeout_bucket" in columns
+    assert bucket == ("over_120s",)
+    assert schema_version == (2,)
+
+    performance = load_module("qwendex_performance")
+    public_output = json.dumps(performance.summary(database, retention_days=14, max_events=50_000), sort_keys=True)
+    persisted = database_bytes(database)
+    assert raw_note not in public_output
+    assert str(raw_timeout) not in public_output
+    assert raw_note.encode("utf-8") not in persisted
+    assert str(raw_timeout).encode("utf-8") not in persisted
+
+
+def test_wait_timeout_bucket_uses_only_fixed_boundaries() -> None:
+    qwendex = load_module("qwendex_cli")
+
+    for timeout_ms, expected in (
+        (30_000, "at_most_30s"),
+        (30_001, "31_to_60s"),
+        (60_000, "31_to_60s"),
+        (60_001, "61_to_120s"),
+        (120_000, "61_to_120s"),
+        (120_001, "over_120s"),
+    ):
+        assert qwendex._performance_wait_timeout_bucket(
+            {"tool_name": "functions.wait_agent", "tool_input": {"timeout_ms": timeout_ms}}
+        ) == expected
+    assert qwendex._performance_wait_timeout_bucket({"tool_name": "wait_agent", "tool_input": {}}) == "not_provided"
+    assert qwendex._performance_wait_timeout_bucket(
+        {"tool_name": "wait_agent", "tool_input": {"timeout_ms": float("nan")}}
+    ) == "invalid"
+    assert qwendex._performance_wait_timeout_bucket(
+        {"tool_name": "exec_command", "tool_input": {"timeout_ms": 120_001}}
+    ) == "not_applicable"
+
+
+def test_performance_schema_migrates_wait_timeout_bucket(tmp_path: Path) -> None:
+    performance = load_module("qwendex_performance")
+    database = tmp_path / "qwendex-performance.sqlite"
+    scope = repository_scope(tmp_path / "repository")
+    record = performance_record(
+        scope,
+        action="lifecycle",
+        event_key="schema-migration",
+        raw_path="/performance/schema/migration",
+        raw_prompt="performance-schema-migration",
+    )
+    assert performance.record_event(database, record)["captured"] is True
+
+    with sqlite3.connect(database) as connection:
+        connection.execute("ALTER TABLE qwendex_performance_events DROP COLUMN wait_timeout_bucket")
+        connection.execute("PRAGMA user_version = 1")
+    with sqlite3.connect(database) as connection:
+        connection.row_factory = sqlite3.Row
+        performance.ensure_schema(connection)
+        columns = {str(row["name"]) for row in connection.execute("PRAGMA table_info(qwendex_performance_events)")}
+        schema_version = connection.execute("PRAGMA user_version").fetchone()[0]
+
+    assert "wait_timeout_bucket" in columns
+    assert schema_version == performance.DATABASE_SCHEMA_VERSION
+
+
 def test_blocked_hook_does_not_create_telemetry_event(tmp_path: Path) -> None:
     home = tmp_path / "home"
     home.mkdir()

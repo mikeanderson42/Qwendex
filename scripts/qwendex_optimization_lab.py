@@ -47,6 +47,17 @@ LIVE_SUPERVISOR_MAX_HARD_WALL_SECONDS = 600
 LIVE_HOOK_PROGRESS_TABLE = "qwendex_performance_events"
 LIVE_HOOK_PROGRESS_TOOL_EVENT = "tool_call"
 LIVE_HOOK_PROGRESS_SUBAGENT_EVENTS = frozenset({"subagent_start", "subagent_stop"})
+LIVE_WAIT_TIMEOUT_BUCKETS = frozenset(
+    {
+        "not_applicable",
+        "not_provided",
+        "at_most_30s",
+        "31_to_60s",
+        "61_to_120s",
+        "over_120s",
+        "invalid",
+    }
+)
 
 LIVE_RUNTIME_PHASES = (
     "runner_start",
@@ -312,6 +323,7 @@ def live_runtime_profile_contract() -> dict[str, Any]:
                 "phase_timestamps_and_durations",
                 "structured_event_counts",
                 "allowlisted_hook_lifecycle_counts",
+                "bounded_collaboration_wait_timeout_buckets",
                 "bounded_in_flight_lifecycle_categories",
                 "pid_pgid_role_state_cpu_rss_buckets",
                 "pipe_byte_counts_without_content",
@@ -363,6 +375,7 @@ def _new_live_runtime_profile(
         "trusted_progress_event_counts": {},
         "structured_event_type_counts": {},
         "hook_lifecycle_event_counts": {},
+        "collaboration_wait_timeout_bucket_counts": {},
         "process_diagnostics": {"snapshots": [], "pipe_state": {}},
         "termination": {
             "timed_out": False,
@@ -1009,11 +1022,17 @@ def _increment_hook_lifecycle_count(profile: dict[str, Any], key: str) -> None:
     counts[key] = int(counts.get(key) or 0) + 1
 
 
+def _increment_wait_timeout_bucket(profile: dict[str, Any], bucket: str) -> None:
+    counts = profile.setdefault("collaboration_wait_timeout_bucket_counts", {})
+    counts[bucket] = int(counts.get(bucket) or 0) + 1
+
+
 def _consume_live_hook_lifecycle(
     profile: dict[str, Any],
     performance_db: Path | None,
     *,
     row_states: dict[int, str],
+    wait_timeout_rows: dict[int, str],
     now: float,
 ) -> None:
     """Consume only allowlisted metadata-only hook completions.
@@ -1027,11 +1046,16 @@ def _consume_live_hook_lifecycle(
     if performance_db is None or not performance_db.is_file():
         return
     try:
-        connection = sqlite3.connect(f"file:{performance_db}?mode=ro", uri=True, timeout=0.05)
+        connection = sqlite3.connect(
+            performance_db.resolve(strict=False).as_uri() + "?mode=ro",
+            uri=True,
+            timeout=0.05,
+        )
         try:
             rows = connection.execute(
                 f"""
-                SELECT rowid, phase, event_kind, tool_family, terminal_classification
+                SELECT rowid, phase, event_kind, tool_family, terminal_classification,
+                       wait_timeout_bucket
                 FROM {LIVE_HOOK_PROGRESS_TABLE}
                 ORDER BY rowid
                 """,
@@ -1043,9 +1067,15 @@ def _consume_live_hook_lifecycle(
         # absent freshly-created table must never alter the supervisor policy.
         return
 
-    for rowid, phase, event_kind, _tool_family, terminal in rows:
+    for rowid, phase, event_kind, _tool_family, terminal, raw_wait_bucket in rows:
         if not isinstance(rowid, int):
             continue
+        wait_bucket = str(raw_wait_bucket or "not_applicable")
+        if wait_bucket not in LIVE_WAIT_TIMEOUT_BUCKETS:
+            wait_bucket = "invalid"
+        if wait_bucket != "not_applicable" and wait_timeout_rows.get(rowid) != wait_bucket:
+            wait_timeout_rows[rowid] = wait_bucket
+            _increment_wait_timeout_bucket(profile, wait_bucket)
         terminal_state = str(terminal or "")
         previous_state = row_states.get(rowid)
         if previous_state == terminal_state:
@@ -1323,6 +1353,7 @@ def _supervise_live_subprocess(
         performance_db_raw = ""
     performance_db = Path(performance_db_raw).resolve(strict=False) if performance_db_raw else None
     hook_lifecycle_row_states: dict[int, str] = {}
+    hook_wait_timeout_rows: dict[int, str] = {}
 
     def observe_stdout(chunk: bytes) -> None:
         nonlocal stdout_buffer
@@ -1373,6 +1404,7 @@ def _supervise_live_subprocess(
                     profile,
                     performance_db,
                     row_states=hook_lifecycle_row_states,
+                    wait_timeout_rows=hook_wait_timeout_rows,
                     now=now,
                 )
             reason = _supervisor_timeout_reason(profile, budgets, now=now)
@@ -1421,6 +1453,7 @@ def _supervise_live_subprocess(
                 profile,
                 performance_db,
                 row_states=hook_lifecycle_row_states,
+                wait_timeout_rows=hook_wait_timeout_rows,
                 now=now,
             )
         _record_runtime_phase(profile, "child_exit", now=now)
@@ -4383,6 +4416,9 @@ def _safe_calibration_profiles(calibration_run: Path) -> tuple[list[dict[str, An
                 "phase_timestamps": profile.get("phase_timestamps", {}),
                 "phase_durations_ms": profile.get("phase_durations_ms", {}),
                 "trusted_progress_event_counts": profile.get("trusted_progress_event_counts", {}),
+                "collaboration_wait_timeout_bucket_counts": profile.get(
+                    "collaboration_wait_timeout_bucket_counts", {}
+                ),
                 "structured_event_shape": _safe_event_shape(path.parent / "events.jsonl"),
                 "termination": {
                     "timed_out": termination.get("timed_out", "not_observed"),
