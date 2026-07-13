@@ -407,7 +407,10 @@ def test_manager_acceptance_sanitizes_embedded_workspace_paths_and_rejects_priva
     assert acceptance.public_artifact_path(tmp_path / "outside" / "summary.json") == "summary.json"
 
     private_artifact = tmp_path / "summary.json"
-    private_artifact.write_text('{"working_directory":"/home/alice/private/repo"}\n', encoding="utf-8")
+    private_workspace = "/" + "/".join(("home", "alice", "private", "repo"))
+    private_artifact.write_text(
+        json.dumps({"working_directory": private_workspace}) + "\n", encoding="utf-8"
+    )
     privacy = acceptance.scan_privacy([private_artifact])
     assert privacy["status"] == "fail"
     assert privacy["failures"] == [

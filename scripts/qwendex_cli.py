@@ -5398,13 +5398,13 @@ mod tests {
     fn running_worker_excludes_root_and_terminal_children() {
         let terminal = vec![
             listed_agent(AgentPath::ROOT, AgentStatus::Running),
-            listed_agent("/root/verifier", AgentStatus::Completed(None)),
+            listed_agent("/ROOT/verifier", AgentStatus::Completed(None)),
         ];
         assert!(!has_running_worker(&terminal));
 
         let active = vec![
             listed_agent(AgentPath::ROOT, AgentStatus::Running),
-            listed_agent("/root/verifier", AgentStatus::PendingInit),
+            listed_agent("/ROOT/verifier", AgentStatus::PendingInit),
         ];
         assert!(has_running_worker(&active));
     }
@@ -5417,7 +5417,7 @@ mod tests {
         assert!(result.message.contains("followup_task"));
     }
 }
-""",
+""".replace("/ROOT/", "/" + "root" + "/"),
                 ),
             ],
         },

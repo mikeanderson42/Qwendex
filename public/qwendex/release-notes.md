@@ -2,7 +2,9 @@
 
 ## Unreleased
 
-## 0.6.0-rc.1 (candidate)
+## 0.6.0-rc.1
+
+Candidate metadata only; this checkout is not a published tag.
 
 - Added immutable runtime generations that bind Qwendex source, hooks, Codex
   patch and binary pair, config/schema, and state schema. Activation affects

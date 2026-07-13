@@ -340,7 +340,7 @@ claims require GPT/Codex review and the appropriate Qwendex verification tier.
 
 ## Current Release / Known Limits
 
-This checkout is prepared as the `v0.6.0-rc.1` candidate. Its source-bound
+This checkout is seeded as `v0.6.0-rc.1`. Its source-bound
 Manager production validation summary is generated only after the offline,
 live, self-hosting, fresh-install, upgrade, rollback, and release tiers pass;
 the candidate is not a published tag until the separate publication goal.
