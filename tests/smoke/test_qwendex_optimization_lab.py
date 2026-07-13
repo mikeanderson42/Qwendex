@@ -733,6 +733,31 @@ def test_missing_live_final_message_is_not_a_guard_marker(tmp_path: Path) -> Non
     assert lab._contains_live_guard_marker(tmp_path)
 
 
+def test_safe_event_shape_classifies_unclosed_collaboration_wait_without_payload(tmp_path: Path) -> None:
+    lab = load_module("qwendex_optimization_lab")
+    events = tmp_path / "events.jsonl"
+    events.write_text(
+        json.dumps(
+            {
+                "type": "item.started",
+                "item": {
+                    "id": "opaque-id",
+                    "type": "collab_tool_call",
+                    "tool": "wait",
+                    "prompt": "QWENDEX_PRIVATE_EVENT_SENTINEL",
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    shape = lab._safe_event_shape(events)
+
+    assert shape["unclosed_lifecycle_counts"] == {"collaboration_wait": 1}
+    assert "QWENDEX_PRIVATE_EVENT_SENTINEL" not in json.dumps(shape, sort_keys=True)
+
+
 def test_live_manager_cleanup_accepts_idle_standby_and_rejects_residue() -> None:
     lab = load_module("qwendex_optimization_lab")
 

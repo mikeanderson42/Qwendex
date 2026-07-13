@@ -4280,6 +4280,7 @@ def _safe_calibration_profiles(calibration_run: Path) -> tuple[list[dict[str, An
                 "phase_timestamps": profile.get("phase_timestamps", {}),
                 "phase_durations_ms": profile.get("phase_durations_ms", {}),
                 "trusted_progress_event_counts": profile.get("trusted_progress_event_counts", {}),
+                "structured_event_shape": _safe_event_shape(path.parent / "events.jsonl"),
                 "termination": {
                     "timed_out": termination.get("timed_out", "not_observed"),
                     "timeout_reason": termination.get("timeout_reason", "not_observed"),
