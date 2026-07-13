@@ -86,15 +86,20 @@
       "directive": "Use terse output: short, direct, minimal prose, no optional explanation unless asked."
     },
     "mode_profiles": {
-      "off": {"label": "Off", "max_subagents": 1},
+      "off": {"label": "Off", "max_subagents": 0},
       "auto": {"label": "Auto", "max_subagents": 4},
-      "lite": {"label": "Lite", "max_subagents": 2},
-      "medium": {"label": "Medium", "max_subagents": 4},
-      "heavy": {"label": "Heavy", "max_subagents": 6},
-      "manager": {"label": "Manager Mode", "max_subagents": 10}
+      "lite": {"label": "Lite", "max_subagents": 1},
+      "medium": {"label": "Medium", "max_subagents": 2},
+      "heavy": {"label": "Heavy", "max_subagents": 3},
+      "manager": {"label": "Manager Mode", "max_subagents": 4}
     },
     "local_qwen_eligibility": {
       "allowed_task_classes": [
+        "repository_mapping",
+        "read_heavy_investigation",
+        "single_file_read",
+        "small_edit",
+        "test_or_regression",
         "read-heavy audit",
         "docs draft",
         "queue workflow",
@@ -104,6 +109,10 @@
         "review"
       ],
       "denied_task_classes": [
+        "cross_cutting_edit",
+        "security_or_protocol",
+        "release_or_publish",
+        "live_acceptance",
         "architecture",
         "security",
         "release acceptance",

@@ -29,6 +29,27 @@ def cd_selector_count(command: list[str]) -> int:
     )
 
 
+def qdex_v2_config_values(command: list[str]) -> list[str]:
+    return [
+        command[index + 1]
+        for index, item in enumerate(command[:-1])
+        if item == "--config"
+    ]
+
+
+def assert_qdex_v2_policy_prefix(test: unittest.TestCase, command: list[str]) -> None:
+    test.assertEqual(command[1], "--no-alt-screen")
+    values = qdex_v2_config_values(command)
+    test.assertIn("features.multi_agent_v2.enabled=true", values)
+    test.assertTrue(any(value.startswith("features.multi_agent_v2.max_concurrent_threads_per_session=") for value in values))
+    for field in (
+        "multi_agent_mode_hint_text",
+        "root_agent_usage_hint_text",
+        "subagent_usage_hint_text",
+    ):
+        test.assertTrue(any(value.startswith(f"features.multi_agent_v2.{field}=") for value in values))
+
+
 class QdexManagerAttachmentTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tempdir = tempfile.TemporaryDirectory(prefix="qwendex-manager-attachment-")
@@ -207,6 +228,7 @@ class QdexManagerAttachmentTests(unittest.TestCase):
         _, repo, env = self.make_argv_fixture()
         payload = self.qdex_dry_run(cwd=repo, env=env)
 
+        assert_qdex_v2_policy_prefix(self, payload["command"])
         self.assertEqual(payload["target_repo"], str(repo))
         self.assertEqual(cd_selector_count(payload["command"]), 0)
 
@@ -223,15 +245,22 @@ class QdexManagerAttachmentTests(unittest.TestCase):
         )
 
         command = payload["command"]
+        assert_qdex_v2_policy_prefix(self, command)
         self.assertEqual(cd_selector_count(command), 1)
-        self.assertEqual(command[-5:], ["-C", str(repo), "--model", "test-model", "--search"])
+        caller_args = ["-C", str(repo), "--model", "test-model", "--search"]
+        caller_start = command.index("-C")
+        self.assertEqual(command[caller_start : caller_start + len(caller_args)], caller_args)
+        self.assertEqual(caller_start + len(caller_args), command.index("--config"))
 
     def test_legacy_repo_translates_to_exactly_one_native_selector(self) -> None:
         _, repo, env = self.make_argv_fixture()
         payload = self.qdex_dry_run("--repo", str(repo), cwd=self.temp, env=env)
 
+        assert_qdex_v2_policy_prefix(self, payload["command"])
         self.assertEqual(payload["target_repo"], str(repo))
-        self.assertEqual(payload["command"][-2:], ["-C", str(repo)])
+        selector = payload["command"].index("-C")
+        self.assertEqual(payload["command"][selector : selector + 2], ["-C", str(repo)])
+        self.assertEqual(selector + 2, payload["command"].index("--config"))
         self.assertEqual(cd_selector_count(payload["command"]), 1)
 
     def test_real_qdex_exec_boundary_keeps_attachment_after_in_place_runtime_edit(self) -> None:
@@ -287,7 +316,7 @@ class QdexManagerAttachmentTests(unittest.TestCase):
                     return result.returncode, json.loads(result.stdout)
 
                 common = {"session_id": "root-session", "turn_id": "root-turn", "cwd": repo}
-                prompt_rc, prompt = run_hook("UserPromptSubmit", {**common, "prompt": "Inspect status."})
+                prompt_rc, prompt = run_hook("UserPromptSubmit", {**common, "prompt": "What is 2 + 2?"})
                 runtime_source = Path(os.environ["QWENDEX_RUNTIME_SOURCE_TO_EDIT"])
                 runtime_source.write_text(
                     runtime_source.read_text(encoding="utf-8") + "\\n",
@@ -481,27 +510,28 @@ class QdexManagerAttachmentTests(unittest.TestCase):
         manager_env = {**env, **first["data"]["exports"]}
         toggled_env = {key: value for key, value in manager_env.items() if key != "QWENDEX_AGENT_USE"}
         self.run_qwendex("manager", "mode", "--set", "auto", "--json", env=toggled_env)
+        prompt_hook, prompt_payload = self.hook(
+            "UserPromptSubmit",
+            {
+                "session_id": "goal-session",
+                "turn_id": "goal-turn",
+                "cwd": str(repo),
+                "prompt": "Map the repository files and implementation flow.",
+            },
+            env=toggled_env,
+        )
+        planned_agent_id = prompt_payload["data"]["agent_plan"]["assignments"][0]["agent_id"]
         event = {
             "session_id": "goal-session",
             "turn_id": "goal-turn",
             "cwd": str(repo),
             "tool_name": "spawn_agent",
             "tool_use_id": "spawn-1",
-            "tool_input": {"agent_type": "explorer"},
+            "tool_input": {"task_name": planned_agent_id},
         }
 
         first_hook, _ = self.hook("PreToolUse", event, env=toggled_env)
         second_hook, _ = self.hook("PreToolUse", event, env=toggled_env)
-        prompt_hook, _ = self.hook(
-            "UserPromptSubmit",
-            {
-                "session_id": "goal-session",
-                "turn_id": "goal-turn",
-                "cwd": str(repo),
-                "prompt": "Inspect one repository fact.",
-            },
-            env=toggled_env,
-        )
 
         self.assertEqual(first_hook.returncode, 0)
         self.assertEqual(second_hook.returncode, 0)
@@ -518,13 +548,24 @@ class QdexManagerAttachmentTests(unittest.TestCase):
         repo, env = self.manager_env("ambiguous-spawn")
         preflight = self.preflight(env)
         manager_env = {**env, **preflight["data"]["exports"]}
+        _, prompt_payload = self.hook(
+            "UserPromptSubmit",
+            {
+                "session_id": "root-session",
+                "turn_id": "root-turn",
+                "cwd": str(repo),
+                "prompt": "Map the repository files and implementation flow.",
+            },
+            env=manager_env,
+        )
+        planned_agent_id = prompt_payload["data"]["agent_plan"]["assignments"][0]["agent_id"]
         event = {
             "session_id": "root-session",
             "turn_id": "root-turn",
             "cwd": str(repo),
             "tool_name": "spawn_agent",
             "tool_use_id": "spawn-1",
-            "tool_input": {"agent_type": "explorer"},
+            "tool_input": {"task_name": planned_agent_id},
         }
         self.hook("PreToolUse", event, env=manager_env)
         self.duplicate_decision(

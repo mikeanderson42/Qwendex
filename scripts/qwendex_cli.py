@@ -162,7 +162,7 @@ AGENT_USE_ALIASES = {
     "manager_mode": "manager",
     "manager_only": "manager",
 }
-AGENT_TERMINAL_STATUSES = {"completed", "blocked", "failed", "closed", "tombstoned"}
+AGENT_TERMINAL_STATUSES = {"completed", "blocked", "failed", "closed", "tombstoned", "waived"}
 STATE_BUSY_TIMEOUT_MS = 2000
 AGENT_HOOK_EVENTS = {
     "SessionStart",
@@ -176,6 +176,7 @@ AGENT_HOOK_EVENTS = {
     "PostCompact",
 }
 MANAGED_AGENT_HOOKS = {
+    "SessionStart": {"matcher": "", "timeout": 5},
     "UserPromptSubmit": {"matcher": "", "timeout": 5},
     "SubagentStart": {"matcher": ".*", "timeout": 5},
     "SubagentStop": {"matcher": ".*", "timeout": 5},
@@ -192,6 +193,7 @@ READ_ONLY_AGENT_PROFILES = {
     "read-only",
     "readonly",
     "review",
+    "reviewer",
     "verifier",
 }
 ROOT_ONLY_AGENT_TOOLS = {"spawn_agent", "close_agent", "wait_agent", "resume_agent", "agent_ledger_update_status"}
@@ -299,7 +301,7 @@ READ_ONLY_EXECUTION_TOOL_NAMES = {
     "terminal",
     "zsh",
 }
-READ_ONLY_SIMPLE_COMMANDS = {"cat", "file", "grep", "head", "jq", "ls", "pwd", "stat", "tail", "wc"}
+READ_ONLY_SIMPLE_COMMANDS = {"cat", "file", "grep", "head", "jq", "ls", "nl", "pwd", "stat", "tail", "wc"}
 READ_ONLY_GIT_SUBCOMMANDS = {"diff", "log", "rev-parse", "show", "status"}
 READ_ONLY_GIT_UNSAFE_OPTIONS = {"--ext-diff", "--output", "--textconv"}
 READ_ONLY_FIND_UNSAFE_PREFIXES = (
@@ -424,6 +426,19 @@ DEFAULT_AGENT_PROFILES: dict[str, dict[str, Any]] = {
         "default_required": True,
         "nickname_candidates": ["Audit", "FIDO", "Check"],
     },
+    "reviewer": {
+        "name": "reviewer",
+        "description": "Read-only reviewer for architecture, security, release, and integration-risk findings.",
+        "role": "review",
+        "model_reasoning_effort": "high",
+        "sandbox_mode": "read-only",
+        "tools_allow": ["read", "search", "test", "status"],
+        "tools_deny": ["write", "spawn_agent", "close_agent"],
+        "can_spawn": False,
+        "final_report_required": True,
+        "default_required": True,
+        "nickname_candidates": ["Review", "Sentinel", "Lens"],
+    },
     "docs_researcher": {
         "name": "docs_researcher",
         "description": "Documentation/API specialist for version-specific external or local docs verification.",
@@ -468,30 +483,30 @@ DEFAULT_MANAGER_TEAM = {
     "name": "manager",
     "description": "Default Qwendex Manager Mode team.",
     "default_mode": "Manager",
-    "members": ["explorer", "implementer", "verifier", "docs_researcher", "release_manager", "scribe"],
+    "members": ["explorer", "reviewer", "verifier", "docs_researcher"],
     "required_lanes_by_task": {
         "repo_exploration": ["explorer"],
-        "code_edit_small": ["implementer", "verifier"],
-        "code_edit_complex": ["explorer", "implementer", "verifier"],
+        "code_edit_small": ["verifier"],
+        "code_edit_complex": ["explorer", "verifier"],
         "docs_api_uncertainty": ["docs_researcher"],
-        "release_publish": ["release_manager", "verifier"],
+        "release_publish": ["reviewer", "verifier"],
     },
     "routing_rules": [
         "quick questions go direct when no repo, docs, or edit work is needed",
         "read-heavy repo mapping uses explorer in Heavy/Manager",
-        "non-trivial edits use implementer plus verifier in Heavy/Manager",
-        "release tasks use release_manager plus verifier and require explicit publish approval",
+        "the root is the sole default writer; non-trivial edits use read-only explorer and verifier lanes",
+        "release tasks use read-only reviewer plus verifier lanes and require explicit publish approval",
     ],
 }
 MANAGER_DEPLOY_POLICIES = {"auto", "disabled"}
-MANAGER_MAX_SUBAGENTS_LIMIT = 10
+MANAGER_MAX_SUBAGENTS_LIMIT = 8
 MANAGER_MODE_MAX_SUBAGENTS = {
-    "off": 1,
+    "off": 0,
     "auto": 4,
-    "lite": 2,
-    "medium": 4,
-    "heavy": 6,
-    "manager": MANAGER_MAX_SUBAGENTS_LIMIT,
+    "lite": 1,
+    "medium": 2,
+    "heavy": 3,
+    "manager": 4,
 }
 MANAGER_DECISION_ROUTES = {"direct_single_writer", "manager_subagents", "blocked"}
 MANAGER_STOP_STATUSES = {
@@ -499,11 +514,14 @@ MANAGER_STOP_STATUSES = {
     "STOP_MANAGER_DIRECT_READY",
     "STOP_MANAGER_SUBAGENTS_READY",
     "STOP_MANAGER_BLOCKED_UNHOOKED",
+    "STOP_MANAGER_PROMPT_ADMISSION_BLOCKED",
     "STOP_MANAGER_UNATTACHED",
     "STOP_MANAGER_VALIDATION_PENDING",
     "STOP_MANAGER_CLOSED",
 }
 MANAGER_PROMPT_UNKNOWN_SUMMARY = "interactive_prompt_unknown_prelaunch"
+MANAGER_PROMPT_ADMISSION_SCHEMA = "qwendex.prompt_admission.v1"
+MANAGER_PROMPT_SOURCE = "UserPromptSubmit"
 MANAGER_UNHOOKED_OVERRIDE_ENV = "QWENDEX_MANAGER_ALLOW_UNHOOKED"
 MANAGER_UNHOOKED_REASON_ENV = "QWENDEX_MANAGER_UNHOOKED_REASON"
 MANAGER_ROOT_AGENT_ID_ENV = "QWENDEX_MANAGER_ROOT_AGENT_ID"
@@ -566,6 +584,30 @@ CODEX_PATCH_MANIFESTS: dict[str, dict[str, Any]] = {
                 "anchors": ["with_terminal_visualization_instructions", "TERMINAL_VISUALIZATION_INSTRUCTIONS"],
             },
             {
+                "path": "codex-rs/hooks/src/events/session_start.rs",
+                "anchors": ["StartHookTarget", "SubagentStartCommandInput"],
+            },
+            {
+                "path": "codex-rs/hooks/src/schema.rs",
+                "anchors": ["SubagentStartCommandInput", "agent_type"],
+            },
+            {
+                "path": "codex-rs/core/src/hook_runtime.rs",
+                "anchors": ["StartHookTarget::SubagentStart", "SubAgentSource::ThreadSpawn"],
+            },
+            {
+                "path": "codex-rs/core/src/tools/spec_plan.rs",
+                "anchors": ["fn collab_tools_enabled", "MultiAgentVersion::V2"],
+            },
+            {
+                "path": "codex-rs/core/src/config/mod.rs",
+                "anchors": ["validate_multi_agent_v2_config", "effective_agent_max_threads"],
+            },
+            {
+                "path": "codex-rs/core/src/config/config_tests.rs",
+                "anchors": ["multi_agent_v2", "effective_agent_max_threads"],
+            },
+            {
                 "path": "codex-rs/models-manager/src/manager.rs",
                 "anchors": ["const MODEL_CACHE_FILE", "ModelsCacheManager::new(cache_path"],
             },
@@ -578,6 +620,9 @@ CODEX_PATCH_MANIFESTS: dict[str, dict[str, Any]] = {
             "Dispatch those actions before generic composer input handling.",
             "After each action, call the configured Qwendex toggle command and refresh status surfaces.",
             "Append the active Kaveman directive from QWENDEX_CODEX_STATUS_FILE to TUI developer instructions.",
+            "Expose canonical task_name and parent_session_id on SubagentStart hook input for exact Qwendex ledger binding.",
+            "Restrict native MultiAgentV2 collaboration management tools to the root thread.",
+            "Allow V2 to ignore a legacy agents.max_threads value while retaining its own per-session cap.",
             "Honor QWENDEX_MODELS_CACHE_FILE so mixed Codex versions do not overwrite one shared model catalog.",
         ],
     },
@@ -683,15 +728,20 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "directive": "Use terse output: short, direct, minimal prose, no optional explanation unless asked.",
         },
         "mode_profiles": {
-            "off": {"label": "Off", "max_subagents": 1},
+            "off": {"label": "Off", "max_subagents": 0},
             "auto": {"label": "Auto", "max_subagents": 4},
-            "lite": {"label": "Lite", "max_subagents": 2},
-            "medium": {"label": "Medium", "max_subagents": 4},
-            "heavy": {"label": "Heavy", "max_subagents": 6},
-            "manager": {"label": "Manager Mode", "max_subagents": 10},
+            "lite": {"label": "Lite", "max_subagents": 1},
+            "medium": {"label": "Medium", "max_subagents": 2},
+            "heavy": {"label": "Heavy", "max_subagents": 3},
+            "manager": {"label": "Manager Mode", "max_subagents": 4},
         },
         "local_qwen_eligibility": {
             "allowed_task_classes": [
+                "repository_mapping",
+                "read_heavy_investigation",
+                "single_file_read",
+                "small_edit",
+                "test_or_regression",
                 "read-heavy audit",
                 "docs draft",
                 "queue workflow",
@@ -701,6 +751,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
                 "review",
             ],
             "denied_task_classes": [
+                "cross_cutting_edit",
+                "security_or_protocol",
+                "release_or_publish",
+                "live_acceptance",
                 "architecture",
                 "security",
                 "release acceptance",
@@ -903,6 +957,12 @@ def agent_policy_env(policy: Mapping[str, Any]) -> dict[str, str]:
     output_policy = policy.get("output_policy", {})
     directive = str(output_policy.get("directive") or "") if isinstance(output_policy, Mapping) else ""
     kaveman_enabled = bool(output_policy.get("kaveman_enabled")) if isinstance(output_policy, Mapping) else False
+    local_snapshot = policy.get("local_routing_snapshot", {})
+    if not isinstance(local_snapshot, Mapping):
+        local_snapshot = {}
+    local_routing = local_snapshot.get("routing", {})
+    if not isinstance(local_routing, Mapping):
+        local_routing = {}
     return {
         "QWENDEX_EFFECTIVE_AGENT_USE": str(policy["agent_use"]),
         "QWENDEX_AGENT_POLICY_HASH": str(policy["policy_hash"]),
@@ -910,6 +970,8 @@ def agent_policy_env(policy: Mapping[str, Any]) -> dict[str, str]:
         "QWENDEX_OUTPUT_POLICY": "kaveman" if kaveman_enabled else "standard",
         "QWENDEX_KAVEMAN_ENABLED": "1" if kaveman_enabled else "0",
         "QWENDEX_KAVEMAN_DIRECTIVE": directive,
+        "QWENDEX_EFFECTIVE_LOCAL_SUBAGENTS": "1" if local_snapshot.get("enabled") else "0",
+        "QWENDEX_EFFECTIVE_LOCAL_MODEL": str(local_routing.get("local_model") or ""),
     }
 
 
@@ -960,7 +1022,7 @@ def agent_policy_defaults(mode: str) -> dict[str, Any]:
             "max_resteer_attempts": 0,
         },
         "auto": {
-            "min_threads": 2,
+            "min_threads": 0,
             "max_threads": 4,
             "max_depth": 1,
             "root_can_spawn": True,
@@ -979,29 +1041,29 @@ def agent_policy_defaults(mode: str) -> dict[str, Any]:
         "lite": {
             "min_threads": 0,
             "max_threads": 1,
-            "max_depth": 0,
-            "root_can_spawn": False,
-            "require_agent_ledger": False,
+            "max_depth": 1,
+            "root_can_spawn": True,
+            "require_agent_ledger": True,
             "require_verifier_for_edits": False,
-            "require_final_report_contract": False,
-            "require_routing_reason": False,
+            "require_final_report_contract": True,
+            "require_routing_reason": True,
             "forbid_fork_context": True,
             "default_fork_context": False,
-            "max_inherited_context_bytes": 0,
-            "agent_idle_timeout_ms": 0,
-            "wait_timeout_ms": 0,
-            "close_timeout_ms": 5000,
+            "max_inherited_context_bytes": 4096,
+            "agent_idle_timeout_ms": 240000,
+            "wait_timeout_ms": 90000,
+            "close_timeout_ms": 7500,
             "max_resteer_attempts": 0,
         },
         "medium": {
-            "min_threads": 2,
-            "max_threads": 4,
+            "min_threads": 0,
+            "max_threads": 2,
             "max_depth": 1,
             "root_can_spawn": True,
-            "require_agent_ledger": False,
+            "require_agent_ledger": True,
             "require_verifier_for_edits": False,
             "require_final_report_contract": True,
-            "require_routing_reason": False,
+            "require_routing_reason": True,
             "forbid_fork_context": False,
             "default_fork_context": False,
             "max_inherited_context_bytes": 16000,
@@ -1011,8 +1073,8 @@ def agent_policy_defaults(mode: str) -> dict[str, Any]:
             "max_resteer_attempts": 1,
         },
         "heavy": {
-            "min_threads": 4,
-            "max_threads": 8,
+            "min_threads": 0,
+            "max_threads": 3,
             "max_depth": 1,
             "root_can_spawn": True,
             "require_agent_ledger": True,
@@ -1028,8 +1090,8 @@ def agent_policy_defaults(mode: str) -> dict[str, Any]:
             "max_resteer_attempts": 1,
         },
         "manager": {
-            "min_threads": 8,
-            "max_threads": MANAGER_MAX_SUBAGENTS_LIMIT,
+            "min_threads": 0,
+            "max_threads": 4,
             "max_depth": 1,
             "root_can_spawn": True,
             "require_agent_ledger": True,
@@ -1099,7 +1161,9 @@ def resolve_agent_policy(
     policy = agent_policy_defaults(mode)
     configured_capacity = int(manager_mode_profile(config, mode)["max_subagents"])
     policy["max_threads"] = configured_capacity
-    policy["min_threads"] = min(int(policy["min_threads"]), configured_capacity)
+    policy["max_workers"] = configured_capacity
+    policy["native_max_concurrent_threads"] = configured_capacity + 1
+    policy["min_threads"] = 0
     policy["capacity_source"] = "orchestration.mode_profiles"
     policy.update({
         "source": selector_source,
@@ -1132,6 +1196,50 @@ def resolve_agent_policy(
 def apply_agent_policy_env(policy: Mapping[str, Any]) -> None:
     for key, value in policy.get("env", {}).items():
         os.environ[str(key)] = str(value)
+
+
+def manager_launch_policy_snapshot(
+    config: Mapping[str, Any],
+    *,
+    env: Mapping[str, str] | None = None,
+) -> dict[str, Any] | None:
+    """Load the immutable AgentPolicy captured by the current Qdex launch."""
+    source_env = os.environ if env is None else env
+    ledger_id = str(source_env.get("QWENDEX_MANAGER_LEDGER_ID") or "").strip()
+    session_id = str(source_env.get("QWENDEX_MANAGER_SESSION_ID") or "").strip()
+    exported_hash = str(source_env.get("QWENDEX_MANAGER_POLICY_HASH") or "").strip()
+    if not ledger_id or not session_id or not exported_hash:
+        return None
+    try:
+        with connect_state(config) as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM qwendex_manager_decisions
+                WHERE (ledger_id = ? OR launch_ledger_id = ?)
+                  AND session_id = ?
+                ORDER BY CASE WHEN ledger_id = launch_ledger_id THEN 0 ELSE 1 END,
+                         timestamp_created ASC
+                LIMIT 2
+                """,
+                (ledger_id, ledger_id, session_id),
+            ).fetchall()
+    except sqlite3.Error:
+        return None
+    if not rows:
+        return None
+    decision = row_to_manager_decision(rows[0]) or {}
+    snapshot = decision.get("policy_snapshot")
+    if not isinstance(snapshot, Mapping):
+        return None
+    policy = dict(snapshot)
+    if (
+        str(decision.get("policy_hash") or "") != exported_hash
+        or str(policy.get("policy_hash") or "") != exported_hash
+        or agent_policy_hash(policy) != exported_hash
+        or str(policy.get("mode") or "") not in AGENT_USE_ORDER
+    ):
+        return None
+    return policy
 
 
 def policy_mode_for_manager(args: argparse.Namespace, config: Mapping[str, Any], fallback_mode: str) -> str:
@@ -1817,6 +1925,75 @@ def local_subagent_status(
     }
 
 
+def attach_local_routing_snapshot(
+    policy: Mapping[str, Any],
+    config: Mapping[str, Any],
+    *,
+    enabled: bool,
+) -> dict[str, Any]:
+    """Seal launch-relevant local routing configuration into AgentPolicy."""
+    eligibility = config.get("orchestration", {}).get("local_qwen_eligibility", {})
+    updated = dict(policy)
+    updated["local_routing_snapshot"] = {
+        "schema_version": "qwendex.local_routing_snapshot.v1",
+        "enabled": bool(enabled),
+        "routing": routing_policy(config),
+        "eligibility": dict(eligibility) if isinstance(eligibility, Mapping) else {},
+    }
+    updated.pop("policy_hash", None)
+    updated["policy_hash"] = agent_policy_hash(updated)
+    updated["env"] = agent_policy_env(updated)
+    return updated
+
+
+def attach_native_proactive_source(
+    policy: Mapping[str, Any],
+    *,
+    env: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    """Seal the supported native proactive source into launch policy hashing."""
+    source_env = os.environ if env is None else env
+    native_source = str(source_env.get("QWENDEX_NATIVE_PROACTIVE_SOURCE") or "").strip()
+    updated = dict(policy)
+    if native_source != "native_ultra":
+        return updated
+    updated["native_proactive_source"] = native_source
+    updated.pop("policy_hash", None)
+    updated["policy_hash"] = agent_policy_hash(updated)
+    updated["env"] = agent_policy_env(updated)
+    return updated
+
+
+def manager_decision_local_status(
+    config: Mapping[str, Any],
+    decision: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Recover immutable prompt-routing state from the launch decision."""
+    policy_snapshot = decision.get("policy_snapshot", {})
+    if not isinstance(policy_snapshot, Mapping):
+        policy_snapshot = {}
+    local_snapshot = policy_snapshot.get("local_routing_snapshot", {})
+    if not isinstance(local_snapshot, Mapping):
+        local_snapshot = {}
+    local_routing = local_snapshot.get("routing", {})
+    if not isinstance(local_routing, Mapping):
+        local_routing = {}
+    enabled = bool(local_snapshot.get("enabled", decision.get("local_enabled")))
+    usable = enabled and bool(decision.get("local_usable"))
+    return {
+        "enabled": enabled,
+        "available": usable,
+        "usable": usable,
+        "local_enabled": enabled,
+        "local_available": usable,
+        "local_usable": usable,
+        "local_state": "ready" if usable else ("unavailable" if enabled else "off"),
+        "source": "manager_launch_snapshot",
+        "reason": "immutable_launch_snapshot",
+        "model": str(local_routing.get("local_model") or routing_policy(config)["local_model"]),
+    }
+
+
 def risk_rank(risk: str) -> int:
     return {"low": 1, "medium": 2, "high": 3}.get(risk.strip().lower(), 2)
 
@@ -2195,10 +2372,10 @@ def manager_launch_key(
 def prompt_digest_and_summary(prompt: str, *, known: bool) -> tuple[str, str]:
     if not known:
         return "", MANAGER_PROMPT_UNKNOWN_SUMMARY
-    clean = redact_text(" ".join(prompt.strip().split()))
-    if len(clean) > 180:
-        clean = clean[:177].rstrip() + "..."
-    return sha256_text(prompt), clean or "empty_prompt"
+    # Manager receipts are metadata-only. Never persist even a redacted prompt
+    # excerpt here: redaction is not a dependable privacy boundary for operator
+    # text, commands, paths, or credentials.
+    return sha256_text(prompt), "privacy_safe_prompt_metadata"
 
 
 def git_branch_and_status_digest(repo: Path | None = None) -> tuple[str, str]:
@@ -2356,7 +2533,18 @@ def ensure_state_schema(conn: sqlite3.Connection) -> None:
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL,
           stop_reason TEXT NOT NULL,
-          close_receipt TEXT NOT NULL
+          close_receipt TEXT NOT NULL,
+          context_packet_json TEXT NOT NULL DEFAULT '{}',
+          routing_json TEXT NOT NULL DEFAULT '{}',
+          validation_status TEXT NOT NULL DEFAULT 'pending',
+          repo_root TEXT NOT NULL DEFAULT '',
+          session_id TEXT NOT NULL DEFAULT '',
+          turn_id TEXT NOT NULL DEFAULT '',
+          assignment TEXT NOT NULL DEFAULT '',
+          policy_hash TEXT NOT NULL DEFAULT '',
+          origin TEXT NOT NULL DEFAULT 'qwendex',
+          final_report_present INTEGER NOT NULL DEFAULT 0,
+          completed_at TEXT NOT NULL DEFAULT ''
         );
         CREATE TABLE IF NOT EXISTS qwendex_context_snapshots (
           snapshot_id TEXT PRIMARY KEY,
@@ -2462,6 +2650,23 @@ def ensure_state_schema(conn: sqlite3.Connection) -> None:
     ensure_table_column(conn, "qwendex_manager_decisions", "state_db_identity", "TEXT NOT NULL DEFAULT ''")
     ensure_table_column(conn, "qwendex_manager_decisions", "ledger_db_identity", "TEXT NOT NULL DEFAULT ''")
     ensure_table_column(conn, "qwendex_manager_decisions", "runtime_identity", "TEXT NOT NULL DEFAULT ''")
+    ensure_table_column(conn, "qwendex_manager_decisions", "selected_mode", "TEXT NOT NULL DEFAULT ''")
+    ensure_table_column(conn, "qwendex_manager_decisions", "effective_turn_mode", "TEXT NOT NULL DEFAULT ''")
+    ensure_table_column(conn, "qwendex_manager_decisions", "task_class", "TEXT NOT NULL DEFAULT ''")
+    ensure_table_column(conn, "qwendex_manager_decisions", "agent_plan_json", "TEXT NOT NULL DEFAULT '{}'")
+    ensure_table_column(conn, "qwendex_manager_decisions", "policy_snapshot_json", "TEXT NOT NULL DEFAULT '{}'")
+    ensure_table_column(conn, "qwendex_manager_decisions", "desired_global_policy_hash", "TEXT NOT NULL DEFAULT ''")
+    ensure_table_column(conn, "qwendex_manager_decisions", "prompt_source", "TEXT NOT NULL DEFAULT ''")
+    ensure_table_column(conn, "qwendex_manager_decisions", "prompt_length", "INTEGER NOT NULL DEFAULT 0")
+    ensure_table_column(conn, "qwendex_manager_decisions", "prompt_schema_version", "TEXT NOT NULL DEFAULT ''")
+    ensure_table_column(conn, "qwendex_manager_decisions", "admission_error_code", "TEXT NOT NULL DEFAULT ''")
+    ensure_table_column(conn, "qwendex_agent_sessions", "session_id", "TEXT NOT NULL DEFAULT ''")
+    ensure_table_column(conn, "qwendex_agent_sessions", "turn_id", "TEXT NOT NULL DEFAULT ''")
+    ensure_table_column(conn, "qwendex_agent_sessions", "assignment", "TEXT NOT NULL DEFAULT ''")
+    ensure_table_column(conn, "qwendex_agent_sessions", "policy_hash", "TEXT NOT NULL DEFAULT ''")
+    ensure_table_column(conn, "qwendex_agent_sessions", "origin", "TEXT NOT NULL DEFAULT 'qwendex'")
+    ensure_table_column(conn, "qwendex_agent_sessions", "final_report_present", "INTEGER NOT NULL DEFAULT 0")
+    ensure_table_column(conn, "qwendex_agent_sessions", "completed_at", "TEXT NOT NULL DEFAULT ''")
     conn.execute(
         """
         CREATE UNIQUE INDEX IF NOT EXISTS qwendex_manager_decisions_launch_key
@@ -2482,6 +2687,12 @@ def ensure_state_schema(conn: sqlite3.Connection) -> None:
     )
     conn.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS qwendex_evidence_repo_public_id ON qwendex_evidence(repo_root, public_id)"
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS qwendex_agent_sessions_scope_status
+        ON qwendex_agent_sessions(repo_root, session_id, turn_id, task_id, status)
+        """
     )
     conn.commit()
 
@@ -2507,6 +2718,7 @@ def row_to_agent_session(row: sqlite3.Row | None) -> dict[str, Any] | None:
         parsed_routing = {}
     data["context_packet"] = parsed_context if isinstance(parsed_context, dict) else {}
     data["routing"] = parsed_routing if isinstance(parsed_routing, dict) else {}
+    data["final_report_present"] = bool(int(data.get("final_report_present") or 0))
     return data
 
 
@@ -2539,6 +2751,13 @@ def row_to_manager_decision(row: sqlite3.Row | None) -> dict[str, Any] | None:
         except json.JSONDecodeError:
             parsed = []
         data[key] = parsed if isinstance(parsed, list) else []
+    for key in ("agent_plan", "policy_snapshot"):
+        raw = data.pop(f"{key}_json", "{}")
+        try:
+            parsed = json.loads(raw) if raw else {}
+        except json.JSONDecodeError:
+            parsed = {}
+        data[key] = parsed if isinstance(parsed, dict) else {}
     data["root_agent_id"] = manager_decision_root_agent_id(data)
     return data
 
@@ -2638,8 +2857,20 @@ def agent_outcomes_for_sessions(sessions: list[dict[str, Any]]) -> list[dict[str
             "agent_id": session.get("agent_id", ""),
             "lane": session.get("lane", ""),
             "task_id": session.get("task_id", ""),
+            "session_id": session.get("session_id", ""),
+            "turn_id": session.get("turn_id", ""),
+            "assignment": session.get("assignment", ""),
+            "policy_hash": session.get("policy_hash", ""),
+            "origin": session.get("origin", ""),
             "status": session.get("status", ""),
             "validation_status": session.get("validation_status", ""),
+            "final_report_present": bool(session.get("final_report_present")),
+            "completed_at": session.get("completed_at", ""),
+            "waiver_reason": (
+                str((session.get("context_packet") or {}).get("waiver_reason") or "")
+                if str(session.get("status") or "") == "waived"
+                else ""
+            ),
             "required": session_is_required(session),
             "raw_output_artifact": artifact_for_kind(artifacts, "/raw-output.md"),
             "compact_report_artifact": artifact_for_kind(artifacts, "/compact-report.json"),
@@ -2797,6 +3028,14 @@ def scribe_path_allowed(path: str, *, repo_root: str = "") -> bool:
 def safe_artifact_component(value: str, fallback: str) -> str:
     text = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(value or "").strip()).strip(".-")
     return (text[:96] or fallback).strip(".-") or fallback
+
+
+def safe_native_agent_name(value: str, fallback: str = "worker") -> str:
+    """Return one Codex AgentPath segment accepted by native MultiAgentV2."""
+    text = re.sub(r"[^a-z0-9_]+", "_", str(value or "").strip().lower()).strip("_")
+    fallback_text = re.sub(r"[^a-z0-9_]+", "_", str(fallback or "worker").strip().lower()).strip("_")
+    name = (text[:96].rstrip("_") or fallback_text[:96].rstrip("_") or "worker")
+    return f"{name}_worker" if name == "root" else name
 
 
 def manager_root_agent_id(ledger_id: str, session_id: str) -> str:
@@ -3155,12 +3394,13 @@ def reconcile_stale_manager_sessions(
 ) -> dict[str, Any]:
     if repo_root:
         rows = conn.execute(
-            "SELECT * FROM qwendex_agent_sessions WHERE status = 'active' AND repo_root = ?",
+            "SELECT * FROM qwendex_agent_sessions WHERE status IN ('active', 'reserved', 'close_requested') AND repo_root = ?",
             (repo_root,),
         ).fetchall()
     else:
-        rows = conn.execute("SELECT * FROM qwendex_agent_sessions WHERE status = 'active'").fetchall()
-    closed: list[dict[str, Any]] = []
+        rows = conn.execute("SELECT * FROM qwendex_agent_sessions WHERE status IN ('active', 'reserved', 'close_requested')").fetchall()
+    close_requested: list[dict[str, Any]] = []
+    tombstoned: list[dict[str, Any]] = []
     skipped_writers: list[dict[str, Any]] = []
     for row in rows:
         session = row_to_agent_session(row)
@@ -3169,18 +3409,39 @@ def reconcile_stale_manager_sessions(
         if not manager_session_is_read_only(session):
             skipped_writers.append(session)
             continue
-        close_receipt = make_id("close")
-        conn.execute(
-            "UPDATE qwendex_agent_sessions SET status = 'closed', updated_at = ?, stop_reason = 'stale', close_receipt = ? WHERE agent_id = ?",
-            (now, close_receipt, session["agent_id"]),
-        )
-        release_agent_locks(conn, str(session["agent_id"]), now=now)
-        updated = conn.execute("SELECT * FROM qwendex_agent_sessions WHERE agent_id = ?", (session["agent_id"],)).fetchone()
-        closed.append(row_to_agent_session(updated) or {})
+        if str(session.get("status") or "") == "close_requested":
+            updated_session = transition_agent_session(
+                conn,
+                agent_id=str(session["agent_id"]),
+                status="tombstoned",
+                validation_status="fail",
+                now=now,
+                reason="bounded_close_timeout",
+                final_report_present=None,
+                close_receipt=make_id("tombstone"),
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE qwendex_agent_sessions
+                SET status = 'close_requested', heartbeat_at = ?, updated_at = ?,
+                    stop_reason = 'stale_close_requested', close_receipt = ?
+                WHERE agent_id = ?
+                """,
+                (now, now, make_id("close-request"), session["agent_id"]),
+            )
+            updated = conn.execute("SELECT * FROM qwendex_agent_sessions WHERE agent_id = ?", (session["agent_id"],)).fetchone()
+            updated_session = row_to_agent_session(updated)
+        if updated_session:
+            (tombstoned if str(updated_session.get("status") or "") == "tombstoned" else close_requested).append(updated_session)
     conn.commit()
     return {
-        "closed_count": len(closed),
-        "closed": closed,
+        "closed_count": len(tombstoned),
+        "closed": tombstoned,
+        "close_requested_count": len(close_requested),
+        "close_requested": close_requested,
+        "tombstoned_count": len(tombstoned),
+        "tombstoned": tombstoned,
         "skipped_writer_count": len(skipped_writers),
         "skipped_writers": skipped_writers,
         "stale_after_minutes": max(stale_after_minutes, 5),
@@ -3193,7 +3454,10 @@ def summarize_agent_sessions(
     *,
     stale_after_minutes: int,
 ) -> dict[str, Any]:
-    active_all = [session for session in sessions if session.get("status") == "active"]
+    active_all = [
+        session for session in sessions
+        if str(session.get("status") or "") not in AGENT_TERMINAL_STATUSES
+    ]
     stale = [
         session
         for session in active_all
@@ -3462,19 +3726,22 @@ def repair_manager_sessions(
 ) -> dict[str, Any]:
     if repo_root:
         rows = conn.execute(
-            "SELECT * FROM qwendex_agent_sessions WHERE status = 'active' AND repo_root = ?",
+            "SELECT * FROM qwendex_agent_sessions WHERE status IN ('active', 'reserved', 'close_requested') AND repo_root = ?",
             (repo_root,),
         ).fetchall()
     else:
-        rows = conn.execute("SELECT * FROM qwendex_agent_sessions WHERE status = 'active'").fetchall()
+        rows = conn.execute("SELECT * FROM qwendex_agent_sessions WHERE status IN ('active', 'reserved', 'close_requested')").fetchall()
     closed_read_only: list[dict[str, Any]] = []
     closed_writers: list[dict[str, Any]] = []
+    close_requested: list[dict[str, Any]] = []
     manual_close: list[dict[str, Any]] = []
     for row in rows:
         session = row_to_agent_session(row)
         if not session or not manager_session_is_stale(session, stale_after_minutes=stale_after_minutes):
             continue
-        if manager_session_is_read_only(session):
+        if str(session.get("status") or "") == "close_requested":
+            reason = "bounded_close_timeout"
+        elif manager_session_is_read_only(session):
             reason = "stale"
         elif safe and manager_session_safe_repairable(session):
             reason = "safe_stale_repair"
@@ -3486,14 +3753,32 @@ def repair_manager_sessions(
                 "command": f"scripts/qwendex manager close --agent-id {session.get('agent_id')} --reason operator_reviewed_stale --json",
             })
             continue
-        close_receipt = make_id("close")
-        conn.execute(
-            "UPDATE qwendex_agent_sessions SET status = 'closed', updated_at = ?, stop_reason = ?, close_receipt = ? WHERE agent_id = ?",
-            (now, reason, close_receipt, session["agent_id"]),
-        )
-        release_agent_locks(conn, str(session["agent_id"]), now=now)
-        updated = conn.execute("SELECT * FROM qwendex_agent_sessions WHERE agent_id = ?", (session["agent_id"],)).fetchone()
-        closed = row_to_agent_session(updated) or {}
+        if str(session.get("status") or "") == "close_requested":
+            closed = transition_agent_session(
+                conn,
+                agent_id=str(session["agent_id"]),
+                status="tombstoned",
+                validation_status="fail",
+                now=now,
+                reason="bounded_close_timeout",
+                final_report_present=None,
+                close_receipt=make_id("tombstone"),
+            ) or {}
+        else:
+            conn.execute(
+                """
+                UPDATE qwendex_agent_sessions
+                SET status = 'close_requested', heartbeat_at = ?, updated_at = ?,
+                    stop_reason = ?, close_receipt = ?
+                WHERE agent_id = ?
+                """,
+                (now, now, f"{reason}_close_requested", make_id("close-request"), session["agent_id"]),
+            )
+            updated = conn.execute("SELECT * FROM qwendex_agent_sessions WHERE agent_id = ?", (session["agent_id"],)).fetchone()
+            requested = row_to_agent_session(updated)
+            if requested:
+                close_requested.append(requested)
+            continue
         if reason == "safe_stale_repair":
             closed_writers.append(closed)
         else:
@@ -3504,9 +3789,11 @@ def repair_manager_sessions(
         "closed_count": len(closed_read_only) + len(closed_writers),
         "closed_read_only_count": len(closed_read_only),
         "closed_writer_count": len(closed_writers),
+        "close_requested_count": len(close_requested),
         "manual_close_count": len(manual_close),
         "closed_read_only": closed_read_only,
         "closed_writers": closed_writers,
+        "close_requested": close_requested,
         "manual_close": manual_close,
         "stale_after_minutes": max(stale_after_minutes, 5),
         "repo_root": repo_root,
@@ -3607,6 +3894,118 @@ def estimate_task(
     }
 
 
+def manager_session_status_payload(
+    config: Mapping[str, Any],
+    *,
+    repo_root: str,
+    desired_policy: Mapping[str, Any],
+) -> dict[str, Any]:
+    if not repo_root:
+        return {}
+    launch_ledger_id = str(os.environ.get("QWENDEX_MANAGER_LEDGER_ID") or "").strip()
+    with connect_state(config) as conn:
+        if launch_ledger_id:
+            row = conn.execute(
+                """
+                SELECT * FROM qwendex_manager_decisions
+                WHERE repo_root = ? AND (ledger_id = ? OR launch_ledger_id = ?)
+                ORDER BY CASE final_status
+                    WHEN 'preflight_ready' THEN 0
+                    WHEN 'validation_pending' THEN 1
+                    ELSE 2 END,
+                    timestamp_updated DESC
+                LIMIT 1
+                """,
+                (repo_root, launch_ledger_id, launch_ledger_id),
+            ).fetchone()
+            decision = row_to_manager_decision(row)
+        else:
+            decision = latest_manager_decision(conn, repo_root=repo_root)
+        if decision is None:
+            return {}
+        task_id = str(decision.get("agent_task_id") or decision.get("session_id") or "")
+        rows = conn.execute(
+            """
+            SELECT * FROM qwendex_agent_sessions
+            WHERE repo_root = ? AND task_id = ?
+            ORDER BY updated_at DESC
+            """,
+            (repo_root, task_id),
+        ).fetchall()
+        sessions = [session for row in rows if (session := row_to_agent_session(row))]
+    plan = dict(decision.get("agent_plan") or {})
+    required_lanes = list(plan.get("required_lanes") or [])
+    optional_lanes = list(plan.get("optional_lanes") or [])
+    active = [item for item in sessions if str(item.get("status") or "") not in AGENT_TERMINAL_STATUSES]
+    terminal = [item for item in sessions if str(item.get("status") or "") in AGENT_TERMINAL_STATUSES]
+    reservations = [item for item in sessions if str(item.get("status") or "") == "reserved"]
+    close_requests = [item for item in sessions if str(item.get("status") or "") == "close_requested"]
+    waivers = [item for item in sessions if str(item.get("status") or "") == "waived"]
+    session_hash = str(decision.get("policy_hash") or "")
+    desired_hash = str(desired_policy.get("policy_hash") or "")
+    drift = bool(session_hash and desired_hash and session_hash != desired_hash)
+    internal_route = str(decision.get("selected_route") or "")
+    route = {
+        "manager_subagents": "orchestrated_single_writer",
+        "direct_single_writer": "direct",
+    }.get(internal_route, internal_route)
+    direct_reason = str(decision.get("routing_reason") or "") if internal_route == "direct_single_writer" else None
+    admission_error = str(decision.get("admission_error_code") or "") or None
+    why_no_agent = None
+    if not sessions:
+        if direct_reason:
+            why_no_agent = direct_reason
+        elif admission_error:
+            why_no_agent = f"delegation blocked: {admission_error}"
+        elif required_lanes:
+            why_no_agent = "required lanes have not been registered"
+    return {
+        "schema_version": "qwendex.manager_session_status.v1",
+        "session_id": decision.get("session_id"),
+        "turn_id": decision.get("turn_id") or None,
+        "repo_root": repo_root,
+        "selected_mode": decision.get("selected_mode") or decision.get("mode"),
+        "effective_turn_mode": decision.get("effective_turn_mode") or decision.get("agent_use"),
+        "policy_hash": session_hash,
+        "desired_global_policy_hash": desired_hash,
+        "policy_drift": drift,
+        "session_policy_valid": bool(session_hash),
+        "restart_required": drift,
+        "prompt_known": bool(decision.get("prompt_known")),
+        "prompt_source": decision.get("prompt_source") or None,
+        "prompt_length": int(decision.get("prompt_length") or 0),
+        "task_class": decision.get("task_class") or None,
+        "route": route,
+        "native_agent_capability": "configured" if int((decision.get("policy_snapshot") or {}).get("max_workers") or 0) else "disabled",
+        "native_proactive_source": (
+            str(plan.get("native_proactive_source") or "qwendex_custom_policy")
+            if internal_route == "manager_subagents"
+            else "none"
+        ),
+        "required_lane_count": len(required_lanes),
+        "planned_lane_count": len(required_lanes) + len(optional_lanes),
+        "registered_agent_count": len(sessions),
+        "active_agent_count": len(active),
+        "terminal_agent_count": len(terminal),
+        "reserved_agent_count": len(reservations),
+        "close_requested_agent_count": len(close_requests),
+        "waiver_count": len(waivers),
+        "waivers": [
+            {
+                "lane": item.get("lane"),
+                "reason": (item.get("context_packet") or {}).get("waiver_reason") or item.get("stop_reason"),
+                "completed_at": item.get("completed_at"),
+            }
+            for item in waivers
+        ],
+        "direct_reason": direct_reason,
+        "last_admission_error": admission_error,
+        "required_lanes": required_lanes,
+        "optional_lanes": optional_lanes,
+        "why_no_agent": why_no_agent,
+    }
+
+
 def manager_mode_payload(
     config: Mapping[str, Any],
     *,
@@ -3627,6 +4026,11 @@ def manager_mode_payload(
     resolved_agent_policy = dict(agent_policy or resolve_agent_policy(config, selected_manager_mode=profile["mode"], kaveman_enabled=kaveman_enabled))
     if bool(resolved_agent_policy.get("output_policy", {}).get("kaveman_enabled")) != bool(kaveman_enabled):
         resolved_agent_policy = attach_output_policy(resolved_agent_policy, config, kaveman_enabled=kaveman_enabled)
+    resolved_agent_policy = attach_local_routing_snapshot(
+        resolved_agent_policy,
+        config,
+        enabled=bool(local_status.get("enabled")),
+    )
     displayed_sessions = sessions or []
     operational_sessions = displayed_sessions if scope_sessions is None else scope_sessions
     authoritative_ledger = operational_sessions if ledger_sessions is None else ledger_sessions
@@ -3715,6 +4119,13 @@ def manager_mode_payload(
         local_status=local_status,
         stale_pressure="high" if data["stale_sessions"]["count"] else "none",
     )
+    session_status = manager_session_status_payload(
+        config,
+        repo_root=repo_root,
+        desired_policy=resolved_agent_policy,
+    )
+    if session_status:
+        data["session_status"] = session_status
     return data
 
 
@@ -3791,6 +4202,12 @@ def codex_status_payload(config: Mapping[str, Any], *, write_path: Path | None =
         )
         local_enabled = current_local_enabled(config, conn)
         local_status = local_subagent_status(config, enabled=local_enabled, env=os.environ, probe=True)
+        agent_policy = attach_local_routing_snapshot(
+            agent_policy,
+            config,
+            enabled=local_enabled,
+        )
+        agent_policy = attach_native_proactive_source(agent_policy)
     requested_override, requested_override_reason = manager_hook_override(os.environ)
     base_hook_status = hook_status_for_codex_home(
         codex_home_from_env(os.environ),
@@ -3800,7 +4217,7 @@ def codex_status_payload(config: Mapping[str, Any], *, write_path: Path | None =
     hook_status = dict(base_hook_status)
     hook_status["override"] = hook_override
     hook_status["override_reason"] = requested_override_reason if hook_override else None
-    manager_preflight_required = selected_mode == "manager" or str(agent_policy.get("mode") or "") == "manager"
+    manager_preflight_required = str(agent_policy.get("mode") or "") != "off"
     profile = manager_mode_profile(config, mode)
     text = manager_status_surface_text(
         profile["label"],
@@ -3814,6 +4231,7 @@ def codex_status_payload(config: Mapping[str, Any], *, write_path: Path | None =
         "selected_manager_mode": selected_mode,
         "manager_preflight_required": manager_preflight_required,
         "agent_use": agent_policy["agent_use"],
+        "agent_policy": agent_policy,
         "agent_policy_hash": agent_policy["policy_hash"],
         "agent_policy_source": agent_policy["source"],
         "output_policy": agent_policy.get("output_policy", {}),
@@ -4017,7 +4435,9 @@ def codex_source_patch_specs(version: str) -> list[dict[str, Any]]:
                     """            StatusLineItem::TaskProgress => {
                 "Latest task progress from update_plan (omitted until available)"
             },
-            StatusLineItem::QwendexManager => "Qwendex manager mode, Kaveman, and local routing state",
+            StatusLineItem::QwendexManager => {
+                "Qwendex manager mode, Kaveman, and local routing state"
+            }
 """,
                 ),
                 (
@@ -4074,7 +4494,9 @@ impl ChatWidget {{
                     """            StatusLineItem::FastMode | StatusLineItem::RawOutput => Self::Mode,
 """,
                     f"""            {marker}
-            StatusLineItem::FastMode | StatusLineItem::RawOutput | StatusLineItem::QwendexManager => Self::Mode,
+            StatusLineItem::FastMode
+            | StatusLineItem::RawOutput
+            | StatusLineItem::QwendexManager => Self::Mode,
 """,
                 ),
             ],
@@ -4096,7 +4518,9 @@ impl ChatWidget {{
                     """            StatusSurfacePreviewItem::TaskProgress => "Tasks 0/0",
 """,
                     """            StatusSurfacePreviewItem::TaskProgress => "Tasks 0/0",
-            StatusSurfacePreviewItem::QwendexManager => "{Qwendex} Agent Manager: [Manager Mode] | Kaveman: [N] | Local: [Ready] (Alt+M/K/L)",
+            StatusSurfacePreviewItem::QwendexManager => {
+                "{Qwendex} Agent Manager: [Manager Mode] | Kaveman: [N] | Local: [Ready] (Alt+M/K/L)"
+            }
 """,
                 ),
                 (
@@ -4223,9 +4647,18 @@ impl ChatWidget {{
 """,
                     """                ("toggle_fast_mode", self.app.toggle_fast_mode.as_slice()),
                 ("toggle_raw_output", self.app.toggle_raw_output.as_slice()),
-                ("qwendex_toggle_manager", self.app.qwendex_toggle_manager.as_slice()),
-                ("qwendex_toggle_kaveman", self.app.qwendex_toggle_kaveman.as_slice()),
-                ("qwendex_toggle_local", self.app.qwendex_toggle_local.as_slice()),
+                (
+                    "qwendex_toggle_manager",
+                    self.app.qwendex_toggle_manager.as_slice(),
+                ),
+                (
+                    "qwendex_toggle_kaveman",
+                    self.app.qwendex_toggle_kaveman.as_slice(),
+                ),
+                (
+                    "qwendex_toggle_local",
+                    self.app.qwendex_toggle_local.as_slice(),
+                ),
                 ("chat.interrupt_turn", self.chat.interrupt_turn.as_slice()),
 """,
                 ),
@@ -4237,9 +4670,18 @@ impl ChatWidget {{
 """,
                     """                ("toggle_fast_mode", self.app.toggle_fast_mode.as_slice()),
                 ("toggle_raw_output", self.app.toggle_raw_output.as_slice()),
-                ("qwendex_toggle_manager", self.app.qwendex_toggle_manager.as_slice()),
-                ("qwendex_toggle_kaveman", self.app.qwendex_toggle_kaveman.as_slice()),
-                ("qwendex_toggle_local", self.app.qwendex_toggle_local.as_slice()),
+                (
+                    "qwendex_toggle_manager",
+                    self.app.qwendex_toggle_manager.as_slice(),
+                ),
+                (
+                    "qwendex_toggle_kaveman",
+                    self.app.qwendex_toggle_kaveman.as_slice(),
+                ),
+                (
+                    "qwendex_toggle_local",
+                    self.app.qwendex_toggle_local.as_slice(),
+                ),
             ],
             [
 """,
@@ -4254,9 +4696,18 @@ impl ChatWidget {{
                     """                ("toggle_vim_mode", self.app.toggle_vim_mode.as_slice()),
                 ("toggle_fast_mode", self.app.toggle_fast_mode.as_slice()),
                 ("toggle_raw_output", self.app.toggle_raw_output.as_slice()),
-                ("qwendex_toggle_manager", self.app.qwendex_toggle_manager.as_slice()),
-                ("qwendex_toggle_kaveman", self.app.qwendex_toggle_kaveman.as_slice()),
-                ("qwendex_toggle_local", self.app.qwendex_toggle_local.as_slice()),
+                (
+                    "qwendex_toggle_manager",
+                    self.app.qwendex_toggle_manager.as_slice(),
+                ),
+                (
+                    "qwendex_toggle_kaveman",
+                    self.app.qwendex_toggle_kaveman.as_slice(),
+                ),
+                (
+                    "qwendex_toggle_local",
+                    self.app.qwendex_toggle_local.as_slice(),
+                ),
                 (
                     "composer.history_search_previous",
 """,
@@ -4270,25 +4721,33 @@ impl ChatWidget {{
                     """    pub(super) async fn handle_key_event(
 """,
                     f"""    {marker}
-    fn run_qwendex_toggle_command(&mut self, tui: &mut tui::Tui, label: &str, args: &[&str]) {{
+    fn run_qwendex_toggle_command(
+        &mut self,
+        tui: &mut tui::Tui,
+        label: &str,
+        args: &[&str],
+    ) {{
         let output = std::process::Command::new("qwendex").args(args).output();
         match output {{
             Ok(output) if output.status.success() => {{
-                self.chat_widget.add_to_history(history_cell::new_info_event(
-                    format!("Qwendex {{label}} toggled."),
-                    None,
-                ));
+                self.chat_widget
+                    .add_to_history(history_cell::new_info_event(
+                        format!("Qwendex {{label}} toggled."),
+                        None,
+                    ));
             }}
             Ok(output) => {{
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                self.chat_widget.add_to_history(history_cell::new_error_event(format!(
-                    "Qwendex {{label}} toggle failed: {{stderr}}"
-                )));
+                self.chat_widget
+                    .add_to_history(history_cell::new_error_event(format!(
+                        "Qwendex {{label}} toggle failed: {{stderr}}"
+                    )));
             }}
             Err(err) => {{
-                self.chat_widget.add_to_history(history_cell::new_error_event(format!(
-                    "Qwendex {{label}} toggle failed: {{err}}"
-                )));
+                self.chat_widget
+                    .add_to_history(history_cell::new_error_event(format!(
+                        "Qwendex {{label}} toggle failed: {{err}}"
+                    )));
             }}
         }}
         self.refresh_status_line();
@@ -4424,6 +4883,237 @@ pub(crate) fn with_terminal_visualization_instructions(
         blocks.push(directive);
     }}
     (!blocks.is_empty()).then(|| blocks.join("\\n\\n"))
+}}
+""",
+                ),
+            ],
+        },
+        {
+            "path": "codex-rs/hooks/src/events/session_start.rs",
+            "replacements": [
+                (
+                    """    SubagentStart {
+        turn_id: String,
+        agent_id: String,
+        agent_type: String,
+    },
+""",
+                    f"""    SubagentStart {{
+        turn_id: String,
+        agent_id: String,
+        agent_type: String,
+        {marker}
+        task_name: String,
+        parent_session_id: String,
+    }},
+""",
+                ),
+                (
+                    """        StartHookTarget::SubagentStart {
+            turn_id: subagent_turn_id,
+            agent_id,
+            agent_type,
+        } => {
+""",
+                    """        StartHookTarget::SubagentStart {
+            turn_id: subagent_turn_id,
+            agent_id,
+            agent_type,
+            task_name,
+            parent_session_id,
+        } => {
+""",
+                ),
+                (
+                    """                agent_id,
+                agent_type,
+            };
+""",
+                    """                agent_id,
+                agent_type,
+                task_name,
+                parent_session_id,
+            };
+""",
+                ),
+            ],
+        },
+        {
+            "path": "codex-rs/hooks/src/schema.rs",
+            "replacements": [
+                (
+                    """    pub agent_id: String,
+    pub agent_type: String,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(rename = "user-prompt-submit.command.input")]
+""",
+                    f"""    pub agent_id: String,
+    pub agent_type: String,
+    {marker}
+    /// Canonical V2 task path supplied to spawn_agent.
+    pub task_name: String,
+    /// Root/parent thread id that authorized this spawn.
+    pub parent_session_id: String,
+}}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(rename = "user-prompt-submit.command.input")]
+""",
+                ),
+            ],
+        },
+        {
+            "path": "codex-rs/core/src/hook_runtime.rs",
+            "replacements": [
+                (
+                    """            SessionSource::SubAgent(SubAgentSource::ThreadSpawn { agent_role, .. })
+                if matches!(
+                    session_start_source,
+                    codex_hooks::SessionStartSource::Startup
+                ) =>
+            {
+                let context = subagent_hook_context(sess, agent_role);
+                StartHookTarget::SubagentStart {
+                    turn_id: turn_context.sub_id.clone(),
+                    agent_id: context.agent_id,
+                    agent_type: context.agent_type,
+                }
+            }
+""",
+                    f"""            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {{
+                parent_thread_id,
+                agent_path,
+                agent_role,
+                ..
+            }}) if matches!(
+                session_start_source,
+                codex_hooks::SessionStartSource::Startup
+            ) =>
+            {{
+                let context = subagent_hook_context(sess, agent_role);
+                {marker}
+                StartHookTarget::SubagentStart {{
+                    turn_id: turn_context.sub_id.clone(),
+                    agent_id: context.agent_id,
+                    agent_type: context.agent_type,
+                    task_name: agent_path
+                        .as_ref()
+                        .map(ToString::to_string)
+                        .unwrap_or_default(),
+                    parent_session_id: parent_thread_id.to_string(),
+                }}
+            }}
+""",
+                ),
+            ],
+        },
+        {
+            "path": "codex-rs/core/src/tools/spec_plan.rs",
+            "replacements": [
+                (
+                    """        MultiAgentVersion::V2 => true,
+""",
+                    f"""        {marker}
+        MultiAgentVersion::V2 => !turn_context.session_source.is_non_root_agent(),
+""",
+                ),
+            ],
+        },
+        {
+            "path": "codex-rs/core/src/config/mod.rs",
+            "replacements": [
+                (
+                    """    pub(crate) fn validate_multi_agent_v2_config(&self) -> std::io::Result<()> {
+        if self.features.enabled(Feature::MultiAgentV2) && self.agent_max_threads.is_some() {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "agents.max_threads cannot be set when features.multi_agent_v2 is enabled",
+            ))
+        } else {
+            Ok(())
+        }
+    }
+""",
+                    f"""    pub(crate) fn validate_multi_agent_v2_config(&self) -> std::io::Result<()> {{
+        {marker}
+        // V2 owns its per-session thread ceiling and already ignores the legacy
+        // agents.max_threads value in effective_agent_max_threads(). Accepting a
+        // downstream legacy setting keeps V2 launches backward compatible.
+        Ok(())
+    }}
+""",
+                ),
+            ],
+        },
+        {
+            "path": "codex-rs/core/src/config/config_tests.rs",
+            "replacements": [
+                (
+                    """#[tokio::test]
+async fn multi_agent_v2_feature_rejects_agents_max_threads() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features.multi_agent_v2]
+enabled = true
+
+[agents]
+max_threads = 3
+"#,
+    )?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+    let err = config
+        .validate_multi_agent_v2_config()
+        .expect_err("agents.max_threads should conflict with multi_agent_v2");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(
+        err.to_string(),
+        "agents.max_threads cannot be set when features.multi_agent_v2 is enabled"
+    );
+    assert_eq!(
+        config.effective_agent_max_threads(MultiAgentVersion::V2),
+        Some(3)
+    );
+
+    Ok(())
+}
+""",
+                    f"""#[tokio::test]
+async fn multi_agent_v2_ignores_legacy_agents_max_threads() -> std::io::Result<()> {{
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features.multi_agent_v2]
+enabled = true
+
+[agents]
+max_threads = 2
+"#,
+    )?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+    {marker}
+    config.validate_multi_agent_v2_config()?;
+    assert_eq!(
+        config.effective_agent_max_threads(MultiAgentVersion::V2),
+        Some(3)
+    );
+
+    Ok(())
 }}
 """,
                 ),
@@ -4971,7 +5661,13 @@ def command_check(args: argparse.Namespace, config: dict[str, Any]) -> dict[str,
     with connect_state(config) as conn:
         mode = current_manager_mode(config, conn)
         agent_policy = resolve_agent_policy(config, cli_agent_use=getattr(args, "agent_use", ""), selected_manager_mode=mode)
-        local_status = local_subagent_status(config, enabled=current_local_enabled(config, conn), env=os.environ, probe=False)
+        local_enabled = current_local_enabled(config, conn)
+        local_status = local_subagent_status(config, enabled=local_enabled, env=os.environ, probe=False)
+        agent_policy = attach_local_routing_snapshot(
+            agent_policy,
+            config,
+            enabled=local_enabled,
+        )
         stale_after = mode_stale_after_minutes(config, mode)
         repo_root = canonical_manager_repo_root()
         reconcile_stale_manager_sessions(
@@ -5059,7 +5755,13 @@ def command_doctor(args: argparse.Namespace, config: dict[str, Any]) -> dict[str
     with connect_state(config) as conn:
         mode = current_manager_mode(config, conn)
         agent_policy = resolve_agent_policy(config, cli_agent_use=getattr(args, "agent_use", ""), selected_manager_mode=mode)
-        local_status = local_subagent_status(config, enabled=current_local_enabled(config, conn), env=os.environ, probe=False)
+        local_enabled = current_local_enabled(config, conn)
+        local_status = local_subagent_status(config, enabled=local_enabled, env=os.environ, probe=False)
+        agent_policy = attach_local_routing_snapshot(
+            agent_policy,
+            config,
+            enabled=local_enabled,
+        )
         stale_after = mode_stale_after_minutes(config, mode)
         repo_root = canonical_manager_repo_root()
         reconcile_stale_manager_sessions(
@@ -6278,6 +6980,11 @@ def manager_estimate_envelope(
     estimate = estimate_task(config, prompt=prompt.strip(), local_status=local_status)
     profile = manager_mode_profile(config, mode)
     resolved_agent_policy = dict(agent_policy or resolve_agent_policy(config, selected_manager_mode=profile["mode"]))
+    resolved_agent_policy = attach_local_routing_snapshot(
+        resolved_agent_policy,
+        config,
+        enabled=bool(local_status.get("enabled")),
+    )
     data = {
         "mode": profile["mode"],
         "label": profile["label"],
@@ -6659,9 +7366,10 @@ def routing_assignment_label(routing: Mapping[str, Any]) -> str:
 
 
 def spawn_instruction(agent_id: str, routing: Mapping[str, Any]) -> str:
+    reasoning = str(routing.get("selected_reasoning") or "inherited")
     return (
-        f"spawn_agent for {agent_id} using Qwendex assignment "
-        f"{routing_assignment_label(routing)}; include these model/reasoning values in the spawned agent context."
+        f"spawn_agent for {agent_id} using the Qwendex lane assignment; "
+        f"keep model selection inherited from Codex and use reasoning={reasoning} only when the native profile supports it."
     )
 
 
@@ -6729,12 +7437,6 @@ def agent_mode_context(
         f"Active Qwendex agent mode: {agent_policy.get('agent_use')}. {contracts.get(mode, contracts['medium'])}",
     ]
     if config is not None:
-        policy = reasoning_policy(config, hook_local_subagent_status(config))
-        parts.append(
-            "Qwendex model/reasoning policy: "
-            f"default lane {routing_assignment_label(policy['default_lane'])}; "
-            f"high-risk/release/security lane {routing_assignment_label(policy['high_risk_lane'])}."
-        )
         if output_context := agent_output_policy_context(agent_policy, config=config):
             parts.append(output_context)
     if search_context := experimental_search_candidate_context():
@@ -6784,9 +7486,9 @@ def subagent_start_context(
     task_name = str(event.get("task_name") or event.get("task") or "assigned task")
     routing = event_model_reasoning(event) or session_model_reasoning(config, agent_id)
     assignment = (
-        f" Use Qwendex assignment {routing_assignment_label(routing)}."
+        f" Use the registered Qwendex lane assignment with reasoning={routing.get('selected_reasoning') or 'inherited'}; model selection remains inherited from Codex."
         if routing
-        else " Use the model/reasoning assignment supplied by the manager/root context."
+        else " Use the lane assignment supplied by the manager/root context; model selection remains inherited from Codex."
     )
     output_context = agent_output_policy_context(agent_policy, config=config)
     output_sentence = f" {output_context}" if output_context else ""
@@ -6805,11 +7507,11 @@ def parse_worker_final_status(message: str) -> dict[str, Any]:
     text = message or ""
     has_final_report = re.search(r"(?im)^\s*FINAL_REPORT\s*$", text) is not None
     if not has_final_report and re.search(r"(?im)^\s*BLOCKED(?:\s*:.*)?\s*$", text):
-        return {"has_contract": True, "status": "blocked", "validation_status": "fail", "reason": "blocked_contract"}
+        return {"has_contract": True, "final_report_present": False, "status": "blocked", "validation_status": "fail", "reason": "blocked_contract"}
     if not has_final_report and re.search(r"(?im)^\s*FAILED(?:\s*:.*)?\s*$", text):
-        return {"has_contract": True, "status": "failed", "validation_status": "fail", "reason": "failed_contract"}
+        return {"has_contract": True, "final_report_present": False, "status": "failed", "validation_status": "fail", "reason": "failed_contract"}
     if not has_final_report:
-        return {"has_contract": False, "status": "", "validation_status": "pending", "reason": "missing_final_contract"}
+        return {"has_contract": False, "final_report_present": False, "status": "", "validation_status": "pending", "reason": "missing_final_contract"}
     status_match = re.search(r"(?im)^\s*status\s*:\s*([a-z_-]+)", text)
     reported = status_match.group(1).strip().lower() if status_match else "completed"
     if reported in {"blocked", "block"}:
@@ -6821,7 +7523,64 @@ def parse_worker_final_status(message: str) -> dict[str, Any]:
     else:
         status = "completed"
         validation = "pass"
-    return {"has_contract": True, "status": status, "validation_status": validation, "reason": "final_report"}
+    return {"has_contract": True, "final_report_present": True, "status": status, "validation_status": validation, "reason": "final_report"}
+
+
+def transition_agent_session(
+    conn: sqlite3.Connection,
+    *,
+    agent_id: str,
+    status: str,
+    validation_status: str,
+    now: str,
+    reason: str,
+    final_report_present: bool | None = None,
+    close_receipt: str = "",
+    artifacts: list[str] | None = None,
+) -> dict[str, Any] | None:
+    row = conn.execute(
+        "SELECT * FROM qwendex_agent_sessions WHERE agent_id = ?",
+        (agent_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    stored_artifacts = json_loads_list(row["artifacts_json"])
+    for artifact in artifacts or []:
+        if artifact and artifact not in stored_artifacts:
+            stored_artifacts.append(artifact)
+    terminal = status in AGENT_TERMINAL_STATUSES
+    conn.execute(
+        """
+        UPDATE qwendex_agent_sessions
+        SET status = ?, validation_status = ?, heartbeat_at = ?, updated_at = ?,
+            stop_reason = ?, artifacts_json = ?,
+            final_report_present = CASE WHEN ? IS NULL THEN final_report_present ELSE ? END,
+            completed_at = ?,
+            close_receipt = CASE WHEN ? = '' THEN close_receipt ELSE ? END
+        WHERE agent_id = ?
+        """,
+        (
+            status,
+            validation_status,
+            now,
+            now,
+            reason,
+            json_dumps(stored_artifacts),
+            None if final_report_present is None else int(final_report_present),
+            0 if final_report_present is None else int(final_report_present),
+            now if terminal else "",
+            close_receipt,
+            close_receipt,
+            agent_id,
+        ),
+    )
+    if terminal:
+        release_agent_locks(conn, agent_id, now=now)
+    updated = conn.execute(
+        "SELECT * FROM qwendex_agent_sessions WHERE agent_id = ?",
+        (agent_id,),
+    ).fetchone()
+    return row_to_agent_session(updated)
 
 
 def update_agent_from_final_contract(
@@ -6834,33 +7593,18 @@ def update_agent_from_final_contract(
 ) -> dict[str, Any] | None:
     if not agent_id or not final_status.get("has_contract"):
         return None
-    row = conn.execute("SELECT * FROM qwendex_agent_sessions WHERE agent_id = ?", (agent_id,)).fetchone()
-    if row is None:
-        return None
-    stored_artifacts = json_loads_list(row["artifacts_json"])
-    for artifact in artifacts or []:
-        if artifact and artifact not in stored_artifacts:
-            stored_artifacts.append(artifact)
-    conn.execute(
-        """
-        UPDATE qwendex_agent_sessions
-        SET status = ?, validation_status = ?, heartbeat_at = ?, updated_at = ?, stop_reason = ?, artifacts_json = ?
-        WHERE agent_id = ?
-        """,
-        (
-            str(final_status.get("status") or "completed"),
-            str(final_status.get("validation_status") or "pending"),
-            now,
-            now,
-            str(final_status.get("reason") or "final_report"),
-            json_dumps(stored_artifacts),
-            agent_id,
-        ),
+    updated = transition_agent_session(
+        conn,
+        agent_id=agent_id,
+        status=str(final_status.get("status") or "completed"),
+        validation_status=str(final_status.get("validation_status") or "pending"),
+        now=now,
+        reason=str(final_status.get("reason") or "final_report"),
+        final_report_present=bool(final_status.get("final_report_present")),
+        artifacts=artifacts,
     )
-    release_agent_locks(conn, agent_id, now=now)
     conn.commit()
-    updated = conn.execute("SELECT * FROM qwendex_agent_sessions WHERE agent_id = ?", (agent_id,)).fetchone()
-    return row_to_agent_session(updated)
+    return updated
 
 
 def session_is_required(session: Mapping[str, Any]) -> bool:
@@ -6868,6 +7612,502 @@ def session_is_required(session: Mapping[str, Any]) -> bool:
     if isinstance(packet, Mapping) and "required" in packet:
         return bool(packet.get("required"))
     return True
+
+
+def session_lane(session: Mapping[str, Any]) -> str:
+    return str(session.get("lane") or "").strip().lower()
+
+
+def waived_lanes(sessions: list[dict[str, Any]]) -> set[str]:
+    return {
+        session_lane(session)
+        for session in sessions
+        if str(session.get("status") or "") == "waived" and session_lane(session)
+    }
+
+
+def verifier_waived(sessions: list[dict[str, Any]]) -> bool:
+    return any(
+        str(session.get("status") or "") == "waived" and session_is_verifier(session)
+        for session in sessions
+    )
+
+
+def missing_planned_required_lanes(
+    decision: Mapping[str, Any],
+    sessions: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    plan = decision.get("agent_plan")
+    if not isinstance(plan, Mapping):
+        return []
+    required = plan.get("required_lanes")
+    if not isinstance(required, list):
+        return []
+    registered = {
+        str(session.get("lane") or "").strip().lower()
+        for session in sessions
+        if str(session.get("lane") or "").strip()
+    }
+    missing: list[dict[str, Any]] = []
+    for item in required:
+        if not isinstance(item, Mapping):
+            continue
+        lane = str(item.get("lane") or "").strip().lower()
+        if lane and lane not in registered:
+            missing.append(dict(item))
+    return missing
+
+
+def planned_assignment_key(assignment: Mapping[str, Any]) -> tuple[str, str]:
+    return (
+        str(assignment.get("lane") or "").strip().lower(),
+        str(assignment.get("profile") or "").strip().lower(),
+    )
+
+
+def registered_assignment_keys(sessions: list[dict[str, Any]]) -> set[tuple[str, str]]:
+    keys: set[tuple[str, str]] = set()
+    for session in sessions:
+        packet = session.get("context_packet")
+        packet = packet if isinstance(packet, Mapping) else {}
+        lane = str(session.get("lane") or packet.get("planned_lane") or "").strip().lower()
+        profile = str(packet.get("planned_profile") or session.get("owner") or "").strip().lower()
+        if lane:
+            keys.add((lane, profile))
+            keys.add((lane, ""))
+    return keys
+
+
+def reserve_manager_native_spawn(
+    config: Mapping[str, Any],
+    event: Mapping[str, Any],
+    agent_policy: Mapping[str, Any],
+    decision: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Reserve one persisted planned lane before native Codex creates it."""
+    repo_root = str(decision.get("repo_root") or canonical_manager_repo_root(event=event))
+    task_id = str(decision.get("agent_task_id") or decision.get("session_id") or "")
+    plan = decision.get("agent_plan")
+    plan = plan if isinstance(plan, Mapping) else {}
+    assignments = [
+        dict(item)
+        for item in list(plan.get("assignments") or [])
+        if isinstance(item, Mapping)
+    ]
+    if str(decision.get("selected_route") or "") != "manager_subagents" or not assignments:
+        return {
+            "decision": "block",
+            "event": "manager.unplanned_spawn_rejected",
+            "reason": "This admitted turn has no planned agent lane; continue directly or start a new turn whose prompt justifies delegation.",
+        }
+    tool_use_id = str(event.get("tool_use_id") or "").strip()
+    if not tool_use_id:
+        return {
+            "decision": "block",
+            "event": "manager.spawn_identity_missing",
+            "reason": "Native spawn admission requires tool_use_id so the worker can be reserved without duplication.",
+        }
+    now = utc_now()
+    with connect_state(config) as conn:
+        if busy_error := begin_immediate(conn):
+            return {
+                "decision": "block",
+                "event": "manager.state_busy",
+                "reason": "Qwendex manager state remained busy during native spawn admission.",
+                "busy_error": busy_error,
+            }
+        rows = conn.execute(
+            """
+            SELECT * FROM qwendex_agent_sessions
+            WHERE repo_root = ? AND task_id = ?
+            ORDER BY created_at ASC
+            """,
+            (repo_root, task_id),
+        ).fetchall()
+        sessions = [item for row in rows if (item := row_to_agent_session(row))]
+        for session in sessions:
+            packet = session.get("context_packet")
+            packet = packet if isinstance(packet, Mapping) else {}
+            if (
+                str(session.get("status") or "") == "reserved"
+                and str(session.get("origin") or "") == "qwendex"
+                and str(packet.get("pending_tool_use_id") or "") == tool_use_id
+            ):
+                conn.commit()
+                return {
+                    "event": "manager.native_spawn_reserved",
+                    "reservation": session,
+                    "idempotent_reuse": True,
+                }
+        active_count = sum(
+            1 for session in sessions
+            if str(session.get("status") or "") not in AGENT_TERMINAL_STATUSES
+        )
+        policy_snapshot = decision.get("policy_snapshot")
+        policy_snapshot = policy_snapshot if isinstance(policy_snapshot, Mapping) else agent_policy
+        max_workers = int(
+            plan.get("max_workers")
+            or policy_snapshot.get("max_workers")
+            or policy_snapshot.get("max_threads")
+            or 0
+        )
+        if max_workers <= 0 or active_count >= max_workers:
+            conn.rollback()
+            return {
+                "decision": "block",
+                "event": "manager.capacity_reached",
+                "reason": f"Native worker capacity is {max_workers}; {active_count} lane(s) are already active or reserved.",
+                "active_count": active_count,
+                "max_workers": max_workers,
+            }
+        registered = registered_assignment_keys(sessions)
+        remaining = [
+            assignment
+            for assignment in assignments
+            if planned_assignment_key(assignment) not in registered
+            and (planned_assignment_key(assignment)[0], "") not in registered
+        ]
+        if not remaining:
+            conn.rollback()
+            return {
+                "decision": "block",
+                "event": "manager.planned_lanes_satisfied",
+                "reason": "Every planned lane is already registered; duplicate native workers are denied.",
+            }
+        tool_input = event.get("tool_input")
+        tool_input = tool_input if isinstance(tool_input, Mapping) else {}
+        requested_task_name = str(tool_input.get("task_name") or "").strip()
+        matched = [
+            assignment
+            for assignment in remaining
+            if requested_task_name == str(assignment.get("agent_id") or "").strip()
+        ]
+        if len(matched) == 1:
+            assignment = matched[0]
+        else:
+            conn.rollback()
+            expected = ", ".join(str(item.get("agent_id") or item.get("lane") or "") for item in remaining)
+            return {
+                "decision": "block",
+                "event": "manager.spawn_lane_identity_mismatch",
+                "reason": f"Spawn one exact planned lane by using its planned agent id as task_name: {expected}.",
+                "remaining_lane_count": len(remaining),
+            }
+        pending_agent_id = f"native-pending-{sha256_text(tool_use_id)[:20]}"
+        lane = str(assignment.get("lane") or "")
+        profile = str(assignment.get("profile") or "worker")
+        required = bool(assignment.get("required"))
+        context_packet = {
+            "objective": str(assignment.get("assignment") or assignment.get("stop_condition") or ""),
+            "task_class": str(plan.get("task_class") or ""),
+            "allowed_scope": "read-only",
+            "required": required,
+            "exact_files": [],
+            "needed_docs": [],
+            "stop_condition": str(assignment.get("stop_condition") or "return FINAL_REPORT"),
+            "expected_artifact": "FINAL_REPORT",
+            "receipt_path": "",
+            "context_budget": int(agent_policy.get("max_inherited_context_bytes") or 0),
+            "model_reasoning_assignment": dict(assignment.get("routing") or {}),
+            "review_requirement": "root review required",
+            "risk": str((plan.get("estimate") or {}).get("risk") or "medium"),
+            "planned_agent_id": str(assignment.get("agent_id") or ""),
+            "planned_lane": lane,
+            "planned_profile": profile,
+            "pending_tool_use_id": tool_use_id,
+            "launch_ledger_id": str(decision.get("launch_ledger_id") or decision.get("ledger_id") or ""),
+            "root_session_id": str(decision.get("root_session_id") or ""),
+            "runtime": "native_v2",
+            "runtime_state": "reserved",
+        }
+        conn.execute(
+            """
+            INSERT INTO qwendex_agent_sessions
+            (agent_id, lane, task_id, owner, write_surface, stop_condition,
+             artifacts_json, status, heartbeat_at, created_at, updated_at,
+             stop_reason, close_receipt, context_packet_json, routing_json,
+             validation_status, repo_root, session_id, turn_id, assignment,
+             policy_hash, origin, final_report_present, completed_at)
+            VALUES (?, ?, ?, ?, 'read-only', ?, '[]', 'reserved', ?, ?, ?, '', '', ?, ?,
+                    'pending', ?, ?, ?, ?, ?, 'qwendex', 0, '')
+            """,
+            (
+                pending_agent_id,
+                lane,
+                task_id,
+                profile,
+                str(assignment.get("stop_condition") or "return FINAL_REPORT"),
+                now,
+                now,
+                now,
+                json_dumps(context_packet),
+                json_dumps(dict(assignment.get("routing") or {})),
+                repo_root,
+                str(decision.get("session_id") or ""),
+                str(decision.get("turn_id") or ""),
+                str(assignment.get("assignment") or ""),
+                str(decision.get("policy_hash") or agent_policy.get("policy_hash") or ""),
+            ),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT * FROM qwendex_agent_sessions WHERE agent_id = ?",
+            (pending_agent_id,),
+        ).fetchone()
+        reservation = row_to_agent_session(row) or {}
+    return {
+        "event": "manager.native_spawn_reserved",
+        "reservation": reservation,
+        "idempotent_reuse": False,
+    }
+
+
+def activate_manager_native_worker(
+    config: Mapping[str, Any],
+    event: Mapping[str, Any],
+    agent_policy: Mapping[str, Any],
+) -> tuple[dict[str, Any] | None, str]:
+    """Bind a native SubagentStart runtime id to its pre-spawn reservation."""
+    runtime_agent_id = str(event.get("agent_id") or "").strip()
+    if not runtime_agent_id:
+        return None, "native_agent_id_missing"
+    task_name = str(event.get("task_name") or event.get("agent_path") or "").strip()
+    parent_session_id = str(event.get("parent_session_id") or "").strip()
+    if not task_name or not parent_session_id:
+        return None, "native_spawn_identity_missing"
+    repo_root = canonical_manager_repo_root(event=event)
+    launch_ledger_id = str(os.environ.get("QWENDEX_MANAGER_LEDGER_ID") or "").strip()
+    policy_hash = str(os.environ.get("QWENDEX_MANAGER_POLICY_HASH") or agent_policy.get("policy_hash") or "").strip()
+    now = utc_now()
+    with connect_state(config) as conn:
+        if busy_error := begin_immediate(conn):
+            return None, busy_error
+        existing_row = conn.execute(
+            "SELECT * FROM qwendex_agent_sessions WHERE agent_id = ?",
+            (runtime_agent_id,),
+        ).fetchone()
+        existing = row_to_agent_session(existing_row)
+        if existing is not None:
+            conn.commit()
+            packet = existing.get("context_packet")
+            packet = packet if isinstance(packet, Mapping) else {}
+            if (
+                str(existing.get("origin") or "") == "qwendex"
+                and str(packet.get("runtime") or "") == "native_v2"
+                and str(packet.get("runtime_state") or "") == "active"
+            ):
+                return existing, ""
+            return None, "native_agent_id_collision"
+        rows = conn.execute(
+            """
+            SELECT * FROM qwendex_agent_sessions
+            WHERE repo_root = ? AND status = 'reserved' AND origin = 'qwendex'
+              AND policy_hash = ?
+            ORDER BY created_at ASC
+            """,
+            (repo_root, policy_hash),
+        ).fetchall()
+        candidates: list[dict[str, Any]] = []
+        for row in rows:
+            session = row_to_agent_session(row) or {}
+            packet = session.get("context_packet")
+            packet = packet if isinstance(packet, Mapping) else {}
+            planned_agent_id = str(packet.get("planned_agent_id") or "")
+            task_matches = task_name == planned_agent_id or task_name.endswith(f"/{planned_agent_id}")
+            if (
+                str(packet.get("launch_ledger_id") or "") == launch_ledger_id
+                and str(packet.get("root_session_id") or "") == parent_session_id
+                and task_matches
+            ):
+                candidates.append(session)
+        if len(candidates) > 1:
+            conn.rollback()
+            return None, "native_spawn_reservation_ambiguous"
+        pending = candidates[0] if candidates else None
+        if pending is None:
+            # Codex V2 collaboration calls do not consistently traverse the
+            # generic PreToolUse hook path. SubagentStart still provides the
+            # canonical task name, parent root session, child runtime id, and
+            # repository. Bind directly to one exact planned assignment when
+            # all immutable launch identities agree; never guess by lane order.
+            decision_row = conn.execute(
+                """
+                SELECT * FROM qwendex_manager_decisions
+                WHERE repo_root = ? AND root_session_id = ? AND policy_hash = ?
+                  AND launch_ledger_id = ? AND selected_route = 'manager_subagents'
+                  AND final_status IN ('preflight_ready', 'validation_pending')
+                ORDER BY timestamp_updated DESC LIMIT 1
+                """,
+                (repo_root, parent_session_id, policy_hash, launch_ledger_id),
+            ).fetchone()
+            decision = row_to_manager_decision(decision_row) or {}
+            plan = decision.get("agent_plan")
+            plan = plan if isinstance(plan, Mapping) else {}
+            assignments = [
+                dict(item)
+                for item in list(plan.get("assignments") or [])
+                if isinstance(item, Mapping)
+            ]
+            matched = [
+                assignment
+                for assignment in assignments
+                if task_name == str(assignment.get("agent_id") or "").strip()
+                or task_name.endswith(f"/{str(assignment.get('agent_id') or '').strip()}")
+            ]
+            if len(matched) != 1:
+                conn.rollback()
+                return None, "native_spawn_reservation_missing"
+            assignment = matched[0]
+            task_id = str(decision.get("agent_task_id") or decision.get("session_id") or "")
+            existing_rows = conn.execute(
+                """
+                SELECT * FROM qwendex_agent_sessions
+                WHERE repo_root = ? AND task_id = ?
+                ORDER BY created_at ASC
+                """,
+                (repo_root, task_id),
+            ).fetchall()
+            existing_sessions = [
+                item for row in existing_rows
+                if (item := row_to_agent_session(row))
+            ]
+            assignment_key = planned_assignment_key(assignment)
+            registered = registered_assignment_keys(existing_sessions)
+            if assignment_key in registered or (assignment_key[0], "") in registered:
+                conn.rollback()
+                return None, "native_spawn_assignment_duplicate"
+            active_count = sum(
+                1 for session in existing_sessions
+                if str(session.get("status") or "") not in AGENT_TERMINAL_STATUSES
+            )
+            policy_snapshot = decision.get("policy_snapshot")
+            policy_snapshot = policy_snapshot if isinstance(policy_snapshot, Mapping) else agent_policy
+            max_workers = int(
+                plan.get("max_workers")
+                or policy_snapshot.get("max_workers")
+                or policy_snapshot.get("max_threads")
+                or 0
+            )
+            if max_workers <= 0 or active_count >= max_workers:
+                conn.rollback()
+                return None, "native_spawn_capacity_reached"
+            lane = str(assignment.get("lane") or "")
+            profile = str(assignment.get("profile") or "worker")
+            packet = {
+                "objective": str(assignment.get("assignment") or assignment.get("stop_condition") or ""),
+                "task_class": str(plan.get("task_class") or decision.get("task_class") or ""),
+                "allowed_scope": "read-only",
+                "required": bool(assignment.get("required")),
+                "exact_files": [],
+                "needed_docs": [],
+                "stop_condition": str(assignment.get("stop_condition") or "return FINAL_REPORT"),
+                "expected_artifact": "FINAL_REPORT",
+                "receipt_path": "",
+                "context_budget": int(agent_policy.get("max_inherited_context_bytes") or 0),
+                "model_reasoning_assignment": dict(assignment.get("routing") or {}),
+                "review_requirement": "root review required",
+                "risk": str((plan.get("estimate") or {}).get("risk") or "medium"),
+                "planned_agent_id": str(assignment.get("agent_id") or ""),
+                "planned_lane": lane,
+                "planned_profile": profile,
+                "pending_tool_use_id": "",
+                "launch_ledger_id": launch_ledger_id,
+                "root_session_id": parent_session_id,
+                "runtime": "native_v2",
+                "runtime_state": "active",
+                "registration_source": "SubagentStart",
+                "native_session_id": str(event.get("session_id") or ""),
+                "native_turn_id": str(event.get("turn_id") or ""),
+                "native_agent_type": str(event.get("agent_type") or ""),
+                "native_task_name": task_name,
+                "parent_session_id": parent_session_id,
+            }
+            conn.execute(
+                """
+                INSERT INTO qwendex_agent_sessions
+                (agent_id, lane, task_id, owner, write_surface, stop_condition,
+                 artifacts_json, status, heartbeat_at, created_at, updated_at,
+                 stop_reason, close_receipt, context_packet_json, routing_json,
+                 validation_status, repo_root, session_id, turn_id, assignment,
+                 policy_hash, origin, final_report_present, completed_at)
+                VALUES (?, ?, ?, ?, 'read-only', ?, '[]', 'active', ?, ?, ?, '', '', ?, ?,
+                        'pending', ?, ?, ?, ?, ?, 'qwendex', 0, '')
+                """,
+                (
+                    runtime_agent_id,
+                    lane,
+                    task_id,
+                    profile,
+                    str(assignment.get("stop_condition") or "return FINAL_REPORT"),
+                    now,
+                    now,
+                    now,
+                    json_dumps(packet),
+                    json_dumps(dict(assignment.get("routing") or {})),
+                    repo_root,
+                    str(decision.get("session_id") or ""),
+                    str(decision.get("turn_id") or ""),
+                    str(assignment.get("assignment") or ""),
+                    policy_hash,
+                ),
+            )
+            conn.execute(
+                """
+                UPDATE qwendex_manager_decisions
+                SET subagents_used = 1, timestamp_updated = ?
+                WHERE ledger_id = ?
+                """,
+                (now, str(decision.get("ledger_id") or "")),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT * FROM qwendex_agent_sessions WHERE agent_id = ?",
+                (runtime_agent_id,),
+            ).fetchone()
+            return row_to_agent_session(row), ""
+        packet = dict(pending.get("context_packet") or {})
+        packet.update({
+            "runtime_state": "active",
+            "native_session_id": str(event.get("session_id") or ""),
+            "native_turn_id": str(event.get("turn_id") or ""),
+            "native_agent_type": str(event.get("agent_type") or ""),
+            "native_task_name": task_name,
+            "parent_session_id": parent_session_id,
+        })
+        try:
+            conn.execute(
+                """
+                UPDATE qwendex_agent_sessions
+                SET agent_id = ?, status = 'active', context_packet_json = ?,
+                    heartbeat_at = ?, updated_at = ?
+                WHERE agent_id = ? AND origin = 'qwendex' AND status = 'reserved'
+                """,
+                (
+                    runtime_agent_id,
+                    json_dumps(packet),
+                    now,
+                    now,
+                    str(pending.get("agent_id") or ""),
+                ),
+            )
+        except sqlite3.IntegrityError:
+            conn.rollback()
+            return None, "native_agent_id_collision"
+        conn.execute(
+            """
+            UPDATE qwendex_manager_decisions
+            SET subagents_used = 1, timestamp_updated = ?
+            WHERE repo_root = ? AND agent_task_id = ?
+              AND final_status IN ('preflight_ready', 'validation_pending')
+            """,
+            (now, repo_root, str(pending.get("task_id") or "")),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT * FROM qwendex_agent_sessions WHERE agent_id = ?",
+            (runtime_agent_id,),
+        ).fetchone()
+        return row_to_agent_session(row), ""
 
 
 def session_is_verifier(session: Mapping[str, Any]) -> bool:
@@ -7264,12 +8504,42 @@ def read_only_file_command_allowed(tokens: list[str]) -> bool:
     )
 
 
-def read_only_segment_allowed(tokens: list[str]) -> bool:
+def read_only_sed_command_allowed(tokens: list[str]) -> bool:
+    """Allow only the common non-mutating `sed -n N[,N]p file...` form."""
+    if len(tokens) < 3 or tokens[1] not in {"-n", "--quiet", "--silent"}:
+        return False
+    return bool(re.fullmatch(r"\d+(?:,\d+)?p", tokens[2]))
+
+
+def read_only_verification_segment_allowed(tokens: list[str]) -> bool:
+    command = tokens[0]
+    if command in {"pytest", "py.test"}:
+        return not any(
+            token == "--cache-clear"
+            or token.startswith(("--basetemp=", "--rootdir="))
+            for token in tokens[1:]
+        )
+    if token_is_python_command(command):
+        return len(tokens) >= 3 and tokens[1:3] == ["-m", "pytest"] and not any(
+            token == "--cache-clear"
+            or token.startswith(("--basetemp=", "--rootdir="))
+            for token in tokens[3:]
+        )
+    return False
+
+
+def read_only_segment_allowed(tokens: list[str], *, allow_validation: bool = False) -> bool:
     command = tokens[0]
     if "/" in command or shell_assignment_name(command):
         return False
+    if allow_validation and read_only_verification_segment_allowed(tokens):
+        return True
     if token_is_python_command(command):
         return len(tokens) == 2 and tokens[1] in {"-V", "-VV", "--version"}
+    if command == "true":
+        return len(tokens) == 1
+    if command == "sed":
+        return read_only_sed_command_allowed(tokens)
     if command == "file":
         return read_only_file_command_allowed(tokens)
     if command in READ_ONLY_SIMPLE_COMMANDS:
@@ -7283,9 +8553,12 @@ def read_only_segment_allowed(tokens: list[str]) -> bool:
     return False
 
 
-def read_only_shell_command_allowed(command: str) -> bool:
+def read_only_shell_command_allowed(command: str, *, allow_validation: bool = False) -> bool:
     segments = read_only_shell_segments(command)
-    return bool(segments) and all(read_only_segment_allowed(tokens) for tokens in segments)
+    return bool(segments) and all(
+        read_only_segment_allowed(tokens, allow_validation=allow_validation)
+        for tokens in segments
+    )
 
 
 def event_is_write_attempt(tool_lower: str, command: str) -> bool:
@@ -8288,10 +9561,6 @@ def pre_tool_gate(config: Mapping[str, Any], event: Mapping[str, Any], agent_pol
     event_repo_root = canonical_manager_repo_root(event=event)
     command = event_command_text(event)
     managed_shell_event = event_uses_managed_shell(tool_key, command)
-    allowlisted_inspection = managed_shell_event and read_only_shell_command_allowed(command)
-    write_attempt = False if allowlisted_inspection else (
-        event_is_write_attempt(tool, command) or managed_shell_event
-    )
     manager_mode_active = (
         bool(os.environ.get(MANAGER_ROOT_AGENT_ID_ENV))
         or str(agent_policy.get("mode") or "") == "manager"
@@ -8311,6 +9580,31 @@ def pre_tool_gate(config: Mapping[str, Any], event: Mapping[str, Any], agent_pol
             "event": "agent.identity_malformed",
             "reason": "Manager Mode native hooks must provide both agent_id and agent_type for a child, or neither for root.",
         }
+    registered_agent_session: dict[str, Any] = {}
+    if manager_mode_active and codex_subagent and agent_id:
+        with connect_state(config) as conn:
+            registered_agent_session = row_to_agent_session(
+                conn.execute(
+                    "SELECT * FROM qwendex_agent_sessions WHERE agent_id = ?",
+                    (agent_id,),
+                ).fetchone()
+            ) or {}
+        if manager_session_is_read_only(registered_agent_session):
+            read_only_profile = True
+    allow_read_only_validation = (
+        read_only_profile
+        and (
+            profile == "verifier"
+            or session_is_verifier(registered_agent_session)
+        )
+    )
+    allowlisted_inspection = managed_shell_event and read_only_shell_command_allowed(
+        command,
+        allow_validation=allow_read_only_validation,
+    )
+    write_attempt = False if allowlisted_inspection else (
+        event_is_write_attempt(tool, command) or managed_shell_event
+    )
     if manager_mode_active and codex_root and tool_key == "spawn_agent":
         spawn_resolution = resolve_manager_decision(
             config,
@@ -8327,6 +9621,15 @@ def pre_tool_gate(config: Mapping[str, Any], event: Mapping[str, Any], agent_pol
                 "reason_code": reason_code,
                 "manager_resolution": manager_resolution_diagnostic(spawn_resolution),
             }
+        reservation = reserve_manager_native_spawn(
+            config,
+            event,
+            agent_policy,
+            dict(spawn_resolution.get("decision") or {}),
+        )
+        if reservation.get("decision") == "block":
+            return reservation
+        return reservation
     if (codex_subagent or depth > 0) and tool_key in ROOT_ONLY_AGENT_TOOLS:
         return {
             "decision": "block",
@@ -8568,8 +9871,6 @@ def evaluate_agent_hook(
     canonical = event_name or str(event.get("hookEventName") or event.get("event") or "")
     if canonical not in AGENT_HOOK_EVENTS:
         return "blocked", {"decision": "block", "reason": f"Unsupported Qwendex agent hook event: {canonical}"}, {}
-    if canonical == "Stop" and event.get("stop_hook_active"):
-        return "pass", {"continue": True}, {}
     if canonical == "SessionStart":
         return "pass", {
             "hookSpecificOutput": {
@@ -8605,12 +9906,69 @@ def evaluate_agent_hook(
                     "reason_code": reason_code,
                     "stop_status": "STOP_MANAGER_LAUNCH_UNTRUSTED",
                 }, {"manager_resolution": manager_resolution_diagnostic(manager_resolution)}
+            attached_decision = dict(manager_resolution.get("decision") or {})
+            admission_error = prompt_admission_error_code(event)
+            if not attached_decision.get("policy_snapshot"):
+                admission_error = admission_error or "policy_snapshot_missing"
+            if admission_error:
+                strict_admission = str(agent_policy.get("mode") or "") in {"heavy", "manager"}
+                updated = record_manager_prompt_admission_failure(
+                    config,
+                    attached_decision,
+                    error_code=admission_error,
+                    strict=strict_admission,
+                )
+                if strict_admission:
+                    return "blocked", {
+                        "decision": "block",
+                        "event": "manager.prompt_admission_blocked",
+                        "reason": (
+                            f"Manager prompt admission failed ({admission_error}). "
+                            "Reinstall/verify the Qwendex hooks and restart this Qdex session."
+                        ),
+                        "reason_code": admission_error,
+                        "stop_status": "STOP_MANAGER_PROMPT_ADMISSION_BLOCKED",
+                    }, {
+                        "manager_decision": updated or attached_decision,
+                        "manager_resolution": manager_resolution_diagnostic(manager_resolution),
+                    }
+                return "pass", {
+                    "hookSpecificOutput": {
+                        "hookEventName": canonical,
+                        "additionalContext": (
+                            f"Qwendex prompt admission warning ({admission_error}); this Lite/Medium turn "
+                            "must remain direct and report the warning."
+                        ),
+                    },
+                    "systemMessage": f"Qwendex prompt admission warning: {admission_error}.",
+                }, {
+                    "manager_decision": updated or attached_decision,
+                    "manager_resolution": manager_resolution_diagnostic(manager_resolution),
+                }
         prompt_update = update_manager_decision_from_prompt(
             config,
             event,
             agent_policy,
             resolved_decision=(manager_resolution or {}).get("decision"),
         )
+        if manager_resolution is not None and prompt_update is None:
+            attached_decision = dict(manager_resolution.get("decision") or {})
+            error_code = "session_lookup_failed"
+            strict_admission = str(agent_policy.get("mode") or "") in {"heavy", "manager"}
+            updated = record_manager_prompt_admission_failure(
+                config,
+                attached_decision,
+                error_code=error_code,
+                strict=strict_admission,
+            )
+            if strict_admission:
+                return "blocked", {
+                    "decision": "block",
+                    "event": "manager.prompt_admission_blocked",
+                    "reason": f"Manager prompt admission failed ({error_code}); restart this Qdex session.",
+                    "reason_code": error_code,
+                    "stop_status": "STOP_MANAGER_PROMPT_ADMISSION_BLOCKED",
+                }, {"manager_decision": updated or attached_decision}
         additional_context = agent_mode_context(agent_policy, config=config)
         if prompt_update is not None:
             decision = prompt_update["manager_decision"]
@@ -8618,18 +9976,15 @@ def evaluate_agent_hook(
             assignments = list(plan.get("assignments") or [])
             if assignments:
                 lane_summary = "; ".join(
-                    f"{item.get('profile')} ({routing_assignment_label(item.get('routing', {}))})"
+                    f"{item.get('agent_id')}: {item.get('lane')} ({'required' if item.get('required') else 'optional'}, read-only)"
                     for item in assignments
-                )
-                registration_templates = " | ".join(
-                    str(item.get("assign_command") or "") for item in assignments
                 )
                 additional_context += (
                     f" Manager decision {decision.get('ledger_id')} selected manager_subagents for task "
                     f"{decision.get('agent_task_id') or decision.get('session_id')}. Planned lanes: {lane_summary}. "
-                    "After each spawn returns its runtime agent_id, run its registration template with "
-                    "the planned --agent-id replaced by that exact runtime id; the ledger id must match "
-                    f"the SubagentStop runtime id. Registration templates: {registration_templates}"
+                    "Spawn each lane with its planned agent id as the native task_name so Qwendex can bind it exactly. "
+                    "Qwendex binds the exact runtime agent id at SubagentStart and uses a pre-spawn reservation when the native tool hook exposes one; "
+                    "do not create a duplicate manual registration."
                 )
             else:
                 additional_context += (
@@ -8650,12 +10005,32 @@ def evaluate_agent_hook(
             ),
         }
     if canonical == "SubagentStart":
+        registered: dict[str, Any] | None = None
+        if os.environ.get("QWENDEX_MANAGER_LEDGER_ID"):
+            registered, registration_error = activate_manager_native_worker(
+                config,
+                event,
+                agent_policy,
+            )
+            if registration_error:
+                reason = f"Native worker start could not bind an exact Qwendex reservation ({registration_error})."
+                return "pass", {
+                    "hookSpecificOutput": {
+                        "hookEventName": "SubagentStart",
+                        "additionalContext": (
+                            f"{reason} Do not perform the task or call tools; return BLOCKED with this reason immediately."
+                        ),
+                    },
+                    "systemMessage": reason,
+                    "event": "manager.native_worker_registration_failed",
+                    "reason_code": registration_error,
+                }, {}
         return "pass", {
             "hookSpecificOutput": {
                 "hookEventName": "SubagentStart",
                 "additionalContext": subagent_start_context(config, event, agent_policy),
             }
-        }, {}
+        }, {"agent_session": registered} if registered is not None else {}
     if canonical == "SubagentStop":
         final_message = str(event.get("last_assistant_message") or event.get("message") or event.get("raw_output") or "")
         raw_message = str(event.get("raw_output") or event.get("transcript") or final_message)
@@ -8878,10 +10253,28 @@ def evaluate_agent_hook(
                 "agent_sessions": sessions,
                 "released_root_locks": released_root_locks,
             }
+        missing_required_lanes = missing_planned_required_lanes(decision, sessions)
+        if missing_required_lanes:
+            names = ", ".join(str(item.get("lane") or "unknown") for item in missing_required_lanes)
+            return "blocked", {
+                "decision": "block",
+                "event": "manager.required_lane_missing",
+                "reason": (
+                    f"Manager plan still requires these lanes: {names}. Spawn/register the missing "
+                    "read-only workers, wait for terminal reports, then retry finalization."
+                ),
+                "stop_status": "STOP_MANAGER_VALIDATION_PENDING",
+            }, {
+                "missing_required_lanes": missing_required_lanes,
+                "manager_decision": decision,
+                "agent_sessions": sessions,
+            }
+        waived = waived_lanes(sessions)
         incomplete = [
             session
             for session in sessions
             if session_is_required(session) and str(session.get("status") or "") not in AGENT_TERMINAL_STATUSES
+            and session_lane(session) not in waived
         ]
         if incomplete:
             names = ", ".join(f"{item.get('agent_id')}:{item.get('status')}" for item in incomplete[:5])
@@ -8894,6 +10287,7 @@ def evaluate_agent_hook(
             session
             for session in sessions
             if session_is_required(session)
+            and session_lane(session) not in waived
             and (
                 str(session.get("status") or "") in {"blocked", "failed", "tombstoned"}
                 or str(session.get("validation_status") or "") == "fail"
@@ -8913,6 +10307,7 @@ def evaluate_agent_hook(
             session
             for session in sessions
             if session_is_required(session)
+            and session_lane(session) not in waived
             and str(session.get("validation_status") or "pending") != "pass"
         ]
         if unvalidated_required:
@@ -8926,7 +10321,12 @@ def evaluate_agent_hook(
                 "reason": f"Required Manager Mode lanes lack validation evidence: {names}.",
                 "stop_status": "STOP_MANAGER_VALIDATION_PENDING",
             }, {"unvalidated_required_agents": unvalidated_required, "manager_decision": decision}
-        if edit_happened and agent_policy.get("require_verifier_for_edits") and not verifier_passed(sessions):
+        if (
+            edit_happened
+            and agent_policy.get("require_verifier_for_edits")
+            and not verifier_passed(sessions)
+            and not verifier_waived(sessions)
+        ):
             with connect_state(config) as conn:
                 updated_decision = update_manager_decision_terminal(
                     conn,
@@ -8942,6 +10342,13 @@ def evaluate_agent_hook(
                 "reason": "Verifier evidence is required for this Manager Mode edit.",
                 "stop_status": "STOP_MANAGER_VALIDATION_PENDING",
             }, {"agent_sessions": sessions, "manager_decision": updated_decision or decision}
+        if waived and "waiv" not in last_message.lower():
+            return "blocked", {
+                "decision": "block",
+                "event": "manager.waiver_disclosure_missing",
+                "reason": "Final Manager Mode response must disclose every lane waiver and its remaining risk.",
+                "stop_status": "STOP_MANAGER_VALIDATION_PENDING",
+            }, {"agent_sessions": sessions, "waived_lanes": sorted(waived), "manager_decision": decision}
         if sessions and not final_mentions_agent_outcomes(last_message):
             return "blocked", {
                 "decision": "block",
@@ -8966,14 +10373,19 @@ def evaluate_agent_hook(
                 "stop_status": "STOP_MANAGER_VALIDATION_PENDING",
             }, {"manager_decision": updated_decision or decision, "agent_sessions": sessions}
         with connect_state(config) as conn:
+            waiver_risks = [
+                f"waived {session.get('lane')}: {(session.get('context_packet') or {}).get('waiver_reason') or session.get('stop_reason')}"
+                for session in sessions
+                if str(session.get("status") or "") == "waived"
+            ]
             updated_decision = update_manager_decision_terminal(
                 conn,
                 decision,
                 config=config,
                 final_status="closed",
-                validation_result="pass",
+                validation_result="pass_with_waiver" if waiver_risks else "pass",
                 stop_status="STOP_MANAGER_CLOSED",
-                unresolved_risks=[],
+                unresolved_risks=waiver_risks,
                 subagents_used=bool(sessions),
             )
         return "pass", {"event": "manager.finalized", "stop_status": "STOP_MANAGER_CLOSED", "ledger_id": decision.get("ledger_id")}, {
@@ -9403,46 +10815,139 @@ def prompt_is_trivial(prompt: str, task_class: str) -> bool:
     return len(words) <= 12 and not risky and not work_verbs
 
 
-def agent_plan_profiles(prompt: str, mode: str, estimate: Mapping[str, Any]) -> tuple[list[str], str]:
-    text = prompt.lower()
-    task_class = str(estimate.get("task_class") or "bounded patch")
-    recommended = str(estimate.get("recommended_mode") or "medium")
+def classify_manager_turn(prompt: str) -> str:
+    """Classify a turn from observable prompt features only.
+
+    This classifier intentionally does not call a model. Its output is the
+    stable routing authority used by Auto and the lane planner.
+    """
+    text = " ".join((prompt or "").strip().split())
+    lower = text.lower()
+    words = re.findall(r"\w+", lower)
+    edit_text = re.sub(
+        r"\b(?:do\s+not|don't|no|without)\s+(?:make\s+)?(?:any\s+)?"
+        r"(?:edits?|editing|changes?|changing|modifications?|modifying)\b",
+        "",
+        lower,
+    )
+    edit_intent = bool(re.search(
+        r"\b(add|build|change|create|edit|fix|implement|migrate|patch|refactor|remove|repair|replace|update|write)\b",
+        edit_text,
+    ))
+    cross_cutting = bool(re.search(
+        r"\b(across|cross[- ](?:cutting|file)|end[- ]to[- ]end|many|multiple|repo[- ]wide|several|subsystems?)\b",
+        lower,
+    ))
+    release_tag_intent = bool(re.search(
+        r"\b(?:git|release|version)\s+tags?\b|\btags?\s+(?:a\s+)?(?:release|version)\b",
+        lower,
+    ))
+    if re.search(r"\b(release|publish|ship|distribution)\b", lower) or release_tag_intent:
+        return "release_or_publish"
+    if re.search(r"\b(security|credential|protocol|privacy|authentication|authorization|threat)\b", lower):
+        return "security_or_protocol"
+    if re.search(r"\b(live acceptance|live test|end[- ]to[- ]end acceptance|production acceptance)\b", lower):
+        return "live_acceptance"
+    if edit_intent and cross_cutting:
+        return "cross_cutting_edit"
+    if edit_intent and re.search(r"\b(implementation|non[- ]trivial|refactor|migrate|repair|feature|runtime)\b", lower):
+        return "nontrivial_edit"
+    if edit_intent:
+        return "small_edit"
+    if re.search(r"\b(regression|test|tests|pytest|unittest|verify|validation)\b", lower):
+        return "test_or_regression"
+    if re.search(r"\b(map|mapping|trace|inventory|overview|where|locate)\b", lower) and re.search(
+        r"\b(repo|repository|codebase|files?|implementation|feature|flow)\b", lower
+    ):
+        return "repository_mapping"
+    if re.search(r"\b(audit|analy[sz]e|investigate|research|review|inspect|understand|diagnose)\b", lower):
+        return "read_heavy_investigation"
+    if re.search(r"\b(single|one)\s+file\b|\bread\s+\S+\.(?:py|rs|js|ts|md|toml|json)\b", lower):
+        return "single_file_read"
+    if len(words) <= 12:
+        return "trivial_direct"
+    return "read_heavy_investigation"
+
+
+def effective_manager_turn_mode(selected_mode: str, task_class: str) -> str:
+    selected = normalize_manager_mode(selected_mode) or "medium"
+    if selected != "auto":
+        return selected
+    if task_class in {"trivial_direct", "single_file_read", "small_edit"}:
+        return "lite"
+    if task_class in {"repository_mapping", "read_heavy_investigation", "test_or_regression"}:
+        return "medium"
+    if task_class == "nontrivial_edit":
+        return "heavy"
+    return "manager"
+
+
+def manager_turn_lane_specs(
+    prompt: str,
+    *,
+    selected_mode: str,
+    effective_mode: str,
+    task_class: str,
+) -> tuple[list[dict[str, Any]], str]:
     explicit_team = prompt_requests_team(prompt)
-    if prompt_is_trivial(prompt, task_class) and not explicit_team:
-        return [], "direct_trivial"
-    if mode in {"off", "lite"} and not explicit_team:
-        return [], f"direct_{mode}_policy"
-    profiles: list[str]
-    if task_class == "release acceptance" or "publish" in text or "release" in text:
-        profiles = ["release_manager", "verifier"]
-    elif task_class in {"security", "architecture"}:
-        profiles = ["explorer", "verifier"]
-        if re.search(r"(?i)\b(add|change|edit|implement|patch|fix)\b", prompt):
-            profiles.insert(1, "implementer")
-    elif task_class == "docs draft":
-        profiles = ["docs_researcher"]
-        if re.search(r"(?i)\b(edit|update|write|add)\b", prompt):
-            profiles.extend(["implementer", "verifier"])
-    elif task_class == "artifact summary":
-        profiles = ["explorer"]
-    elif recommended in {"heavy", "manager"} or explicit_team:
-        profiles = ["explorer", "implementer", "verifier"]
-    else:
-        profiles = ["implementer", "verifier"]
-    if mode == "medium" and not explicit_team:
-        profiles = [profile for profile in profiles if profile in {"implementer", "verifier", "docs_researcher", "release_manager"}][:2]
-    if mode == "manager" and profiles and "scribe" not in profiles:
-        profiles.append("scribe")
-    deduped: list[str] = []
-    for profile in profiles:
-        if profile in DEFAULT_AGENT_PROFILES and profile not in deduped:
-            deduped.append(profile)
-    return deduped, "team_routing"
+    if effective_mode == "off":
+        return [], "agent_use_off"
+    if task_class == "trivial_direct" and not explicit_team:
+        return [], "trivial_direct"
+    if effective_mode == "lite":
+        if explicit_team or task_class in {"repository_mapping", "read_heavy_investigation"}:
+            return [{"profile": "explorer", "lane": "exploration", "required": True}], "lite_read_only_lookup"
+        return [], f"{task_class}_direct_under_lite"
+    if effective_mode == "medium":
+        if task_class in {"repository_mapping", "read_heavy_investigation", "single_file_read"}:
+            return [{"profile": "explorer", "lane": "exploration", "required": True}], "medium_read_mapping"
+        if task_class == "test_or_regression":
+            return [{"profile": "verifier", "lane": "verification", "required": True}], "medium_independent_check"
+        if task_class in {"nontrivial_edit", "cross_cutting_edit", "security_or_protocol", "release_or_publish", "live_acceptance"}:
+            return [
+                {"profile": "explorer", "lane": "exploration", "required": True},
+                {"profile": "verifier", "lane": "verification", "required": True},
+            ], "medium_bounded_edit_support"
+        return [], f"{task_class}_direct_under_medium"
+
+    if task_class in {"repository_mapping", "read_heavy_investigation", "single_file_read"}:
+        return [{"profile": "explorer", "lane": "exploration", "required": True}], "read_only_exploration"
+    if task_class in {"small_edit", "test_or_regression"}:
+        return [{"profile": "verifier", "lane": "verification", "required": True}], "post_edit_verification"
+    if task_class in {"security_or_protocol", "release_or_publish", "live_acceptance"}:
+        specs = [
+            {"profile": "reviewer", "lane": "review", "required": True},
+            {"profile": "verifier", "lane": "verification", "required": True},
+        ]
+        if effective_mode == "manager":
+            specs.insert(0, {"profile": "explorer", "lane": "exploration", "required": True})
+        return specs, "risk_review_and_verification"
+    specs = [
+        {"profile": "explorer", "lane": "exploration", "required": True},
+        {"profile": "verifier", "lane": "verification", "required": True},
+    ]
+    if task_class == "cross_cutting_edit":
+        specs.append({"profile": "reviewer", "lane": "review", "required": False})
+    return specs, "orchestrated_single_writer"
+
+
+def agent_plan_profiles(prompt: str, mode: str, estimate: Mapping[str, Any]) -> tuple[list[str], str]:
+    del estimate
+    task_class = classify_manager_turn(prompt)
+    effective_mode = effective_manager_turn_mode(mode, task_class)
+    specs, reason = manager_turn_lane_specs(
+        prompt,
+        selected_mode=mode,
+        effective_mode=effective_mode,
+        task_class=task_class,
+    )
+    return [str(spec["profile"]) for spec in specs], reason
 
 
 def agent_profile_lane(profile: str) -> str:
     return {
         "explorer": "exploration",
+        "reviewer": "review",
         "implementer": "implementation",
         "verifier": "verification",
         "docs_researcher": "docs-research",
@@ -9471,16 +10976,29 @@ def build_agent_team_plan(
     repo_root: str = "",
 ) -> dict[str, Any]:
     estimate = estimate_task(config, prompt=prompt, local_status=local_status)
-    mode = str(agent_policy.get("mode") or "medium")
-    profiles, reason = agent_plan_profiles(prompt, mode, estimate)
+    selected_mode = str(agent_policy.get("mode") or "medium")
+    task_class = classify_manager_turn(prompt)
+    effective_mode = effective_manager_turn_mode(selected_mode, task_class)
+    lane_specs, reason = manager_turn_lane_specs(
+        prompt,
+        selected_mode=selected_mode,
+        effective_mode=effective_mode,
+        task_class=task_class,
+    )
+    max_workers = int(agent_policy.get("max_workers") or agent_policy.get("max_threads") or 0)
+    required_specs = [spec for spec in lane_specs if spec.get("required")]
+    optional_specs = [spec for spec in lane_specs if not spec.get("required")]
+    lane_specs = (required_specs + optional_specs)[:max_workers]
+    profiles = [str(spec["profile"]) for spec in lane_specs]
     effective_task_id = task_id or make_id("task")
     effective_repo_root = canonical_manager_repo_root(repo_root or None)
     assignments: list[dict[str, Any]] = []
     task_slug = safe_artifact_component(effective_task_id, "task")
-    for index, profile in enumerate(profiles, start=1):
-        lane = agent_profile_lane(profile)
-        required = bool(DEFAULT_AGENT_PROFILES.get(profile, {}).get("default_required", True))
-        agent_id = safe_artifact_component(f"{task_slug}-{profile}-{index}", f"{profile}-{index}")
+    for index, spec in enumerate(lane_specs, start=1):
+        profile = str(spec["profile"])
+        lane = str(spec.get("lane") or agent_profile_lane(profile))
+        required = bool(spec.get("required"))
+        agent_id = safe_native_agent_name(f"{task_slug}_{profile}_{index}", f"{profile}_{index}")
         stop_condition = (
             "return FINAL_REPORT with summary, files, commands, evidence, artifacts, blockers, and remaining risk"
             if profile != "scribe"
@@ -9509,7 +11027,7 @@ def build_agent_team_plan(
         command.append("--json")
         routing = lane_model_reasoning(
             config,
-            task_class=str(estimate.get("task_class") or "bounded patch"),
+            task_class=task_class,
             lane=lane,
             risk=str(estimate.get("risk") or "medium"),
             local_status=local_status,
@@ -9521,6 +11039,7 @@ def build_agent_team_plan(
             "required": required,
             "write_surface": agent_profile_write_surface(profile),
             "stop_condition": stop_condition,
+            "assignment": f"Perform the bounded {lane} lane for {task_class}; remain read-only and return the required terminal report.",
             "assign_command": " ".join(shlex.quote(part) for part in command),
             "spawn_instruction": spawn_instruction(agent_id, routing),
             "routing": routing,
@@ -9528,15 +11047,34 @@ def build_agent_team_plan(
     direct_work = not assignments
     return {
         "schema_version": "qwendex.agent_plan.v1",
-        "mode": mode,
+        "mode": selected_mode,
+        "selected_mode": AGENT_USE_LABELS.get(selected_mode, selected_mode),
+        "effective_turn_mode": AGENT_USE_LABELS.get(effective_mode, effective_mode),
         "agent_use": agent_policy.get("agent_use"),
         "output_policy": agent_policy.get("output_policy", {}),
         "task_id": effective_task_id,
         "repo_root": effective_repo_root,
         "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
-        "task_class": estimate.get("task_class"),
+        "task_class": task_class,
         "estimate": estimate,
         "routing_reason": reason,
+        "route": "direct" if direct_work else "orchestrated_single_writer",
+        "native_proactive_source": (
+            str(agent_policy.get("native_proactive_source") or "qwendex_custom_policy")
+            if not direct_work
+            else "none"
+        ),
+        "direct_allowed": direct_work,
+        "direct_reason": reason if direct_work else None,
+        "required_lanes": [
+            {"lane": item["lane"], "profile": item["profile"], "write": False}
+            for item in assignments if item["required"]
+        ],
+        "optional_lanes": [
+            {"lane": item["lane"], "profile": item["profile"], "write": False}
+            for item in assignments if not item["required"]
+        ],
+        "max_workers": max_workers,
         "direct_work": direct_work,
         "direct_work_exception": (
             f"No agents used because the task is trivial or policy is {agent_policy.get('agent_use')}."
@@ -9657,7 +11195,11 @@ def persist_manager_decision(conn: sqlite3.Connection, decision: Mapping[str, An
         SET launch_ledger_id = ?, turn_id = ?, agent_task_id = ?,
             launch_pid = ?, launch_start_ticks = ?, launch_nonce = ?, launch_key = ?,
             root_session_id = ?, state_db_identity = ?,
-            ledger_db_identity = ?, runtime_identity = ?
+            ledger_db_identity = ?, runtime_identity = ?, selected_mode = ?,
+            effective_turn_mode = ?, task_class = ?, agent_plan_json = ?,
+            policy_snapshot_json = ?, desired_global_policy_hash = ?,
+            prompt_source = ?, prompt_length = ?, prompt_schema_version = ?,
+            admission_error_code = ?
         WHERE ledger_id = ?
         """,
         (
@@ -9672,6 +11214,16 @@ def persist_manager_decision(conn: sqlite3.Connection, decision: Mapping[str, An
             str(decision.get("state_db_identity") or ""),
             str(decision.get("ledger_db_identity") or ""),
             str(decision.get("runtime_identity") or ""),
+            str(decision.get("selected_manager_mode") or decision.get("selected_mode") or decision.get("mode") or ""),
+            str(decision.get("effective_turn_mode") or decision.get("effective_agent_mode") or ""),
+            str(decision.get("task_class") or ""),
+            json_dumps(dict(decision.get("agent_plan") or {})),
+            json_dumps(dict(decision.get("policy_snapshot") or {})),
+            str(decision.get("desired_global_policy_hash") or decision.get("policy_hash") or ""),
+            str(decision.get("prompt_source") or ""),
+            int(decision.get("prompt_length") or 0),
+            str(decision.get("prompt_schema_version") or ""),
+            str(decision.get("admission_error_code") or ""),
             ledger_id,
         ),
     )
@@ -9696,7 +11248,14 @@ def manager_preflight_payload(
         mode = current_manager_mode(config, conn, explicit=selected_mode)
         kaveman_enabled = current_kaveman_enabled(config, conn)
         agent_policy = resolve_agent_policy(config, selected_manager_mode=mode, env=source_env, kaveman_enabled=kaveman_enabled)
-        local_status = local_subagent_status(config, enabled=current_local_enabled(config, conn), env=source_env, probe=True)
+        local_enabled = current_local_enabled(config, conn)
+        local_status = local_subagent_status(config, enabled=local_enabled, env=source_env, probe=True)
+        agent_policy = attach_local_routing_snapshot(
+            agent_policy,
+            config,
+            enabled=local_enabled,
+        )
+        agent_policy = attach_native_proactive_source(agent_policy, env=source_env)
     codex_home = codex_home_from_env(source_env)
     requested_override, requested_override_reason = manager_hook_override(source_env)
     base_hook_status = hook_status_for_codex_home(
@@ -9743,6 +11302,10 @@ def manager_preflight_payload(
             ).fetchall()
         if len(rows) == 1:
             existing_launch = row_to_manager_decision(rows[0])
+    desired_agent_policy = dict(agent_policy)
+    recorded_policy_snapshot = dict((existing_launch or {}).get("policy_snapshot") or {})
+    if recorded_policy_snapshot:
+        agent_policy = recorded_policy_snapshot
     session_id = str(
         source_env.get("QWENDEX_MANAGER_SESSION_ID")
         or (existing_launch or {}).get("session_id")
@@ -9764,11 +11327,12 @@ def manager_preflight_payload(
         estimate = estimate_task(config, prompt=prompt, local_status=local_status)
         validation_plan = str(estimate.get("validation_depth") or validation_plan)
     manager_required = mode == "manager" or str(agent_policy.get("mode") or "") == "manager"
-    hook_blocked = manager_required and not bool(hook_status["verified"]) and not override
+    strict_hook_required = str(agent_policy.get("mode") or "") in {"heavy", "manager"}
+    hook_blocked = strict_hook_required and not bool(hook_status["verified"]) and not override
     existing_policy_drift = bool(
         existing_launch
         and str(existing_launch.get("policy_hash") or "")
-        and str(existing_launch.get("policy_hash") or "") != str(agent_policy.get("policy_hash") or "")
+        and str(existing_launch.get("policy_hash") or "") != str(desired_agent_policy.get("policy_hash") or "")
     )
     launch_already_consumed = bool(
         existing_launch
@@ -9777,16 +11341,11 @@ def manager_preflight_payload(
             or existing_launch.get("root_session_id")
             or existing_launch.get("prompt_known")
             or str(existing_launch.get("final_status") or "") != "preflight_ready"
-            or existing_policy_drift
         )
     )
     if launch_already_consumed:
         selected_route = "blocked"
-        routing_reason = (
-            "This Qdex launch identity is pinned to a different Manager policy."
-            if existing_policy_drift
-            else "This Qdex launch identity already belongs to an admitted or terminal root turn."
-        )
+        routing_reason = "This Qdex launch identity already belongs to an admitted or terminal root turn."
         stop_status = "STOP_MANAGER_UNATTACHED"
         direct_work_exception = False
         subagents_allowed = False
@@ -9861,9 +11420,15 @@ def manager_preflight_payload(
         "mode": "manager" if manager_required else str(agent_policy.get("mode") or mode),
         "selected_manager_mode": mode,
         "effective_agent_mode": str(agent_policy.get("mode") or ""),
+        "effective_turn_mode": str((plan or {}).get("effective_turn_mode") or agent_policy.get("agent_use") or ""),
         "agent_use": str(agent_policy.get("agent_use") or ""),
         "policy_source": str(agent_policy.get("source") or ""),
         "policy_hash": str(agent_policy.get("policy_hash") or ""),
+        "policy_snapshot": dict(agent_policy),
+        "desired_global_policy_hash": str(desired_agent_policy.get("policy_hash") or ""),
+        "policy_drift": existing_policy_drift,
+        "session_policy_valid": True,
+        "restart_required": existing_policy_drift,
         "output_policy": agent_policy.get("output_policy", {}),
         "codex_home": str(codex_home),
         "codex_home_digest_or_path_policy": codex_home_identity,
@@ -9880,6 +11445,10 @@ def manager_preflight_payload(
             "prompt_digest": prompt_digest or None,
             "prompt_summary": prompt_summary,
         },
+        "prompt_source": "manager_preflight" if prompt_known else "",
+        "prompt_length": len(prompt) if prompt_known else 0,
+        "prompt_schema_version": MANAGER_PROMPT_ADMISSION_SCHEMA if prompt_known else "",
+        "admission_error_code": "" if prompt_known else "prompt_pending",
         "manager_estimate": {
             "created": prompt_known,
             "estimate_id": estimate_id or None,
@@ -9887,6 +11456,7 @@ def manager_preflight_payload(
             "estimate": estimate,
         },
         "agent_plan": plan,
+        "task_class": str((plan or {}).get("task_class") or ""),
         "routing_decision": {
             "selected_route": selected_route,
             "routing_reason": routing_reason,
@@ -10513,9 +12083,37 @@ def manager_launch_health(
     }
     hook_trusted = bool(candidate) and bool(candidate.get("hook_verified") or candidate.get("hook_override"))
 
-    configured_policy = str((agent_policy or {}).get("policy_hash") or "")
     recorded_policy = str(candidate.get("policy_hash") or "") if candidate else ""
-    policy_match = bool(recorded_policy) and (not configured_policy or configured_policy == recorded_policy)
+    launch_policy_hash = str(source_env.get("QWENDEX_MANAGER_POLICY_HASH") or "").strip()
+    session_policy_valid = bool(recorded_policy) and (
+        not require_environment_identity
+        or bool(launch_policy_hash and launch_policy_hash == recorded_policy)
+    )
+    try:
+        with connect_state(config) as policy_conn:
+            desired_mode = current_manager_mode(config, policy_conn)
+            desired_kaveman = current_kaveman_enabled(config, policy_conn)
+            desired_local_enabled = current_local_enabled(config, policy_conn)
+        desired_policy = resolve_agent_policy(
+            config,
+            selected_manager_mode=desired_mode,
+            kaveman_enabled=desired_kaveman,
+            env={},
+        )
+        desired_policy = attach_local_routing_snapshot(
+            desired_policy,
+            config,
+            enabled=desired_local_enabled,
+        )
+        desired_policy_hash = str(desired_policy.get("policy_hash") or "")
+    except (OSError, sqlite3.Error, ValueError):
+        desired_policy_hash = ""
+    policy_drift = bool(
+        recorded_policy
+        and desired_policy_hash
+        and recorded_policy != desired_policy_hash
+    )
+    policy_match = session_policy_valid
 
     launch_ledger = str(candidate.get("launch_ledger_id") or candidate.get("ledger_id") or "") if candidate else ""
     recorded_session = str(candidate.get("session_id") or "") if candidate else ""
@@ -10598,6 +12196,11 @@ def manager_launch_health(
         "recovery_command": f"qdex -C {shlex.quote(canonical_repo)}",
         "identity_present": identity_present,
         "policy_match": policy_match,
+        "session_policy_hash": recorded_policy,
+        "desired_global_policy_hash": desired_policy_hash,
+        "policy_drift": policy_drift,
+        "session_policy_valid": session_policy_valid,
+        "restart_required": policy_drift,
         "hook_trusted": hook_trusted,
     }
 
@@ -10826,7 +12429,14 @@ def clone_manager_decision_for_turn(
         "prompt_known": 0,
         "prompt_digest": "",
         "prompt_summary": "",
+        "prompt_source": "",
+        "prompt_length": 0,
+        "prompt_schema_version": "",
+        "admission_error_code": "prompt_pending",
         "estimate_id": "",
+        "effective_turn_mode": "",
+        "task_class": "",
+        "agent_plan_json": "{}",
         "subagents_used": 0,
         "final_status": "preflight_ready",
         "validation_result": "",
@@ -10862,6 +12472,60 @@ def clone_manager_decision_for_turn(
     )
 
 
+def prompt_admission_error_code(event: Mapping[str, Any]) -> str:
+    if "prompt" not in event:
+        return "prompt_field_missing"
+    if not isinstance(event.get("prompt"), str):
+        return "hook_payload_schema_mismatch"
+    if not str(event.get("prompt") or "").strip():
+        return "prompt_field_missing"
+    return ""
+
+
+def record_manager_prompt_admission_failure(
+    config: Mapping[str, Any],
+    decision: Mapping[str, Any],
+    *,
+    error_code: str,
+    strict: bool,
+) -> dict[str, Any] | None:
+    now = utc_now()
+    with connect_state(config) as conn:
+        conn.execute(
+            """
+            UPDATE qwendex_manager_decisions
+            SET timestamp_updated = ?, prompt_known = 0, prompt_digest = '',
+                prompt_summary = ?, prompt_source = ?, prompt_length = 0,
+                prompt_schema_version = ?, admission_error_code = ?,
+                selected_route = ?, routing_reason = ?, subagents_allowed = 0,
+                direct_work_exception = ?, final_status = ?, stop_status = ?
+            WHERE ledger_id = ?
+            """,
+            (
+                now,
+                "privacy_safe_prompt_metadata_unavailable",
+                MANAGER_PROMPT_SOURCE,
+                MANAGER_PROMPT_ADMISSION_SCHEMA,
+                error_code,
+                "blocked" if strict else "direct_single_writer",
+                f"Manager prompt admission failed: {error_code}",
+                0 if strict else 1,
+                "validation_pending" if strict else "preflight_ready",
+                "STOP_MANAGER_PROMPT_ADMISSION_BLOCKED" if strict else "STOP_MANAGER_DIRECT_READY",
+                str(decision.get("ledger_id") or ""),
+            ),
+        )
+        conn.commit()
+        updated = latest_manager_decision(
+            conn,
+            repo_root=str(decision.get("repo_root") or ""),
+            ledger_id=str(decision.get("ledger_id") or ""),
+        )
+    if updated is not None:
+        write_manager_decision_receipt(config, manager_decision_receipt_payload(updated))
+    return updated
+
+
 def update_manager_decision_from_prompt(
     config: Mapping[str, Any],
     event: Mapping[str, Any],
@@ -10886,8 +12550,6 @@ def update_manager_decision_from_prompt(
         decision = row_to_manager_decision(row)
         if decision is None or str(decision.get("final_status") or "") != "preflight_ready":
             return None
-        if decision.get("prompt_known"):
-            return None
         turn_id = str(event.get("turn_id") or "").strip()
         root_session_id = str(event.get("session_id") or "").strip()
         if (
@@ -10901,12 +12563,7 @@ def update_manager_decision_from_prompt(
         decision_repo = str(decision.get("repo_root") or "")
         if decision_repo and event_repo != decision_repo:
             return None
-        local_status = local_subagent_status(
-            config,
-            enabled=current_local_enabled(config, conn),
-            env=os.environ,
-            probe=True,
-        )
+        local_status = manager_decision_local_status(config, decision)
         estimate = estimate_task(config, prompt=prompt, local_status=local_status)
         effective_turn_id = turn_id
         agent_task_id = str(
@@ -10948,7 +12605,10 @@ def update_manager_decision_from_prompt(
                 estimate_id = ?, selected_route = ?, routing_reason = ?, subagents_allowed = ?,
                 subagents_used = 0, direct_work_exception = ?, verifier_required = ?,
                 validation_plan = ?, final_status = 'preflight_ready', validation_result = '',
-                stop_status = ?, launch_ledger_id = ?, turn_id = ?, agent_task_id = ?
+                stop_status = ?, launch_ledger_id = ?, turn_id = ?, agent_task_id = ?,
+                selected_mode = ?, effective_turn_mode = ?, task_class = ?,
+                agent_plan_json = ?, prompt_source = ?, prompt_length = ?,
+                prompt_schema_version = ?, admission_error_code = ''
             WHERE ledger_id = ?
             """,
             (
@@ -10966,6 +12626,13 @@ def update_manager_decision_from_prompt(
                 launch_id,
                 effective_turn_id,
                 agent_task_id,
+                str(agent_policy.get("mode") or ""),
+                str(plan.get("effective_turn_mode") or agent_policy.get("agent_use") or ""),
+                str(plan.get("task_class") or ""),
+                json_dumps(plan),
+                MANAGER_PROMPT_SOURCE,
+                len(prompt),
+                MANAGER_PROMPT_ADMISSION_SCHEMA,
                 str(decision.get("ledger_id") or ""),
             ),
         )
@@ -11023,6 +12690,9 @@ def update_manager_decision_terminal(
 
 
 def manager_decision_receipt_payload(decision: Mapping[str, Any]) -> dict[str, Any]:
+    desired_policy_hash = str(decision.get("desired_global_policy_hash") or decision.get("policy_hash") or "")
+    session_policy_hash = str(decision.get("policy_hash") or "")
+    policy_drift = bool(desired_policy_hash and session_policy_hash and desired_policy_hash != session_policy_hash)
     return {
         "ok": str(decision.get("selected_route") or "") != "blocked",
         "schema_version": int(decision.get("schema_version") or 1),
@@ -11048,6 +12718,10 @@ def manager_decision_receipt_payload(decision: Mapping[str, Any]) -> dict[str, A
         "agent_use": decision.get("agent_use"),
         "policy_source": decision.get("policy_source"),
         "policy_hash": decision.get("policy_hash"),
+        "desired_global_policy_hash": desired_policy_hash,
+        "policy_drift": policy_drift,
+        "session_policy_valid": bool(session_policy_hash),
+        "restart_required": policy_drift,
         "codex_home": decision.get("codex_home"),
         "codex_home_digest_or_path_policy": decision.get("codex_home_digest_or_path_policy"),
         "repo_root": decision.get("repo_root"),
@@ -11068,7 +12742,15 @@ def manager_decision_receipt_payload(decision: Mapping[str, Any]) -> dict[str, A
             "known": decision.get("prompt_known"),
             "prompt_digest": decision.get("prompt_digest") or None,
             "prompt_summary": decision.get("prompt_summary"),
+            "prompt_source": decision.get("prompt_source") or None,
+            "prompt_length": int(decision.get("prompt_length") or 0),
+            "schema_version": decision.get("prompt_schema_version") or None,
+            "admission_error_code": decision.get("admission_error_code") or None,
         },
+        "selected_mode": decision.get("selected_mode") or decision.get("mode"),
+        "effective_turn_mode": decision.get("effective_turn_mode") or decision.get("agent_use"),
+        "task_class": decision.get("task_class") or None,
+        "agent_plan": dict(decision.get("agent_plan") or {}),
         "manager_estimate": {
             "created": bool(decision.get("estimate_id")),
             "estimate_id": decision.get("estimate_id") or None,
@@ -11111,6 +12793,12 @@ def validation_text_state(text: str) -> bool | None:
         match = re.match(r"(?i)^\s*validation\s*:\s*(.+?)\s*$", line)
         if match:
             relevant_lines.append(match.group(1).strip())
+        elif re.match(r"(?i)^\s*(?:[-*]\s*)?(?:outcome|result)\s*:\s*", line):
+            # Native workers commonly put the command on one commands_run
+            # bullet and its return summary on the following Outcome bullet.
+            # Treat that explicitly labeled result as validation evidence;
+            # free-form claims elsewhere remain insufficient.
+            relevant_lines.append(line.strip())
         elif subject.search(line):
             relevant_lines.append(line.strip())
     for line in relevant_lines:
@@ -11308,8 +12996,28 @@ def command_agent(args: argparse.Namespace, config: dict[str, Any]) -> dict[str,
         kaveman_enabled=launch_kaveman,
         selector_source_override=launch_policy_source,
     )
+    if launch_policy_active:
+        recorded_policy = manager_launch_policy_snapshot(config)
+        if recorded_policy is None:
+            return stable_envelope(
+                command="agent",
+                status="blocked",
+                summary="Qwendex rejected an invalid immutable launch policy snapshot.",
+                errors=["Restart this repository through qdex to establish a valid policy snapshot."],
+                data={"error_code": "manager_policy_snapshot_invalid"},
+            )
+        agent_policy = recorded_policy
+    else:
+        with connect_state(config) as conn:
+            local_enabled = current_local_enabled(config, conn)
+        agent_policy = attach_local_routing_snapshot(
+            agent_policy,
+            config,
+            enabled=local_enabled,
+        )
     if agent_policy["errors"]:
         return stable_envelope(command="agent", status="blocked", summary="Invalid Qwendex agent policy.", errors=list(agent_policy["errors"]), data={"agent_policy": agent_policy})
+    apply_agent_policy_env(agent_policy)
     if action == "hook":
         event = read_hook_event(args)
         hook_event_name = args.target or str(event.get("hookEventName") or event.get("event") or "")
@@ -11522,7 +13230,7 @@ def command_agent(args: argparse.Namespace, config: dict[str, Any]) -> dict[str,
             close_timeout_ms = parse_timeout_ms(args.timeout, int(agent_policy["close_timeout_ms"]))
             if target == "all":
                 rows = conn.execute(
-                    "SELECT * FROM qwendex_agent_sessions WHERE status = 'active' AND repo_root = ?",
+                    "SELECT * FROM qwendex_agent_sessions WHERE status IN ('active', 'reserved', 'close_requested') AND repo_root = ?",
                     (repo_root,),
                 ).fetchall()
                 ids = [str(row["agent_id"]) for row in rows]
@@ -11535,12 +13243,16 @@ def command_agent(args: argparse.Namespace, config: dict[str, Any]) -> dict[str,
                 ids = [target]
             closed: list[dict[str, Any]] = []
             for agent_id in ids:
-                close_receipt = make_id("close")
+                close_receipt = make_id("close-request")
                 conn.execute(
-                    "UPDATE qwendex_agent_sessions SET status = 'closed', updated_at = ?, stop_reason = ?, close_receipt = ? WHERE agent_id = ?",
-                    (now, reason, close_receipt, agent_id),
+                    """
+                    UPDATE qwendex_agent_sessions
+                    SET status = 'close_requested', heartbeat_at = ?, updated_at = ?,
+                        stop_reason = ?, close_receipt = ?, completed_at = ''
+                    WHERE agent_id = ? AND status NOT IN ('completed', 'blocked', 'failed', 'closed', 'tombstoned', 'waived')
+                    """,
+                    (now, now, reason, close_receipt, agent_id),
                 )
-                release_agent_locks(conn, agent_id, now=now)
                 updated = conn.execute("SELECT * FROM qwendex_agent_sessions WHERE agent_id = ?", (agent_id,)).fetchone()
                 session = row_to_agent_session(updated)
                 if session:
@@ -11549,7 +13261,7 @@ def command_agent(args: argparse.Namespace, config: dict[str, Any]) -> dict[str,
             return stable_envelope(
                 command="agent",
                 status="pass",
-                summary=f"Closed {len(closed)} Qwendex agent session{'s' if len(closed) != 1 else ''}.",
+                summary=f"Requested bounded native close for {len(closed)} Qwendex agent session{'s' if len(closed) != 1 else ''}; capacity remains held until terminal confirmation or tombstone.",
                 data={
                     "closed": closed,
                     "closed_count": len(closed),
@@ -11568,18 +13280,22 @@ def command_agent(args: argparse.Namespace, config: dict[str, Any]) -> dict[str,
                 return stable_envelope(command="agent", status="blocked", summary="Agent session is legacy-unscoped or belongs to a different repository; claim it with manager assign before mutation.", errors=[target])
             reason = args.reason or "operator_tombstoned"
             close_receipt = make_id("tombstone")
-            conn.execute(
-                "UPDATE qwendex_agent_sessions SET status = 'tombstoned', updated_at = ?, stop_reason = ?, close_receipt = ? WHERE agent_id = ?",
-                (now, reason, close_receipt, target),
+            updated = transition_agent_session(
+                conn,
+                agent_id=target,
+                status="tombstoned",
+                validation_status="fail",
+                now=now,
+                reason=reason,
+                final_report_present=None,
+                close_receipt=close_receipt,
             )
-            release_agent_locks(conn, target, now=now)
             conn.commit()
-            updated = conn.execute("SELECT * FROM qwendex_agent_sessions WHERE agent_id = ?", (target,)).fetchone()
             return stable_envelope(
                 command="agent",
                 status="warning",
                 summary=f"Tombstoned Qwendex agent session {target}.",
-                data={"agent_session": row_to_agent_session(updated), "agent_policy": agent_policy},
+                data={"agent_session": updated, "agent_policy": agent_policy},
             )
         sessions, scope_sessions, ledger_sessions = load_manager_session_views(
             conn,
@@ -11679,6 +13395,11 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
         if agent_policy["errors"]:
             return stable_envelope(command="manager", status="blocked", summary="Invalid Qwendex agent policy.", errors=list(agent_policy["errors"]), data={"agent_policy": agent_policy})
         if args.action == "launch-status":
+            agent_policy = attach_local_routing_snapshot(
+                agent_policy,
+                config,
+                enabled=current_local_enabled(config, conn),
+            )
             launch_repo = canonical_manager_repo_root(args.repo_root or os.getcwd())
             health = manager_launch_health(
                 config,
@@ -12045,6 +13766,121 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
                 ),
                 data=data,
             )
+        if args.action == "waive":
+            if not args.task_id or not args.lane or not args.reason:
+                return stable_envelope(
+                    command="manager",
+                    status="blocked",
+                    summary="Manager waive requires --task-id, --lane, and --reason.",
+                    errors=["missing task_id, lane, or reason"],
+                )
+            decision_rows = conn.execute(
+                """
+                SELECT * FROM qwendex_manager_decisions
+                WHERE repo_root = ? AND agent_task_id = ?
+                  AND final_status IN ('preflight_ready', 'validation_pending')
+                ORDER BY timestamp_updated DESC
+                LIMIT 2
+                """,
+                (repo_root, args.task_id),
+            ).fetchall()
+            if len(decision_rows) != 1:
+                return stable_envelope(
+                    command="manager",
+                    status="blocked",
+                    summary="Manager waiver must resolve exactly one active turn decision.",
+                    errors=["decision_not_found" if not decision_rows else "decision_ambiguous"],
+                    data={"candidate_count": len(decision_rows)},
+                )
+            decision = row_to_manager_decision(decision_rows[0]) or {}
+            plan = decision.get("agent_plan")
+            plan = plan if isinstance(plan, Mapping) else {}
+            lane_key = args.lane.strip().lower()
+            planned = [
+                dict(item)
+                for item in list(plan.get("required_lanes") or [])
+                if isinstance(item, Mapping)
+                and str(item.get("lane") or "").strip().lower() == lane_key
+            ]
+            if len(planned) != 1:
+                return stable_envelope(
+                    command="manager",
+                    status="blocked",
+                    summary="Only one exact required planned lane can be waived.",
+                    errors=[args.lane],
+                    data={"required_lanes": list(plan.get("required_lanes") or [])},
+                )
+            existing_waiver_row = conn.execute(
+                """
+                SELECT * FROM qwendex_agent_sessions
+                WHERE repo_root = ? AND task_id = ? AND lower(lane) = ?
+                  AND status = 'waived'
+                ORDER BY completed_at DESC
+                LIMIT 1
+                """,
+                (repo_root, args.task_id, lane_key),
+            ).fetchone()
+            if existing_waiver_row is not None:
+                existing_waiver = row_to_agent_session(existing_waiver_row) or {}
+                return stable_envelope(
+                    command="manager",
+                    status="warning",
+                    summary=f"Required lane {args.lane} already has a visible waiver.",
+                    data={"agent_session": existing_waiver, "idempotent_reuse": True},
+                )
+            now = utc_now()
+            waiver_id = make_id("waiver")
+            receipt_id = make_id("waiver-receipt")
+            assignment = f"Waiver for required lane {args.lane}: {args.reason}"
+            context_packet = {
+                "required": True,
+                "planned_lane": args.lane,
+                "planned_profile": str(planned[0].get("profile") or ""),
+                "waiver_reason": args.reason,
+                "remaining_risk": args.reason,
+                "launch_ledger_id": str(decision.get("launch_ledger_id") or decision.get("ledger_id") or ""),
+            }
+            conn.execute(
+                """
+                INSERT INTO qwendex_agent_sessions
+                (agent_id, lane, task_id, owner, write_surface, stop_condition,
+                 artifacts_json, status, heartbeat_at, created_at, updated_at,
+                 stop_reason, close_receipt, context_packet_json, routing_json,
+                 validation_status, repo_root, session_id, turn_id, assignment,
+                 policy_hash, origin, final_report_present, completed_at)
+                VALUES (?, ?, ?, 'root', 'read-only', 'explicit root waiver', '[]',
+                        'waived', ?, ?, ?, ?, ?, ?, '{}', 'waived', ?, ?, ?, ?, ?,
+                        'root_waiver', 0, ?)
+                """,
+                (
+                    waiver_id,
+                    args.lane,
+                    args.task_id,
+                    now,
+                    now,
+                    now,
+                    args.reason,
+                    receipt_id,
+                    json_dumps(context_packet),
+                    repo_root,
+                    str(decision.get("session_id") or ""),
+                    str(decision.get("turn_id") or ""),
+                    assignment,
+                    str(decision.get("policy_hash") or ""),
+                    now,
+                ),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT * FROM qwendex_agent_sessions WHERE agent_id = ?",
+                (waiver_id,),
+            ).fetchone()
+            return stable_envelope(
+                command="manager",
+                status="warning",
+                summary=f"Waived required Manager lane {args.lane}; final output must disclose the waiver and risk.",
+                data={"agent_session": row_to_agent_session(row), "manager_decision": decision},
+            )
         if args.action == "assign":
             if not args.agent_id or not args.lane:
                 return stable_envelope(command="manager", status="blocked", summary="Manager assign requires --agent-id and --lane.", errors=["missing agent_id or lane"])
@@ -12058,7 +13894,7 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
                     data={"repo_root": repo_root, "busy_timeout_ms": STATE_BUSY_TIMEOUT_MS},
                 )
             existing = conn.execute(
-                "SELECT status, repo_root FROM qwendex_agent_sessions WHERE agent_id = ?",
+                "SELECT * FROM qwendex_agent_sessions WHERE agent_id = ?",
                 (args.agent_id,),
             ).fetchone()
             if existing is not None and str(existing["repo_root"] or "") not in {"", repo_root}:
@@ -12069,24 +13905,132 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
                     errors=[args.agent_id],
                     data={"requested_repo_root": repo_root, "existing_repo_root": existing["repo_root"]},
                 )
-            active_count = int(
-                conn.execute(
-                    "SELECT COUNT(*) AS count FROM qwendex_agent_sessions WHERE status = 'active' AND repo_root = ?",
-                    (repo_root,),
-                ).fetchone()["count"]
-            )
+            if existing is not None and str(existing["status"] or "") in AGENT_TERMINAL_STATUSES:
+                conn.rollback()
+                return stable_envelope(
+                    command="manager",
+                    status="blocked",
+                    summary="Terminal agent ids cannot be reopened; create a new planned worker identity.",
+                    errors=[args.agent_id],
+                    data={"existing_status": str(existing["status"] or "")},
+                )
+            if existing is not None and str(existing["status"] or "") != "active":
+                conn.rollback()
+                return stable_envelope(
+                    command="manager",
+                    status="blocked",
+                    summary="Reserved or close-requested agent ids cannot be reassigned.",
+                    errors=[args.agent_id],
+                    data={"existing_status": str(existing["status"] or "")},
+                )
+            decision: dict[str, Any] | None = None
+            planned_assignment: dict[str, Any] | None = None
+            if args.task_id:
+                decision_rows = conn.execute(
+                    """
+                    SELECT * FROM qwendex_manager_decisions
+                    WHERE repo_root = ?
+                      AND (agent_task_id = ? OR (agent_task_id = '' AND session_id = ?))
+                      AND final_status IN ('preflight_ready', 'validation_pending')
+                    ORDER BY timestamp_updated DESC
+                    LIMIT 2
+                    """,
+                    (repo_root, args.task_id, args.task_id),
+                ).fetchall()
+                if len(decision_rows) > 1:
+                    conn.rollback()
+                    return stable_envelope(
+                        command="manager",
+                        status="blocked",
+                        summary="Manager assignment task identity is ambiguous across active turns.",
+                        errors=["decision_ambiguous"],
+                        data={"candidate_count": len(decision_rows)},
+                    )
+                if not decision_rows and os.environ.get("QWENDEX_MANAGER_LEDGER_ID"):
+                    conn.rollback()
+                    return stable_envelope(
+                        command="manager",
+                        status="blocked",
+                        summary="Managed launch assignment does not belong to its active turn decision.",
+                        errors=["decision_not_found"],
+                    )
+                decision = row_to_manager_decision(decision_rows[0]) if decision_rows else None
+                plan = (decision or {}).get("agent_plan")
+                if isinstance(plan, Mapping):
+                    planned = [
+                        dict(item)
+                        for item in list(plan.get("assignments") or [])
+                        if isinstance(item, Mapping)
+                    ]
+                    lane_matches = [
+                        item for item in planned
+                        if str(item.get("lane") or "").strip().lower() == args.lane.strip().lower()
+                    ]
+                    if len(lane_matches) == 1:
+                        planned_assignment = lane_matches[0]
+                        expected_agent_id = str(planned_assignment.get("agent_id") or "")
+                        if expected_agent_id and args.agent_id != expected_agent_id:
+                            conn.rollback()
+                            return stable_envelope(
+                                command="manager",
+                                status="blocked",
+                                summary="Manual manager assignment must use the exact planned agent id.",
+                                errors=[args.agent_id],
+                                data={"expected_agent_id": expected_agent_id},
+                            )
+                    elif planned and str((decision or {}).get("selected_route") or "") == "manager_subagents":
+                        conn.rollback()
+                        return stable_envelope(
+                            command="manager",
+                            status="blocked",
+                            summary="Manager assignment does not match an admitted planned lane.",
+                            errors=[args.lane],
+                            data={"planned_lanes": [str(item.get("lane") or "") for item in planned]},
+                        )
+            if args.task_id:
+                active_count = int(
+                    conn.execute(
+                        """
+                        SELECT COUNT(*) AS count FROM qwendex_agent_sessions
+                        WHERE status NOT IN ('completed', 'blocked', 'failed', 'closed', 'tombstoned', 'waived')
+                          AND repo_root = ? AND task_id = ?
+                        """,
+                        (repo_root, args.task_id),
+                    ).fetchone()["count"]
+                )
+            else:
+                active_count = int(
+                    conn.execute(
+                        """
+                        SELECT COUNT(*) AS count FROM qwendex_agent_sessions
+                        WHERE status NOT IN ('completed', 'blocked', 'failed', 'closed', 'tombstoned', 'waived')
+                          AND repo_root = ?
+                        """,
+                        (repo_root,),
+                    ).fetchone()["count"]
+                )
             consumes_slot = (
                 existing is None
                 or str(existing["status"] or "") != "active"
                 or str(existing["repo_root"] or "") != repo_root
             )
-            if consumes_slot and active_count >= max_subagents:
+            decision_policy = (decision or {}).get("policy_snapshot")
+            decision_policy = decision_policy if isinstance(decision_policy, Mapping) else agent_policy
+            decision_plan = (decision or {}).get("agent_plan")
+            decision_plan = decision_plan if isinstance(decision_plan, Mapping) else {}
+            assignment_cap = int(
+                decision_plan.get("max_workers")
+                or decision_policy.get("max_workers")
+                or decision_policy.get("max_threads")
+                or max_subagents
+            )
+            if consumes_slot and active_count >= assignment_cap:
                 return stable_envelope(
                     command="manager",
                     status="blocked",
                     summary="Manager assignment exceeds the active subagent limit.",
-                    errors=[f"active subagents {active_count} reached max_subagents {max_subagents}"],
-                    data={"active_count": active_count, "max_subagents": max_subagents},
+                    errors=[f"active subagents {active_count} reached max_subagents {assignment_cap}"],
+                    data={"active_count": active_count, "max_subagents": assignment_cap},
                 )
             artifacts = args.artifact or []
             task_class = args.task_class or infer_task_class(args.lane)
@@ -12095,6 +14039,19 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
             required = not bool(getattr(args, "optional", False))
             if getattr(args, "required", False):
                 required = True
+            if planned_assignment is not None:
+                required = bool(planned_assignment.get("required"))
+            assignment_text = str(
+                (planned_assignment or {}).get("assignment")
+                or args.objective
+                or args.stop_condition
+            )
+            session_id = str((decision or {}).get("session_id") or "")
+            turn_id = str((decision or {}).get("turn_id") or "")
+            policy_hash = str((decision or {}).get("policy_hash") or agent_policy.get("policy_hash") or "")
+            origin = str(existing["origin"] or "") if existing is not None else "qwendex_manual"
+            if not origin:
+                origin = "qwendex_manual"
             context_packet = {
                 "objective": args.objective or args.stop_condition,
                 "task_class": task_class,
@@ -12110,12 +14067,17 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
                 "spawn_instruction": spawn_instruction(args.agent_id, routing),
                 "review_requirement": args.review_requirement,
                 "risk": risk,
+                "planned_agent_id": str((planned_assignment or {}).get("agent_id") or ""),
+                "planned_lane": str((planned_assignment or {}).get("lane") or args.lane),
+                "planned_profile": str((planned_assignment or {}).get("profile") or args.owner),
+                "launch_ledger_id": str((decision or {}).get("launch_ledger_id") or (decision or {}).get("ledger_id") or ""),
             }
             conn.execute(
                 """
                 INSERT INTO qwendex_agent_sessions
-                (agent_id, lane, task_id, owner, write_surface, stop_condition, artifacts_json, status, heartbeat_at, created_at, updated_at, stop_reason, close_receipt, context_packet_json, routing_json, validation_status, repo_root)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, '', '', ?, ?, 'pending', ?)
+                (agent_id, lane, task_id, owner, write_surface, stop_condition, artifacts_json, status, heartbeat_at, created_at, updated_at, stop_reason, close_receipt, context_packet_json, routing_json, validation_status, repo_root,
+                 session_id, turn_id, assignment, policy_hash, origin, final_report_present, completed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, '', '', ?, ?, 'pending', ?, ?, ?, ?, ?, ?, 0, '')
                 ON CONFLICT(agent_id) DO UPDATE SET
                   lane=excluded.lane,
                   task_id=excluded.task_id,
@@ -12131,7 +14093,14 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
                   context_packet_json=excluded.context_packet_json,
                   routing_json=excluded.routing_json,
                   validation_status='pending',
-                  repo_root=excluded.repo_root
+                  repo_root=excluded.repo_root,
+                  session_id=excluded.session_id,
+                  turn_id=excluded.turn_id,
+                  assignment=excluded.assignment,
+                  policy_hash=excluded.policy_hash,
+                  origin=CASE WHEN qwendex_agent_sessions.origin = '' THEN excluded.origin ELSE qwendex_agent_sessions.origin END,
+                  final_report_present=0,
+                  completed_at=''
                 """,
                 (
                     args.agent_id,
@@ -12147,6 +14116,11 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
                     json_dumps(context_packet),
                     json_dumps(routing),
                     repo_root,
+                    session_id,
+                    turn_id,
+                    assignment_text,
+                    policy_hash,
+                    origin,
                 ),
             )
             conn.execute(
@@ -12198,19 +14172,24 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
                 return stable_envelope(command="manager", status="blocked", summary=f"Agent session not found: {args.agent_id}", errors=[args.agent_id])
             if str(row["repo_root"] or "") != repo_root:
                 return stable_envelope(command="manager", status="blocked", summary="Agent session is legacy-unscoped or belongs to a different repository; claim it with manager assign before mutation.", errors=[args.agent_id])
-            close_receipt = make_id("close")
+            close_receipt = make_id("close-request")
             reason = args.reason or "operator_closed"
             conn.execute(
-                "UPDATE qwendex_agent_sessions SET status = 'closed', updated_at = ?, stop_reason = ?, close_receipt = ? WHERE agent_id = ?",
-                (now, reason, close_receipt, args.agent_id),
+                """
+                UPDATE qwendex_agent_sessions
+                SET status = 'close_requested', heartbeat_at = ?, updated_at = ?,
+                    stop_reason = ?, close_receipt = ?, completed_at = ''
+                WHERE agent_id = ?
+                  AND status NOT IN ('completed', 'blocked', 'failed', 'closed', 'tombstoned', 'waived')
+                """,
+                (now, now, reason, close_receipt, args.agent_id),
             )
-            release_agent_locks(conn, args.agent_id, now=now)
             conn.commit()
             row = conn.execute("SELECT * FROM qwendex_agent_sessions WHERE agent_id = ?", (args.agent_id,)).fetchone()
             return stable_envelope(
                 command="manager",
                 status="pass",
-                summary=f"Closed agent session {args.agent_id}.",
+                summary=f"Requested bounded native close for agent session {args.agent_id}; capacity remains held until terminal confirmation or tombstone.",
                 data={"agent_session": row_to_agent_session(row)},
             )
         if args.action == "close-stale":
@@ -13026,7 +15005,7 @@ def command_line() -> argparse.ArgumentParser:
     learn.add_argument("--json", action="store_true")
 
     manager = sub.add_parser("manager")
-    manager.add_argument("action", nargs="?", choices=["status", "assign", "heartbeat", "close", "close-stale", "repair", "reconcile", "mode", "estimate", "preflight", "decision", "launch-status", "kaveman", "local"])
+    manager.add_argument("action", nargs="?", choices=["status", "assign", "waive", "heartbeat", "close", "close-stale", "repair", "reconcile", "mode", "estimate", "preflight", "decision", "launch-status", "kaveman", "local"])
     manager.add_argument("--mode", choices=["manual", "off", "auto", "lite", "medium", "heavy", "manager", "manager_only"], default="")
     manager.add_argument("--set", default="")
     manager.add_argument("--cycle", action="store_true")

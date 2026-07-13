@@ -5,7 +5,17 @@ QWENDEX_DEV_ROOT="${QWENDEX_DEV_ROOT:-$HOME/qwendex-dev}"
 QWENDEX_ENV="$QWENDEX_DEV_ROOT/.qwendex-dev/env.sh"
 QWENDEX_YOLO_FLAG="${QWENDEX_YOLO_FLAG:---dangerously-bypass-approvals-and-sandbox}"
 QWENDEX_HOOK_TRUST_FLAG="${QWENDEX_HOOK_TRUST_FLAG:---dangerously-bypass-hook-trust}"
+QWENDEX_CODEX_MAX_CONCURRENT_THREADS=9
 caller_cwd="$PWD"
+
+toml_string() {
+  python3 - "$1" <<'PY'
+import json
+import sys
+
+print(json.dumps(sys.argv[1], ensure_ascii=False))
+PY
+}
 
 if [[ ! -f "$QWENDEX_ENV" ]]; then
   printf 'qdex: missing Qwendex env: %s\n' "$QWENDEX_ENV" >&2
@@ -35,6 +45,7 @@ unset \
   QWENDEX_MANAGER_RUNTIME_IDENTITY \
   QWENDEX_MANAGER_POLICY_HASH \
   QWENDEX_MANAGER_STOP_STATUS \
+  QWENDEX_NATIVE_PROACTIVE_SOURCE \
   QWENDEX_RUN_ID
 
 export QWENDEX_MANAGER_LAUNCH_PID="$$"
@@ -157,6 +168,39 @@ while [[ $# -gt 0 ]]; do
 done
 export QWENDEX_QDEX_PERMISSION_MODE="$permission_mode"
 
+# Codex V2 derives its built-in proactive multi-agent mode from Ultra
+# reasoning only when no custom multi_agent_mode_hint_text is configured.
+# Detect an explicit per-launch reasoning override so Qwendex can preserve
+# native Ultra while retaining its own lane limits, ledger, and child policy.
+codex_reasoning_effort=""
+for ((arg_index = 0; arg_index < ${#codex_args[@]}; arg_index++)); do
+  config_override=""
+  case "${codex_args[$arg_index]}" in
+    -c|--config)
+      if (( arg_index + 1 < ${#codex_args[@]} )); then
+        config_override="${codex_args[$((arg_index + 1))]}"
+      fi
+      ;;
+    --config=*)
+      config_override="${codex_args[$arg_index]#--config=}"
+      ;;
+  esac
+  if [[ -n "$config_override" && "$config_override" == *=* ]]; then
+    config_key="${config_override%%=*}"
+    config_key="${config_key//[[:space:]]/}"
+    if [[ "$config_key" == "model_reasoning_effort" ]]; then
+      config_value="${config_override#*=}"
+      config_value="${config_value//[[:space:]]/}"
+      config_value="${config_value//\"/}"
+      config_value="${config_value//\'/}"
+      codex_reasoning_effort="${config_value,,}"
+    fi
+  fi
+done
+if [[ "$codex_reasoning_effort" == "ultra" ]]; then
+  export QWENDEX_NATIVE_PROACTIVE_SOURCE="native_ultra"
+fi
+
 if [[ -z "$target_repo" ]]; then
   target_repo="$PWD"
 fi
@@ -215,31 +259,128 @@ import uuid
 print(uuid.uuid4().hex)
 PY
 )"
+qdex_launch_meta_root="$QWENDEX_META_ROOT/qdex/$QWENDEX_RUN_ID"
+mkdir -p "$qdex_launch_meta_root"
+codex_status_write_file="$qdex_launch_meta_root/codex_status_write.json"
 
 "$QWENDEX_DEV_ROOT/scripts/qwendex" codex-status \
   --write "$QWENDEX_CODEX_STATUS_FILE" \
-  --json > "$QWENDEX_META_ROOT/codex_status_write.json"
+  --json > "$codex_status_write_file"
 
 qwendex_status_fields=()
 while IFS= read -r status_field; do
   qwendex_status_fields+=("$status_field")
-done < <(python3 - "$QWENDEX_META_ROOT/codex_status_write.json" <<'PY'
+done < <(python3 - "$codex_status_write_file" <<'PY'
 import json
 import sys
 with open(sys.argv[1], encoding="utf-8") as handle:
     payload = json.load(handle)
 data = payload.get("data", {})
 print(data.get("agent_use", ""))
+policy = data.get("agent_policy", {})
+if not isinstance(policy, dict):
+    policy = {}
+print(policy.get("mode", ""))
+print(policy.get("max_threads", ""))
+print(policy.get("native_max_concurrent_threads", ""))
 print("1" if data.get("manager_preflight_required") else "0")
+print(data.get("agent_policy_hash", policy.get("policy_hash", "")))
 PY
 )
 agent_use="${qwendex_status_fields[0]:-}"
-manager_preflight_required="${qwendex_status_fields[1]:-0}"
+agent_mode="${qwendex_status_fields[1]:-}"
+agent_policy_max_threads="${qwendex_status_fields[2]:-}"
+agent_policy_native_max_threads="${qwendex_status_fields[3]:-}"
+manager_preflight_required="${qwendex_status_fields[4]:-0}"
+agent_policy_hash="${qwendex_status_fields[5]:-}"
+
+if [[ -z "$agent_mode" ]]; then
+  agent_mode="${agent_use,,}"
+fi
+agent_mode="${agent_mode// /_}"
+agent_mode="${agent_mode%-mode}"
+case "$agent_mode" in
+  manager_mode)
+    agent_mode="manager"
+    ;;
+  off|auto|lite|medium|heavy|manager)
+    ;;
+  *)
+    agent_mode="auto"
+    ;;
+esac
+
+# Codex's V2 cap counts the root thread, while AgentPolicy max_threads counts
+# workers. Prefer the resolved native value, derive it from the worker cap when
+# needed, and keep even a malformed status payload inside Qwendex's product
+# ceiling (eight workers plus the root).
+if [[ "$agent_policy_native_max_threads" =~ ^[0-9]+$ ]]; then
+  codex_native_max_threads="$agent_policy_native_max_threads"
+elif [[ "$agent_policy_max_threads" =~ ^[0-9]+$ ]]; then
+  codex_native_max_threads="$((agent_policy_max_threads + 1))"
+else
+  case "$agent_mode" in
+    off)
+      codex_native_max_threads=1
+      ;;
+    lite)
+      codex_native_max_threads=2
+      ;;
+    medium)
+      codex_native_max_threads=3
+      ;;
+    heavy)
+      codex_native_max_threads=4
+      ;;
+    manager)
+      codex_native_max_threads=5
+      ;;
+    *)
+      codex_native_max_threads=1
+      ;;
+  esac
+fi
+if (( codex_native_max_threads < 1 )); then
+  codex_native_max_threads=1
+elif (( codex_native_max_threads > QWENDEX_CODEX_MAX_CONCURRENT_THREADS )); then
+  codex_native_max_threads="$QWENDEX_CODEX_MAX_CONCURRENT_THREADS"
+fi
+codex_worker_cap="$((codex_native_max_threads - 1))"
+
+case "$agent_mode" in
+  medium)
+    multi_agent_mode_hint="Qwendex Medium delegation is active independently of reasoning effort. Opportunistically delegate independent read-heavy mapping, focused investigation, or verification when it materially helps. Use no more than ${codex_worker_cap} bounded workers, keep direct work for small or tightly coupled tasks, and state the direct-work reason when useful."
+    ;;
+  heavy)
+    multi_agent_mode_hint="Qwendex Heavy delegation is active independently of reasoning effort. Proactively delegate non-trivial repository work into bounded, purpose-specific lanes. Normally use an explorer before broad edits and a verifier after meaningful edits, with no more than ${codex_worker_cap} workers active under this policy."
+    ;;
+  manager)
+    multi_agent_mode_hint="Qwendex Manager delegation is active independently of reasoning effort. Work orchestration-first on complex tasks: create an explicit lane plan, delegate bounded independent lanes, maintain lifecycle evidence, and require verification after meaningful edits. Use no more than ${codex_worker_cap} workers under the immutable launch policy."
+    ;;
+  lite)
+    multi_agent_mode_hint="Qwendex Lite uses explicit-only delegation. Work directly unless the user, applicable AGENTS.md instructions, or an active skill explicitly requires a bounded worker. Never create a proactive worker team."
+    ;;
+  *)
+    multi_agent_mode_hint="Qwendex ${agent_use:-Off} uses explicit-only delegation. Do not proactively spawn workers; delegate only when the user, applicable AGENTS.md instructions, or an active skill explicitly requires it."
+    ;;
+esac
+
+root_agent_usage_hint="You are the root Qwendex orchestrator operating under the ${agent_use:-Off} AgentPolicy. Keep the root as the default sole writer and integrator. Delegate only independent, purpose-specific lanes within the ${codex_worker_cap}-worker ceiling, give each worker a narrow artifact contract, and integrate and verify every result. Do not ask workers to delegate recursively."
+subagent_usage_hint="You are a bounded Qwendex worker. Execute only the assigned lane, do not spawn or manage subagents, and do not edit unless the assignment grants an exact isolated write surface. Return a concise FINAL_REPORT with evidence, changed paths if any, validation, and blockers."
 
 cmd=(
   "$QWENDEX_CODEX_RUNTIME"
   --no-alt-screen
 )
+codex_policy_args=(
+  --config "features.multi_agent_v2.enabled=true"
+  --config "features.multi_agent_v2.max_concurrent_threads_per_session=$codex_native_max_threads"
+  --config "features.multi_agent_v2.root_agent_usage_hint_text=$(toml_string "$root_agent_usage_hint")"
+  --config "features.multi_agent_v2.subagent_usage_hint_text=$(toml_string "$subagent_usage_hint")"
+)
+if [[ "${QWENDEX_NATIVE_PROACTIVE_SOURCE:-}" != "native_ultra" ]]; then
+  codex_policy_args+=(--config "features.multi_agent_v2.multi_agent_mode_hint_text=$(toml_string "$multi_agent_mode_hint")")
+fi
 if [[ "$permission_mode" == "yolo" ]]; then
   yolo_present=0
   for arg in "${codex_args[@]}"; do
@@ -258,7 +399,7 @@ if [[ "$manager_preflight_required" == "1" ]]; then
   done
   [[ "$hook_trust_present" == "1" ]] || cmd+=("$QWENDEX_HOOK_TRUST_FLAG")
 fi
-cmd+=(--config "projects={$target_repo_toml={trust_level=\"trusted\"}}")
+codex_policy_args+=(--config "projects={$target_repo_toml={trust_level=\"trusted\"}}")
 # Normal Qdex launches inherit the caller's working directory exactly like
 # Codex. Keep the older Qdex-only --repo option as a compatibility alias that
 # still needs an injected native -C; an operator-supplied -C/--cd is already in
@@ -267,7 +408,29 @@ if [[ "$codex_sets_cwd" == "0" && "$qdex_sets_repo" == "1" ]]; then
   cmd+=(-C "$target_repo")
 fi
 
-preflight_file="$QWENDEX_META_ROOT/manager_preflight.json"
+# Codex 0.144 treats a global `--config` group before `exec` as lower-precedence
+# input and can discard that group when any `-c` appears after the subcommand.
+# Append the immutable Qwendex policy after all caller options instead. When a
+# caller uses the `--` option barrier, insert immediately before it so the
+# remaining values keep their exact positional meaning. This also prevents a
+# caller-local config flag from silently weakening the launch snapshot.
+policy_insert_at="${#codex_args[@]}"
+for ((arg_index = 0; arg_index < ${#codex_args[@]}; arg_index++)); do
+  if [[ "${codex_args[$arg_index]}" == "--" ]]; then
+    policy_insert_at="$arg_index"
+    break
+  fi
+done
+final_cmd=("${cmd[@]}")
+if (( policy_insert_at > 0 )); then
+  final_cmd+=("${codex_args[@]:0:policy_insert_at}")
+fi
+final_cmd+=("${codex_policy_args[@]}")
+if (( policy_insert_at < ${#codex_args[@]} )); then
+  final_cmd+=("${codex_args[@]:policy_insert_at}")
+fi
+
+preflight_file="$qdex_launch_meta_root/manager_preflight.json"
 
 if [[ "$manager_preflight_required" == "1" ]]; then
   preflight_rc=0
@@ -280,7 +443,7 @@ if [[ "$manager_preflight_required" == "1" ]]; then
 
   if [[ "$manager_preflight_dry_run" == "1" || "${QWENDEX_QDEX_DRY_RUN:-0}" == "1" ]]; then
     if [[ "$json_output" == "1" ]]; then
-      python3 - "$preflight_file" "$target_repo" "${cmd[@]}" "${codex_args[@]}" <<'PY'
+    python3 - "$preflight_file" "$target_repo" "${final_cmd[@]}" <<'PY'
 import json
 import sys
 preflight_path = sys.argv[1]
@@ -321,20 +484,24 @@ PY
     exit 0
   fi
 
-  if ! python3 - "$preflight_file" <<'PY'
+  if ! python3 - "$preflight_file" "$agent_policy_hash" <<'PY'
 import json
 import sys
 with open(sys.argv[1], encoding="utf-8") as handle:
     payload = json.load(handle)
 data = payload.get("data", {})
-root_agent_id = str(data.get("exports", {}).get("QWENDEX_MANAGER_ROOT_AGENT_ID") or "").strip()
-sys.exit(0 if data.get("ok") and root_agent_id else 1)
+exports = data.get("exports", {})
+root_agent_id = str(exports.get("QWENDEX_MANAGER_ROOT_AGENT_ID") or "").strip()
+status_policy_hash = str(sys.argv[2] or "").strip()
+preflight_policy_hash = str(exports.get("QWENDEX_MANAGER_POLICY_HASH") or "").strip()
+bound = bool(status_policy_hash and preflight_policy_hash == status_policy_hash)
+sys.exit(0 if data.get("ok") and root_agent_id and bound else 1)
 PY
   then
     if [[ "$preflight_rc" -eq 0 ]]; then
       preflight_rc=1
     fi
-    python3 - "$preflight_file" >&2 <<'PY'
+    python3 - "$preflight_file" "$agent_policy_hash" >&2 <<'PY'
 import json
 import sys
 with open(sys.argv[1], encoding="utf-8") as handle:
@@ -342,10 +509,17 @@ with open(sys.argv[1], encoding="utf-8") as handle:
 data = payload.get("data", {})
 hook = data.get("hook_status", {})
 print("Qwendex Manager preflight: blocked")
-root_agent_id = str(data.get("exports", {}).get("QWENDEX_MANAGER_ROOT_AGENT_ID") or "").strip()
+exports = data.get("exports", {})
+root_agent_id = str(exports.get("QWENDEX_MANAGER_ROOT_AGENT_ID") or "").strip()
 reason = data.get('routing_decision', {}).get('routing_reason', '')
 if data.get("ok") and not root_agent_id:
     reason = "manager preflight did not establish a trusted root identity"
+status_policy_hash = str(sys.argv[2] or "").strip()
+preflight_policy_hash = str(exports.get("QWENDEX_MANAGER_POLICY_HASH") or "").strip()
+if data.get("ok") and root_agent_id and (
+    not status_policy_hash or preflight_policy_hash != status_policy_hash
+):
+    reason = "manager preflight policy hash does not match the qdex launch policy"
 print(f"reason: {reason}")
 print(f"install: {hook.get('install_command', '')}")
 print(f"verify: {hook.get('verify_command', '')}")
@@ -383,7 +557,7 @@ print(f"verifier: {'required' if route.get('verifier_required') else 'not_requir
 PY
 elif [[ "$manager_preflight_dry_run" == "1" || "${QWENDEX_QDEX_DRY_RUN:-0}" == "1" ]]; then
   if [[ "$json_output" == "1" ]]; then
-    python3 - "$QWENDEX_META_ROOT/codex_status_write.json" "$target_repo" "${cmd[@]}" "${codex_args[@]}" <<'PY'
+    python3 - "$codex_status_write_file" "$target_repo" "${final_cmd[@]}" <<'PY'
 import json
 import sys
 status_path = sys.argv[1]
@@ -410,7 +584,7 @@ PY
     printf 'QWENDEX_CODEX_STATUS_FILE=%s\n' "$QWENDEX_CODEX_STATUS_FILE"
     printf 'target_repo=%s\n' "$target_repo"
     printf 'command:'
-    printf ' %q' "${cmd[@]}" "${codex_args[@]}"
+    printf ' %q' "${final_cmd[@]}"
     printf '\n'
   fi
   exit 0
@@ -421,4 +595,4 @@ if [[ "$codex_sets_cwd" == "1" ]]; then
 else
   cd "$target_repo"
 fi
-exec "${cmd[@]}" "${codex_args[@]}"
+exec "${final_cmd[@]}"
