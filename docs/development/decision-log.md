@@ -85,6 +85,15 @@ task paths, tool content, stdout/stderr, transcripts, credentials, and tokens.
 The larger hard wall is an evidence-gathering ceiling, not a performance claim
 or permission to enable Search V2 by default.
 
+Update: native parent JSONL can become quiet while a child agent continues
+performing real work during a collaboration wait. For a fresh metadata-capture
+arm, the supervisor therefore consumes only completed allowlisted tool and
+subagent lifecycle categories from that arm's isolated performance database
+after the Codex root starts. It records fixed counts only; raw hook fields and
+identifiers remain excluded. A pending lifecycle entry, including a native
+wait, never resets inactivity, and the timing reader cannot change any hook or
+Manager safety decision.
+
 ## Patched Codex Contract
 
 Decision: Qwendex patches Codex source by versioned anchors, not by mutating the

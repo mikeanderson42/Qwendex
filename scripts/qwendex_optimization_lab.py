@@ -15,6 +15,7 @@ import os
 import re
 import signal
 import shutil
+import sqlite3
 import subprocess
 import tempfile
 import threading
@@ -37,6 +38,15 @@ LIVE_RUNTIME_PROFILE_SCHEMA_VERSION = "qwendex.live_runtime_profile.v1"
 LIVE_RUNTIME_PROFILE_CONTRACT_SCHEMA_VERSION = "qwendex.live_runtime_profile_contract.v1"
 LIVE_SUPERVISOR_BUDGET_SCHEMA_VERSION = "qwendex.live_runtime_supervisor_budget.v1"
 LIVE_SUPERVISOR_MAX_HARD_WALL_SECONDS = 600
+
+# The isolated performance database is already constrained to metadata-only
+# hook observations.  The live supervisor may use only these completion
+# transitions as an additional trusted-progress source while a native parent
+# is waiting on subagents.  A pending tool call (especially ``wait_agent``)
+# deliberately does not reset inactivity.
+LIVE_HOOK_PROGRESS_TABLE = "qwendex_performance_events"
+LIVE_HOOK_PROGRESS_TOOL_EVENT = "tool_call"
+LIVE_HOOK_PROGRESS_SUBAGENT_EVENTS = frozenset({"subagent_start", "subagent_stop"})
 
 LIVE_RUNTIME_PHASES = (
     "runner_start",
@@ -301,6 +311,7 @@ def live_runtime_profile_contract() -> dict[str, Any]:
                 "opaque_local_digests",
                 "phase_timestamps_and_durations",
                 "structured_event_counts",
+                "allowlisted_hook_lifecycle_counts",
                 "bounded_in_flight_lifecycle_categories",
                 "pid_pgid_role_state_cpu_rss_buckets",
                 "pipe_byte_counts_without_content",
@@ -351,6 +362,7 @@ def _new_live_runtime_profile(
         "phase_durations_ms": {},
         "trusted_progress_event_counts": {},
         "structured_event_type_counts": {},
+        "hook_lifecycle_event_counts": {},
         "process_diagnostics": {"snapshots": [], "pipe_state": {}},
         "termination": {
             "timed_out": False,
@@ -757,6 +769,7 @@ def _isolated_run_environment(isolation_root: Path, worktree: Path) -> dict[str,
             "QWENDEX_STATE_DB",
             "QWENDEX_LEDGER_DB",
             "QWENDEX_PERFORMANCE_DB",
+            "QWENDEX_PERFORMANCE_CAPTURE",
             "QWENDEX_RESULTS_ROOT",
             "QWENDEX_RUN_ID",
         }:
@@ -989,6 +1002,69 @@ def _safe_event_category(value: str, *, allowed: set[str]) -> str:
 def _increment_runtime_count(profile: dict[str, Any], key: str, *, amount: int = 1) -> None:
     counts = profile.setdefault("trusted_progress_event_counts", {})
     counts[key] = int(counts.get(key) or 0) + amount
+
+
+def _increment_hook_lifecycle_count(profile: dict[str, Any], key: str) -> None:
+    counts = profile.setdefault("hook_lifecycle_event_counts", {})
+    counts[key] = int(counts.get(key) or 0) + 1
+
+
+def _consume_live_hook_lifecycle(
+    profile: dict[str, Any],
+    performance_db: Path | None,
+    *,
+    after_rowid: int,
+    now: float,
+) -> int:
+    """Consume only allowlisted metadata-only hook completions.
+
+    The database belongs to one freshly isolated arm.  This reader never
+    copies identifiers, prompts, commands, paths, query fingerprints, or
+    output metadata into the runtime profile; it retains just fixed category
+    counts and uses the local observation time to extend trusted progress.
+    """
+
+    if performance_db is None or not performance_db.is_file():
+        return after_rowid
+    try:
+        connection = sqlite3.connect(f"file:{performance_db}?mode=ro", uri=True, timeout=0.05)
+        try:
+            rows = connection.execute(
+                f"""
+                SELECT rowid, phase, event_kind, tool_family, terminal_classification
+                FROM {LIVE_HOOK_PROGRESS_TABLE}
+                WHERE rowid > ?
+                ORDER BY rowid
+                """,
+                (after_rowid,),
+            ).fetchall()
+        finally:
+            connection.close()
+    except sqlite3.Error:
+        # Hook capture is advisory for timing.  A transient SQLite lock or an
+        # absent freshly-created table must never alter the supervisor policy.
+        return after_rowid
+
+    cursor = after_rowid
+    for rowid, phase, event_kind, _tool_family, terminal in rows:
+        if isinstance(rowid, int):
+            cursor = max(cursor, rowid)
+        category = ""
+        if (
+            phase == "tool"
+            and event_kind == LIVE_HOOK_PROGRESS_TOOL_EVENT
+            and terminal == "completed"
+        ):
+            category = "tool_completed"
+        elif phase == "subagent" and event_kind in LIVE_HOOK_PROGRESS_SUBAGENT_EVENTS:
+            category = str(event_kind)
+        if not category:
+            continue
+        _increment_hook_lifecycle_count(profile, category)
+        _increment_runtime_count(profile, f"hook_{category}")
+        _record_runtime_phase(profile, "last_trusted_progress", now=now, replace=True)
+        profile["_last_trusted_monotonic"] = now
+    return cursor
 
 
 def _observe_live_structured_event(profile: dict[str, Any], event: Mapping[str, Any], *, now: float) -> None:
@@ -1234,6 +1310,12 @@ def _supervise_live_subprocess(
     state_lock = threading.Lock()
     pipe_state: dict[str, Any] = {}
     stdout_buffer = bytearray()
+    performance_capture = str(environment.get("QWENDEX_PERFORMANCE_CAPTURE") or "").strip().lower()
+    performance_db_raw = str(environment.get("QWENDEX_PERFORMANCE_DB") or "").strip()
+    if performance_capture != "metadata":
+        performance_db_raw = ""
+    performance_db = Path(performance_db_raw).resolve(strict=False) if performance_db_raw else None
+    hook_lifecycle_cursor = 0
 
     def observe_stdout(chunk: bytes) -> None:
         nonlocal stdout_buffer
@@ -1279,6 +1361,13 @@ def _supervise_live_subprocess(
         now = time.monotonic()
         with state_lock:
             phase_offset = _consume_live_phase_markers(profile, phase_path, offset=phase_offset, now=now)
+            if _runtime_phase_offset(profile, "codex_process_start") is not None:
+                hook_lifecycle_cursor = _consume_live_hook_lifecycle(
+                    profile,
+                    performance_db,
+                    after_rowid=hook_lifecycle_cursor,
+                    now=now,
+                )
             reason = _supervisor_timeout_reason(profile, budgets, now=now)
         if reason is None:
             time.sleep(float(budgets["poll_interval_seconds"]))
@@ -1320,6 +1409,13 @@ def _supervise_live_subprocess(
     now = time.monotonic()
     with state_lock:
         phase_offset = _consume_live_phase_markers(profile, phase_path, offset=phase_offset, now=now)
+        if _runtime_phase_offset(profile, "codex_process_start") is not None:
+            hook_lifecycle_cursor = _consume_live_hook_lifecycle(
+                profile,
+                performance_db,
+                after_rowid=hook_lifecycle_cursor,
+                now=now,
+            )
         _record_runtime_phase(profile, "child_exit", now=now)
         _runtime_profile_snapshot(profile, _process_group_snapshot(process.pid, leader_pid=process.pid), reason="child_exit")
     drained = _wait_for_pipe_drain(drain_threads, timeout_seconds=float(budgets["pipe_drain_seconds"]))

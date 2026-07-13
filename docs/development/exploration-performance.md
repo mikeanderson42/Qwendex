@@ -80,6 +80,12 @@ event counts, process-state/RSS buckets, pipe byte counts, timeout class, and
 sanitized Manager counts. It must not retain prompts, commands, queries, task
 paths, tool input/output, stdout/stderr, transcripts, credentials, or tokens.
 
+For a fresh isolated live arm, the supervisor may read back only allowlisted
+completed tool/subagent lifecycle categories from that arm's metadata database
+after the Codex root starts. This is a one-way timing input: it stores fixed
+counts in the private runtime profile, never reads raw fields, never changes a
+hook decision, and never treats a pending wait as progress.
+
 The Manager safety classifier remains stricter than telemetry classification.
 For example, a shell-capable tool is still treated conservatively by the safety
 gate, while a verified read-only `rg` command is attributed as a search event.

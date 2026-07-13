@@ -91,14 +91,18 @@ scripts/qwendex performance lab live-run \
 The supervisor records separate startup/preflight, first-model-activity,
 inactivity, hard-wall, graceful-termination, forced-cleanup, and pipe-drain
 ceilings. It resets inactivity only on recognized structured lifecycle
-transitions, never on raw byte arrival. The policy is canonicalized and hashed;
+transitions, never on raw byte arrival. After the Codex root starts, an
+isolated metadata-capture arm may also contribute allowlisted completed
+tool/subagent hook lifecycle categories from its own performance database. A
+pending tool call, including native `wait_agent`, never extends the inactivity
+deadline. The policy is canonicalized and hashed;
 every baseline and candidate arm must record the same identity. A profile is
 written only below the ignored live run directory using
 `qwendex.live_runtime_profile.v1`. It contains safe phase timestamps, duration
-summaries, event counts, process-state/RSS buckets, pipe byte counts, timeout
-classification, and sanitized Manager health—never prompt text, commands,
-queries, paths from task output, tool content, stdout/stderr, transcripts,
-credentials, or tokens.
+summaries, fixed event counts, process-state/RSS buckets, pipe byte counts,
+timeout classification, and sanitized Manager health—never prompt text,
+commands, queries, paths from task output, tool content, stdout/stderr,
+transcripts, credentials, or tokens.
 
 A progress-aware hard wall is not a speed claim and does not itself validate a
 candidate. The pilot remains invalid when a failed arm lacks a precise timeout

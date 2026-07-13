@@ -153,12 +153,24 @@ def live_supervisor_budget(lab: Any, **overrides: Any) -> dict[str, Any]:
     return lab._normalise_live_supervisor_budgets(value)
 
 
-def run_live_supervisor_fixture(lab: Any, tmp_path: Path, code: str, budgets: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], Path]:
+def run_live_supervisor_fixture(
+    lab: Any,
+    tmp_path: Path,
+    code: str,
+    budgets: dict[str, Any],
+    *,
+    hook_database: Path | None = None,
+) -> tuple[dict[str, Any], dict[str, Any], Path]:
     tmp_path.mkdir(parents=True, exist_ok=True)
     raw_dir = tmp_path / "raw"
     phase_path = raw_dir / "runtime_phases.log"
     environment = dict(os.environ)
+    environment.pop("QWENDEX_PERFORMANCE_DB", None)
+    environment.pop("QWENDEX_PERFORMANCE_CAPTURE", None)
     environment["QWENDEX_TEST_PHASES"] = str(phase_path)
+    if hook_database is not None:
+        environment["QWENDEX_PERFORMANCE_DB"] = str(hook_database)
+        environment["QWENDEX_PERFORMANCE_CAPTURE"] = "metadata"
     profile = lab._new_live_runtime_profile(
         run_id="private-test-run",
         task_id="private-test-task",
@@ -721,6 +733,102 @@ def test_live_supervisor_policy_equivalence_and_privacy_contract(tmp_path: Path)
     )
     assert "collaboration_wait_start" in wait_profile["trusted_progress_event_counts"]
     assert "collaboration_wait_no_completion" in wait_profile["termination"]["contributing_classifications"]
+
+
+def _create_hook_lifecycle_database(path: Path) -> None:
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE qwendex_performance_events (
+              phase TEXT NOT NULL,
+              event_kind TEXT NOT NULL,
+              tool_family TEXT NOT NULL,
+              terminal_classification TEXT NOT NULL
+            )
+            """
+        )
+
+
+def test_live_supervisor_uses_only_completed_isolated_hook_lifecycle_progress(tmp_path: Path) -> None:
+    lab = load_module("qwendex_optimization_lab")
+    hook_database = tmp_path / "hook-lifecycle.sqlite"
+    _create_hook_lifecycle_database(hook_database)
+    policy = live_supervisor_budget(
+        lab,
+        startup_preflight_seconds=0.5,
+        first_model_activity_seconds=0.5,
+        inactivity_seconds=0.2,
+        hard_wall_seconds=0.8,
+    )
+    result, profile, _ = run_live_supervisor_fixture(
+        lab,
+        tmp_path / "hook-progress",
+        SUPERVISOR_PHASE_HELPER
+        + """
+        import sqlite3
+        import time
+
+        phase("manager_preflight_start")
+        phase("manager_preflight_end")
+        phase("codex_process_start")
+        event("item.completed", "agent_message")
+        for _ in range(2):
+            time.sleep(0.1)
+            with sqlite3.connect(os.environ["QWENDEX_PERFORMANCE_DB"]) as connection:
+                connection.execute(
+                    "INSERT INTO qwendex_performance_events VALUES (?, ?, ?, ?)",
+                    ("tool", "tool_call", "search", "completed"),
+                )
+        time.sleep(0.12)
+        """,
+        policy,
+        hook_database=hook_database,
+    )
+
+    assert result["timed_out"] is False
+    assert profile["hook_lifecycle_event_counts"] == {"tool_completed": 2}
+    assert profile["trusted_progress_event_counts"]["hook_tool_completed"] == 2
+    assert "allowlisted_hook_lifecycle_counts" in lab.live_runtime_profile_contract()["privacy_boundary"]["safe_diagnostics"]
+
+
+def test_live_supervisor_does_not_treat_pending_hook_wait_as_progress(tmp_path: Path) -> None:
+    lab = load_module("qwendex_optimization_lab")
+    hook_database = tmp_path / "hook-pending.sqlite"
+    _create_hook_lifecycle_database(hook_database)
+    policy = live_supervisor_budget(
+        lab,
+        startup_preflight_seconds=0.5,
+        first_model_activity_seconds=0.5,
+        inactivity_seconds=0.12,
+        hard_wall_seconds=0.8,
+    )
+    result, profile, _ = run_live_supervisor_fixture(
+        lab,
+        tmp_path / "hook-pending",
+        SUPERVISOR_PHASE_HELPER
+        + """
+        import sqlite3
+        import time
+
+        phase("manager_preflight_start")
+        phase("manager_preflight_end")
+        phase("codex_process_start")
+        event("item.completed", "agent_message")
+        time.sleep(0.04)
+        with sqlite3.connect(os.environ["QWENDEX_PERFORMANCE_DB"]) as connection:
+            connection.execute(
+                "INSERT INTO qwendex_performance_events VALUES (?, ?, ?, ?)",
+                ("tool", "tool_call", "other", "pending"),
+            )
+        time.sleep(0.3)
+        """,
+        policy,
+        hook_database=hook_database,
+    )
+
+    assert result["timed_out"] is True
+    assert profile["hook_lifecycle_event_counts"] == {}
+    assert profile["termination"]["timeout_classification"] == "timeout_due_to_inactivity"
 
 
 def test_missing_live_final_message_is_not_a_guard_marker(tmp_path: Path) -> None:
