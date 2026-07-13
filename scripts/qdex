@@ -8,6 +8,135 @@ QWENDEX_HOOK_TRUST_FLAG="${QWENDEX_HOOK_TRUST_FLAG:---dangerously-bypass-hook-tr
 QWENDEX_CODEX_MAX_CONCURRENT_THREADS=9
 caller_cwd="$PWD"
 
+# The installed launcher is a stable selector.  It reads one atomically
+# replaced selection record, validates the selected generation boundary, then
+# transfers control to the immutable Qdex copy in that generation.  A process
+# that has already crossed this boundary never rereads the selector, so later
+# activation affects new sessions only.
+if [[ "${QWENDEX_RUNTIME_PINNED:-0}" != "1" ]]; then
+  runtime_selection="$QWENDEX_DEV_ROOT/.qwendex-dev/runtime/current.json"
+  if [[ -f "$runtime_selection" ]]; then
+    runtime_fields=()
+    while IFS= read -r runtime_field; do
+      runtime_fields+=("$runtime_field")
+    done < <(python3 - "$runtime_selection" "$QWENDEX_DEV_ROOT/.qwendex-dev/runtime" <<'PY'
+import json
+import hashlib
+import sys
+from pathlib import Path
+
+
+def canonical_digest(value):
+    payload = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def sha256_file(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+selection_path = Path(sys.argv[1])
+runtime_root = Path(sys.argv[2]).resolve()
+try:
+    selection = json.loads(selection_path.read_text(encoding="utf-8"))
+    if selection.get("schema_version") != "qwendex.runtime_selection.v1":
+        raise ValueError("unsupported selector schema")
+    generation_id = str(selection.get("current") or "")
+    if not generation_id.startswith("rtg-"):
+        raise ValueError("missing selected generation")
+    generation = (runtime_root / "generations" / generation_id).resolve()
+    generation.relative_to((runtime_root / "generations").resolve())
+    manifest = json.loads((generation / "generation.json").read_text(encoding="utf-8"))
+    if (
+        manifest.get("schema_version") != "qwendex.runtime_generation.v1"
+        or manifest.get("generation_id") != generation_id
+        or manifest.get("status") != "validated"
+        or manifest.get("result") != "pass"
+    ):
+        raise ValueError("selected generation is not validated")
+    required = (
+        generation / "tree" / "scripts" / "qdex",
+        generation / "tree" / "scripts" / "qwendex",
+        generation / "bin" / "codex-runtime",
+        generation / "codex_home" / "hooks.json",
+    )
+    if not all(path.is_file() for path in required):
+        raise ValueError("selected generation is incomplete")
+    seal_payload = dict(manifest)
+    expected_seal = str(seal_payload.pop("manifest_sha256", ""))
+    if not expected_seal or canonical_digest(seal_payload) != expected_seal:
+        raise ValueError("selected generation manifest seal is invalid")
+    contract = manifest.get("contract") or {}
+    if canonical_digest(contract) != str(manifest.get("contract_sha256") or ""):
+        raise ValueError("selected generation contract digest is invalid")
+    tree_contract = {
+        str(item.get("path") or ""): item
+        for item in manifest.get("tree_manifest") or []
+    }
+    for relative in ("scripts/qdex", "scripts/qwendex"):
+        entry = tree_contract.get(relative) or {}
+        path = generation / "tree" / relative
+        if sha256_file(path) != str(entry.get("sha256") or ""):
+            raise ValueError(f"selected generation source digest drifted: {relative}")
+    codex_contract = manifest.get("codex") or {}
+    for path, key in (
+        (generation / "bin" / "codex", "binary_sha256"),
+        (generation / "bin" / "codex-code-mode-host", "code_mode_host_sha256"),
+    ):
+        if sha256_file(path) != str(codex_contract.get(key) or ""):
+            raise ValueError(f"selected generation executable digest drifted: {path.name}")
+    hook = generation / "codex_home" / "hooks.json"
+    if sha256_file(hook) != str((manifest.get("hooks") or {}).get("sha256") or ""):
+        raise ValueError("selected generation hook digest drifted")
+except Exception as exc:
+    print(f"ERROR:{exc}")
+    raise SystemExit(0)
+print(generation_id)
+print(generation)
+print(generation / "tree")
+print(manifest.get("contract_sha256", ""))
+print(generation / "codex_home")
+print(generation / "bin" / "codex-runtime")
+PY
+)
+    if [[ "${runtime_fields[0]:-}" == ERROR:* || "${#runtime_fields[@]}" -ne 6 ]]; then
+      printf 'qdex: runtime generation selection is invalid: %s\n' "${runtime_fields[0]#ERROR:}" >&2
+      printf 'qdex: recover from a shell with %s/.qwendex-dev/bin/qwendex-runtime-recovery rollback --json\n' "$QWENDEX_DEV_ROOT" >&2
+      printf 'qdex: ordinary stock codex remains available.\n' >&2
+      exit 127
+    fi
+    export QWENDEX_RUNTIME_PINNED=1
+    export QWENDEX_RUNTIME_GENERATION_ID="${runtime_fields[0]}"
+    export QWENDEX_RUNTIME_GENERATION_DIR="${runtime_fields[1]}"
+    export QWENDEX_RUNTIME_TREE="${runtime_fields[2]}"
+    export QWENDEX_RUNTIME_CONTRACT_SHA256="${runtime_fields[3]}"
+    export QWENDEX_HOOK_GENERATION="${runtime_fields[0]}"
+    export QWENDEX_CODEX_HOME="${runtime_fields[4]}"
+    export QWENDEX_CODEX_RUNTIME="${runtime_fields[5]}"
+    export QWENDEX_RUNTIME_ROOT="$QWENDEX_DEV_ROOT/.qwendex-dev/runtime"
+    exec "$QWENDEX_RUNTIME_TREE/scripts/qdex" "$@"
+  elif [[ "${QWENDEX_RUNTIME_GENERATION_REQUIRED:-0}" == "1" ]]; then
+    printf 'qdex: no validated runtime generation is selected.\n' >&2
+    printf 'qdex: run scripts/qwendex runtime build --json from stock Codex or a shell.\n' >&2
+    exit 127
+  fi
+fi
+
+pinned_runtime_generation_id="${QWENDEX_RUNTIME_GENERATION_ID:-}"
+pinned_runtime_generation_dir="${QWENDEX_RUNTIME_GENERATION_DIR:-}"
+pinned_runtime_tree="${QWENDEX_RUNTIME_TREE:-}"
+pinned_runtime_contract="${QWENDEX_RUNTIME_CONTRACT_SHA256:-}"
+pinned_runtime_codex_home="${QWENDEX_CODEX_HOME:-}"
+pinned_runtime_codex="${QWENDEX_CODEX_RUNTIME:-}"
+
 toml_string() {
   python3 - "$1" <<'PY'
 import json
@@ -25,11 +154,27 @@ fi
 
 # shellcheck disable=SC1090
 source "$QWENDEX_ENV"
+if [[ "${QWENDEX_RUNTIME_PINNED:-0}" == "1" ]]; then
+  export QWENDEX_RUNTIME_GENERATION_ID="$pinned_runtime_generation_id"
+  export QWENDEX_RUNTIME_GENERATION_DIR="$pinned_runtime_generation_dir"
+  export QWENDEX_RUNTIME_TREE="$pinned_runtime_tree"
+  export QWENDEX_RUNTIME_CONTRACT_SHA256="$pinned_runtime_contract"
+  export QWENDEX_HOOK_GENERATION="$pinned_runtime_generation_id"
+  export QWENDEX_CODEX_HOME="$pinned_runtime_codex_home"
+  export QWENDEX_CODEX_RUNTIME="$pinned_runtime_codex"
+  export QWENDEX_RUNTIME_ROOT="$QWENDEX_DEV_ROOT/.qwendex-dev/runtime"
+  export QWENDEX_ROOT="$pinned_runtime_tree"
+fi
 if [[ -z "${QWENDEX_CODEX_HOME:-}" || -z "${QWENDEX_CODEX_RUNTIME:-}" ]]; then
   printf 'qdex: generated environment is missing the isolated home or internal runtime.\n' >&2
   exit 127
 fi
 export CODEX_HOME="$QWENDEX_CODEX_HOME"
+QWENDEX_QWENDEX_COMMAND="${QWENDEX_RUNTIME_TREE:-$QWENDEX_DEV_ROOT}/scripts/qwendex"
+if [[ ! -x "$QWENDEX_QWENDEX_COMMAND" ]]; then
+  printf 'qdex: selected Qwendex command is not executable: %s\n' "$QWENDEX_QWENDEX_COMMAND" >&2
+  exit 127
+fi
 # Dynamic Manager identities belong to one qdex launch. Never let a caller's
 # stale child-process environment select or collide with a prior lease.
 unset \
@@ -215,6 +360,10 @@ PY
 )"
 export QWENDEX_MANAGER_TARGET_REPO="$target_repo"
 export QWENDEX_EXEC_CWD="$target_repo"
+# Runtime generations seal their source tree read-only. Keep mutable Manager
+# lifecycle artifacts in the writable operator root while hooks and code stay
+# pinned to the immutable generation selected for this process.
+export QWENDEX_AGENT_ARTIFACT_ROOT="$QWENDEX_DEV_ROOT/.qwendex"
 export QWENDEX_MCP_TRUSTED_ROOTS="$target_repo"
 export LOCAL_QWEN_CODEX_CWD="$target_repo"
 export LOCAL_QWEN_CODEX_ADD_DIRS="$target_repo"
@@ -263,7 +412,7 @@ qdex_launch_meta_root="$QWENDEX_META_ROOT/qdex/$QWENDEX_RUN_ID"
 mkdir -p "$qdex_launch_meta_root"
 codex_status_write_file="$qdex_launch_meta_root/codex_status_write.json"
 
-"$QWENDEX_DEV_ROOT/scripts/qwendex" codex-status \
+"$QWENDEX_QWENDEX_COMMAND" codex-status \
   --write "$QWENDEX_CODEX_STATUS_FILE" \
   --json > "$codex_status_write_file"
 
@@ -366,7 +515,7 @@ case "$agent_mode" in
 esac
 
 root_agent_usage_hint="You are the root Qwendex orchestrator operating under the ${agent_use:-Off} AgentPolicy. Keep the root as the default sole writer and integrator. Delegate only independent, purpose-specific lanes within the ${codex_worker_cap}-worker ceiling, give each worker a narrow artifact contract, and integrate and verify every result. Do not ask workers to delegate recursively."
-subagent_usage_hint="You are a bounded Qwendex worker. Execute only the assigned lane, do not spawn or manage subagents, and do not edit unless the assignment grants an exact isolated write surface. Return a concise FINAL_REPORT with evidence, changed paths if any, validation, and blockers."
+subagent_usage_hint="You are a bounded Qwendex worker. Execute only the assigned lane, do not spawn or manage subagents, and do not edit unless the assignment grants an exact isolated write surface. Your final response must contain a line exactly FINAL_REPORT with no colon, followed by status, validation_status (PASS or FAIL after classifying any non-blocking diagnostic), evidence, changed paths if any, validation commands, and blockers. If completion is impossible, use a line exactly BLOCKED or FAILED and put evidence on following lines."
 
 cmd=(
   "$QWENDEX_CODEX_RUNTIME"
@@ -439,7 +588,7 @@ if [[ "$manager_preflight_required" == "1" ]]; then
     preflight_args+=(--dry-run)
   fi
   QWENDEX_MANAGER_TARGET_REPO="$target_repo" \
-    "$QWENDEX_DEV_ROOT/scripts/qwendex" "${preflight_args[@]}" > "$preflight_file" || preflight_rc=$?
+    "$QWENDEX_QWENDEX_COMMAND" "${preflight_args[@]}" > "$preflight_file" || preflight_rc=$?
 
   if [[ "$manager_preflight_dry_run" == "1" || "${QWENDEX_QDEX_DRY_RUN:-0}" == "1" ]]; then
     if [[ "$json_output" == "1" ]]; then

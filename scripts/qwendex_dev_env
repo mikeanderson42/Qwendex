@@ -18,6 +18,8 @@ RESULTS_ROOT="$WORK_ROOT/results/qwendex"
 META_ROOT="$WORK_ROOT/results/meta"
 CODEX_HOME_DIR="$WORK_ROOT/codex_home"
 QWENDEX_CODEX_RUNTIME="$WORK_ROOT/bin/qwendex-codex-runtime"
+QWENDEX_RUNTIME_ROOT="$WORK_ROOT/runtime"
+QWENDEX_RUNTIME_RECOVERY="$WORK_ROOT/bin/qwendex-runtime-recovery"
 STATUS_FILE="$WORK_ROOT/codex_status.json"
 LEDGER_DB="$WORK_ROOT/state/qwendex_ledger.sqlite"
 LOCAL_HARNESS_LEDGER_DB="$WORK_ROOT/state/local_qwen_harness.sqlite"
@@ -315,6 +317,11 @@ write_env_files() {
     printf 'export QWENDEX_MCP_TRUSTED_ROOTS=%q\n' "$DEV_ROOT:$SOURCE_ROOT"
     printf 'export QWENDEX_CODEX_HOME=%q\n' "$CODEX_HOME_DIR"
     printf 'export QWENDEX_CODEX_RUNTIME=%q\n' "$QWENDEX_CODEX_RUNTIME"
+    printf 'export QWENDEX_RUNTIME_ROOT=%q\n' "$QWENDEX_RUNTIME_ROOT"
+    # A source-only bootstrap remains usable for non-production development.
+    # Once a validated selector exists, the dynamic block below makes the
+    # generation boundary mandatory for every new Qdex process.
+    printf 'export QWENDEX_RUNTIME_GENERATION_REQUIRED=0\n'
     printf 'export LOCAL_QWEN_CODEX_CWD=%q\n' "$DEV_ROOT"
     printf 'export LOCAL_QWEN_CODEX_ADD_DIRS=%q\n' "$DEV_ROOT:$SOURCE_ROOT"
     printf 'export LOCAL_QWEN_CANONICAL_LAUNCHER=%q\n' "$DEV_ROOT/scripts/run_local_qwen_codex.sh"
@@ -324,6 +331,43 @@ write_env_files() {
     printf 'export LOCAL_QWEN_HARNESS_LEDGER_DB=%q\n' "$LOCAL_HARNESS_LEDGER_DB"
     printf 'export PATH=%q:%q:%q:%q:%q:$PATH\n' \
       "$DEV_ROOT/bin" "$HOME/.local/bin" "$HOME/.cargo/bin" "$DEV_ROOT" "$DEV_ROOT/scripts"
+    cat <<'EOF'
+if [[ -f "$QWENDEX_RUNTIME_ROOT/current.json" ]]; then
+  eval "$(python3 - "$QWENDEX_RUNTIME_ROOT/current.json" "$QWENDEX_RUNTIME_ROOT" <<'PY'
+import json
+import shlex
+import sys
+from pathlib import Path
+
+selection = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+runtime_root = Path(sys.argv[2]).resolve()
+generation_id = str(selection.get("current") or "")
+generation = (runtime_root / "generations" / generation_id).resolve()
+generation.relative_to((runtime_root / "generations").resolve())
+manifest = json.loads((generation / "generation.json").read_text(encoding="utf-8"))
+if (
+    manifest.get("schema_version") != "qwendex.runtime_generation.v1"
+    or manifest.get("generation_id") != generation_id
+    or manifest.get("status") != "validated"
+):
+    raise SystemExit(0)
+values = {
+    "QWENDEX_RUNTIME_GENERATION_ID": generation_id,
+    "QWENDEX_RUNTIME_GENERATION_DIR": str(generation),
+    "QWENDEX_RUNTIME_TREE": str(generation / "tree"),
+    "QWENDEX_RUNTIME_CONTRACT_SHA256": str(manifest.get("contract_sha256") or ""),
+    "QWENDEX_HOOK_GENERATION": generation_id,
+    "QWENDEX_CODEX_HOME": str(generation / "codex_home"),
+    "QWENDEX_CODEX_RUNTIME": str(generation / "bin" / "codex-runtime"),
+    "QWENDEX_ROOT": str(generation / "tree"),
+    "QWENDEX_RUNTIME_GENERATION_REQUIRED": "1",
+}
+for key, value in values.items():
+    print(f"export {key}={shlex.quote(value)}")
+PY
+)"
+fi
+EOF
   } > "$WORK_ROOT/env.sh"
   cat > "$WORK_ROOT/README.md" <<EOF
 # Qwendex Dev Environment
@@ -900,7 +944,9 @@ state_isolation = {
     "local_harness_ledger_db_under_work_root": under(paths["local_harness_ledger_db"], paths["work_root"]),
     "results_under_work_root": under(paths["results_root"], paths["work_root"]),
 }
-active_codex_home = paths["work_root"] / "codex_home"
+active_codex_home = Path(os.environ.get("QWENDEX_CODEX_HOME") or paths["work_root"] / "codex_home")
+runtime_generation = str(os.environ.get("QWENDEX_RUNTIME_GENERATION_ID") or "")
+runtime_tree = str(os.environ.get("QWENDEX_RUNTIME_TREE") or "")
 active_hook_sources = [
     hook_source(active_codex_home / "hooks.json", "active-codex-home"),
     hook_source(paths["dev_root"] / ".codex" / "hooks.json", "project"),
@@ -923,6 +969,13 @@ data = {
     },
     "tools": tools,
     "state_isolation": state_isolation,
+    "runtime": {
+        "generation_required": os.environ.get("QWENDEX_RUNTIME_GENERATION_REQUIRED") == "1",
+        "generation_id": runtime_generation,
+        "tree": runtime_tree,
+        "contract_sha256": str(os.environ.get("QWENDEX_RUNTIME_CONTRACT_SHA256") or ""),
+        "hook_generation": str(os.environ.get("QWENDEX_HOOK_GENERATION") or ""),
+    },
     "codex": {
         "dev_binary_exists": paths["dev_codex"].is_file(),
         "dev_code_mode_host_exists": paths["dev_code_mode_host"].is_file(),
@@ -973,10 +1026,77 @@ cmd_sync() {
   # would otherwise fall back to ~/.local/state/qwendex.
   # shellcheck disable=SC1090
   source "$WORK_ROOT/env.sh"
-  "$DEV_ROOT/scripts/qwendex" codex-status --write "$STATUS_FILE" --json > "$META_ROOT/codex_status_write.json"
+  local runtime_build_json="$META_ROOT/runtime_generation_build.json"
+  local runtime_activate_json="$META_ROOT/runtime_generation_activation.json"
+  local runtime_codex="${QWENDEX_DEV_CODEX_BIN:-$DEV_CODEX_DEFAULT}"
+  local runtime_host
+  runtime_host="$(dirname "$runtime_codex")/codex-code-mode-host"
+  local runtime_receipt="$META_ROOT/codex_build.json"
+  if [[ -f "$runtime_receipt" && -x "$runtime_codex" && -x "$runtime_host" ]]; then
+    "$DEV_ROOT/scripts/qwendex" runtime build \
+      --source-root "$DEV_ROOT" \
+      --runtime-root "$QWENDEX_RUNTIME_ROOT" \
+      --codex-bin "$runtime_codex" \
+      --code-mode-host "$runtime_host" \
+      --json > "$runtime_build_json"
+    local runtime_candidate
+    runtime_candidate="$(python3 - "$runtime_build_json" <<'PY'
+import json
+import sys
+
+payload = json.load(open(sys.argv[1], encoding="utf-8"))
+if payload.get("status") != "pass":
+    raise SystemExit(1)
+print(payload["data"]["runtime_generation"]["generation_id"])
+PY
+    )"
+    "$DEV_ROOT/scripts/qwendex" runtime activate --candidate "$runtime_candidate" --runtime-root "$QWENDEX_RUNTIME_ROOT" --json > "$runtime_activate_json"
+  else
+    python3 - "$runtime_build_json" "$runtime_receipt" "$runtime_codex" "$runtime_host" <<'PY'
+import json
+import sys
+from datetime import UTC, datetime
+from pathlib import Path
+
+output, receipt, binary, host = map(Path, sys.argv[1:])
+missing = [str(path) for path in (receipt, binary, host) if not path.is_file()]
+payload = {
+    "schema_version": "qwendex.runtime_bootstrap.v1",
+    "generated_at": datetime.now(UTC).isoformat(),
+    "status": "blocked",
+    "summary": "Immutable runtime activation deferred until the pinned Codex build is available.",
+    "missing_inputs": missing,
+    "next_actions": ["qwendex-dev codex-source build", "qwendex-dev sync"],
+}
+output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+  fi
+  install -m 0555 "$DEV_ROOT/scripts/qwendex_runtime.py" "$QWENDEX_RUNTIME_RECOVERY"
+  # Reload the generation-aware values written by env.sh after atomic
+  # activation; this command never rewrites an active session's generation.
+  # shellcheck disable=SC1090
+  source "$WORK_ROOT/env.sh"
+  local qwendex_status_command="$DEV_ROOT/scripts/qwendex"
+  if [[ -n "${QWENDEX_RUNTIME_TREE:-}" && -x "$QWENDEX_RUNTIME_TREE/scripts/qwendex" ]]; then
+    qwendex_status_command="$QWENDEX_RUNTIME_TREE/scripts/qwendex"
+  fi
+  "$qwendex_status_command" codex-status --write "$QWENDEX_CODEX_STATUS_FILE" --json > "$META_ROOT/codex_status_write.json"
   write_dev_status_json sync >/dev/null
   printf 'Qwendex dev root ready: %s\n' "$DEV_ROOT"
   printf 'Load env with: source %s\n' "$WORK_ROOT/env.sh"
+}
+
+cmd_runtime() {
+  prepare
+  local action="${1:-status}"
+  shift || true
+  # Rollback must not depend on Qdex or mutable source being healthy. Prefer
+  # the sync-installed standard-library recovery copy for all runtime actions.
+  if [[ -x "$QWENDEX_RUNTIME_RECOVERY" ]]; then
+    "$QWENDEX_RUNTIME_RECOVERY" "$action" --runtime-root "$QWENDEX_RUNTIME_ROOT" "$@"
+  else
+    "$DEV_ROOT/scripts/qwendex" runtime "$action" --runtime-root "$QWENDEX_RUNTIME_ROOT" "$@"
+  fi
 }
 
 cmd_bootstrap() {
@@ -1491,6 +1611,12 @@ data = {
 Path(out).write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 print(f"codex-build: pass - {out}")
 PY
+      "$DEV_ROOT/scripts/qwendex" runtime build \
+        --source-root "$DEV_ROOT" \
+        --runtime-root "$QWENDEX_RUNTIME_ROOT" \
+        --codex-bin "$DEV_CODEX_DEFAULT" \
+        --code-mode-host "$DEV_CODE_MODE_HOST_DEFAULT" \
+        --json > "$META_ROOT/runtime_generation_build.json"
       ;;
     *)
       die "unknown codex-source action: $action (expected sync|patch|build|preflight)"
@@ -2026,6 +2152,7 @@ Commands:
   scripts/qwendex_dev_env preflight
   scripts/qwendex_dev_env patch-codex [source]
   scripts/qwendex_dev_env codex-source sync|patch|build|preflight
+  scripts/qwendex_dev_env runtime status|generations|build|activate|rollback|prune [options]
   scripts/qwendex_dev_env open [initial prompt...]
   scripts/qwendex_dev_env open-yolo [initial prompt...]
   scripts/qwendex_dev_env shell
@@ -2115,6 +2242,10 @@ case "$1" in
   codex-source)
     shift
     cmd_codex_source "$@"
+    ;;
+  runtime)
+    shift
+    cmd_runtime "$@"
     ;;
   open)
     shift

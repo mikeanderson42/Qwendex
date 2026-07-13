@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.5.7"
+VERSION = "0.6.0-rc.1"
 CONFIG_DIR = ROOT / "config" / "qwendex"
 DEFAULT_PROJECT_CONFIG = CONFIG_DIR / "qwendex.json"
 DEFAULT_USER_CONFIG = Path.home() / ".config" / "qwendex" / "config.json"
@@ -65,6 +65,16 @@ REQUIRED_SURFACE_FILES = (
     "scripts/qwendex_release_gate.py",
     "scripts/qwendex_install_deps",
     "scripts/qwendex_dev_env",
+    "scripts/qwendex_runtime.py",
+    "scripts/qwendex_manager_acceptance.py",
+    "scripts/qwendex_manager_faults.py",
+    "scripts/qwendex_manager_install_acceptance.py",
+    "scripts/qwendex_manager_live.py",
+    "scripts/qwendex_manager_security.py",
+    "scripts/qwendex_manager_self_host.py",
+    "scripts/qwendex_manager_soak.py",
+    "scripts/qwendex_manager_state_migrations.py",
+    "scripts/qwendex_routing_eval.py",
     "scripts/qwendex_testbench",
     "scripts/llm",
     "scripts/windows/open.ps1",
@@ -78,6 +88,8 @@ REQUIRED_SURFACE_FILES = (
     "config/qwendex/dependencies.json",
     "config/qwendex/profiles.json",
     "config/qwendex/model-catalog.json",
+    "config/qwendex/manager-performance-budget.json",
+    "config/qwendex/manager-routing-corpus.json",
     "config/local_llm_stack/stack_manager.json",
     "config/local_llm_stack/stack_manager.sample.json",
     "config/local_llm_stack/profiles.example.json",
@@ -164,6 +176,8 @@ AGENT_USE_ALIASES = {
 }
 AGENT_TERMINAL_STATUSES = {"completed", "blocked", "failed", "closed", "tombstoned", "waived"}
 STATE_BUSY_TIMEOUT_MS = 2000
+STATE_SCHEMA_VERSION = 2
+STATE_MIGRATION_FAULT_ENV = "QWENDEX_STATE_MIGRATION_FAIL_AT"
 AGENT_HOOK_EVENTS = {
     "SessionStart",
     "UserPromptSubmit",
@@ -340,6 +354,12 @@ MANAGED_HOOK_RUNTIME_ENV_KEYS = (
     "QWENDEX_CODEX_STATUS_FILE",
     "QWENDEX_DEV_ROOT",
     "QWENDEX_ROOT",
+    "QWENDEX_RUNTIME_ROOT",
+    "QWENDEX_RUNTIME_TREE",
+    "QWENDEX_RUNTIME_GENERATION_DIR",
+    "QWENDEX_RUNTIME_GENERATION_ID",
+    "QWENDEX_RUNTIME_CONTRACT_SHA256",
+    "QWENDEX_HOOK_GENERATION",
 )
 PERFORMANCE_DB_ENV = "QWENDEX_PERFORMANCE_DB"
 DEFAULT_PERFORMANCE_DB = Path.home() / ".local" / "state" / "qwendex" / "qwendex-performance.sqlite"
@@ -2327,17 +2347,48 @@ def path_digest_policy(path: Path) -> str:
     return "sha256:" + sha256_text(str(path.expanduser().resolve(strict=False)))
 
 
-def manager_runtime_identity() -> str:
-    """Return the stable runtime-location binding for one Qdex launch.
+def manager_runtime_identity(env: Mapping[str, str] | None = None) -> str:
+    """Return the immutable generation binding for one Qdex launch.
 
-    Hooks are separate Python processes and Qwendex is a valid target of a
-    managed editing session. A content digest therefore changes during a
-    legitimate in-place source edit and would strand the attached session.
-    Bind the preflight instead to the resolved runtime location; the launch
-    PID/start ticks/nonce, state and ledger locations, Codex home, repository,
-    policy, and verified hooks remain independently fail-closed.
+    Legacy/non-generated fixtures retain the path identity for compatibility.
+    A real generated Qdex launch binds both the generation id and the sealed
+    source/patch/binary/config contract, so source edits and later activation
+    cannot change the code executed by an attached session.
     """
+    source = os.environ if env is None else env
+    generation_id = str(source.get("QWENDEX_RUNTIME_GENERATION_ID") or "").strip()
+    contract_sha256 = str(source.get("QWENDEX_RUNTIME_CONTRACT_SHA256") or "").strip()
+    if generation_id and contract_sha256:
+        return f"generation:{generation_id}:sha256:{contract_sha256}"
     return path_digest_policy(Path(__file__).resolve())
+
+
+def manager_runtime_generation_metadata(env: Mapping[str, str] | None = None) -> dict[str, Any]:
+    source = os.environ if env is None else env
+    generation_id = str(source.get("QWENDEX_RUNTIME_GENERATION_ID") or "").strip()
+    hook_generation = str(source.get("QWENDEX_HOOK_GENERATION") or generation_id).strip()
+    contract_sha256 = str(source.get("QWENDEX_RUNTIME_CONTRACT_SHA256") or "").strip()
+    generation_dir = Path(str(source.get("QWENDEX_RUNTIME_GENERATION_DIR") or "")).expanduser()
+    manifest: dict[str, Any] = {}
+    if generation_id and generation_dir.is_dir():
+        manifest_path = generation_dir / "generation.json"
+        try:
+            loaded = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict) and loaded.get("generation_id") == generation_id:
+                manifest = loaded
+        except (OSError, json.JSONDecodeError):
+            manifest = {}
+    codex = manifest.get("codex") if isinstance(manifest.get("codex"), Mapping) else {}
+    contract = manifest.get("contract") if isinstance(manifest.get("contract"), Mapping) else {}
+    return {
+        "runtime_generation": generation_id,
+        "hook_generation": hook_generation,
+        "runtime_contract_sha256": contract_sha256,
+        "patched_binary_sha256": str(codex.get("binary_sha256") or contract.get("patched_binary_sha256") or ""),
+        "codex_patch_sha256": str(codex.get("patch_sha256") or contract.get("codex_patch_sha256") or ""),
+        "config_sha256": str(manifest.get("config_digest") or contract.get("config_sha256") or ""),
+        "runtime_state_schema_version": int(contract.get("state_schema_version") or 0),
+    }
 
 
 def manager_store_identities(config: Mapping[str, Any]) -> tuple[str, str]:
@@ -2468,13 +2519,135 @@ def write_manager_decision_receipt(config: Mapping[str, Any], payload: Mapping[s
         return str(path)
 
 
+def state_schema_version(conn: sqlite3.Connection) -> int:
+    row = conn.execute("PRAGMA user_version").fetchone()
+    return int(row[0] if row is not None else 0)
+
+
+def state_has_qwendex_schema(conn: sqlite3.Connection) -> bool:
+    row = conn.execute(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name LIKE 'qwendex_%'"
+    ).fetchone()
+    return bool(row and int(row[0] or 0))
+
+
+def state_migration_directory(path: Path) -> Path:
+    return path.parent / "migrations" / path.name
+
+
+def backup_state_for_migration(
+    conn: sqlite3.Connection,
+    path: Path,
+    *,
+    from_version: int,
+    to_version: int,
+) -> Path | None:
+    if not state_has_qwendex_schema(conn):
+        return None
+    directory = state_migration_directory(path)
+    directory.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+    backup_path = directory / f"state-v{from_version}-to-v{to_version}-{stamp}.sqlite"
+    backup_conn = sqlite3.connect(backup_path)
+    try:
+        conn.backup(backup_conn)
+    finally:
+        backup_conn.close()
+    backup_path.chmod(0o600)
+    return backup_path
+
+
+def write_state_migration_failure(
+    path: Path,
+    *,
+    from_version: int,
+    backup_path: Path | None,
+    error: BaseException,
+) -> None:
+    directory = state_migration_directory(path)
+    directory.mkdir(parents=True, exist_ok=True)
+    run_id = str(os.environ.get("QWENDEX_RUN_ID") or "unbound").strip()
+    fingerprint = sha256_text(
+        "\0".join(
+            [
+                str(from_version),
+                str(STATE_SCHEMA_VERSION),
+                type(error).__name__,
+                str(error),
+                str(os.environ.get(STATE_MIGRATION_FAULT_ENV) or ""),
+                run_id,
+            ]
+        )
+    )[:20]
+    receipt_path = directory / f"migration-failed-{fingerprint}.json"
+    previous: dict[str, Any] = {}
+    try:
+        loaded = json.loads(receipt_path.read_text(encoding="utf-8"))
+        if isinstance(loaded, dict):
+            previous = loaded
+    except (OSError, json.JSONDecodeError):
+        previous = {}
+    payload = {
+        "schema_version": "qwendex.state_migration_failure.v1",
+        "generated_at": utc_now(),
+        "first_generated_at": str(previous.get("first_generated_at") or previous.get("generated_at") or utc_now()),
+        "occurrences": int(previous.get("occurrences") or 0) + 1,
+        "run_id": run_id,
+        "status": "blocked",
+        "from_version": from_version,
+        "target_version": STATE_SCHEMA_VERSION,
+        "backup_path": str(backup_path or ""),
+        "error_type": type(error).__name__,
+        "error": str(error),
+        "recovery": "Restore the preserved backup or repair the database from stock Codex or a shell before retrying.",
+    }
+    atomic_write_text(receipt_path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    receipt_path.chmod(0o600)
+
+
 def connect_state(config: Mapping[str, Any]) -> sqlite3.Connection:
     path = state_db_path(config)
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path, timeout=STATE_BUSY_TIMEOUT_MS / 1000)
     conn.row_factory = sqlite3.Row
-    conn.execute(f"PRAGMA busy_timeout = {STATE_BUSY_TIMEOUT_MS}")
-    ensure_state_schema(conn)
+    backup_path: Path | None = None
+    from_version = 0
+    try:
+        conn.execute(f"PRAGMA busy_timeout = {STATE_BUSY_TIMEOUT_MS}")
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA journal_mode = WAL")
+        from_version = state_schema_version(conn)
+        if from_version > STATE_SCHEMA_VERSION:
+            raise RuntimeError(
+                f"state schema v{from_version} is newer than supported v{STATE_SCHEMA_VERSION}"
+            )
+        if from_version < STATE_SCHEMA_VERSION:
+            quick_check = conn.execute("PRAGMA quick_check").fetchone()
+            if not quick_check or str(quick_check[0]) != "ok":
+                raise RuntimeError(f"state database integrity check failed: {quick_check[0] if quick_check else 'no result'}")
+            backup_path = backup_state_for_migration(
+                conn,
+                path,
+                from_version=from_version,
+                to_version=STATE_SCHEMA_VERSION,
+            )
+            if os.environ.get(STATE_MIGRATION_FAULT_ENV) == "after_backup":
+                raise RuntimeError("injected state migration failure after backup")
+        ensure_state_schema(conn, backup_path=backup_path)
+    except BaseException as exc:
+        if conn.in_transaction:
+            conn.rollback()
+        conn.close()
+        try:
+            write_state_migration_failure(
+                path,
+                from_version=from_version,
+                backup_path=backup_path,
+                error=exc,
+            )
+        except OSError:
+            pass
+        raise
     return conn
 
 
@@ -2498,9 +2671,47 @@ def ensure_table_column(conn: sqlite3.Connection, table: str, column: str, defin
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
-def ensure_state_schema(conn: sqlite3.Connection) -> None:
-    conn.executescript(
-        """
+def repair_legacy_scoped_public_ids(conn: sqlite3.Connection) -> None:
+    """Finish the prior lazy public-id backfill without rerunning DDL."""
+    tables = {
+        str(row[0])
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('qwendex_handoffs', 'qwendex_evidence')"
+        ).fetchall()
+    }
+    if tables != {"qwendex_handoffs", "qwendex_evidence"}:
+        return
+    handoff_debt = conn.execute(
+        "SELECT 1 FROM qwendex_handoffs WHERE public_id = '' LIMIT 1"
+    ).fetchone()
+    evidence_debt = conn.execute(
+        "SELECT 1 FROM qwendex_evidence WHERE public_id = '' LIMIT 1"
+    ).fetchone()
+    if not handoff_debt and not evidence_debt:
+        return
+    conn.execute("BEGIN IMMEDIATE")
+    conn.execute("UPDATE qwendex_handoffs SET public_id = handoff_id WHERE public_id = ''")
+    conn.execute("UPDATE qwendex_evidence SET public_id = evidence_id WHERE public_id = ''")
+    conn.commit()
+
+
+def ensure_state_schema(conn: sqlite3.Connection, *, backup_path: Path | None = None) -> None:
+    current_version = state_schema_version(conn)
+    if current_version == STATE_SCHEMA_VERSION:
+        repair_legacy_scoped_public_ids(conn)
+        return
+    if current_version > STATE_SCHEMA_VERSION:
+        raise RuntimeError(
+            f"state schema v{current_version} is newer than supported v{STATE_SCHEMA_VERSION}"
+        )
+    conn.execute("BEGIN IMMEDIATE")
+    # Another process may have completed the migration while this connection
+    # waited for the writer lock.
+    current_version = state_schema_version(conn)
+    if current_version == STATE_SCHEMA_VERSION:
+        conn.commit()
+        return
+    schema_sql = """
         CREATE TABLE IF NOT EXISTS qwendex_manager_settings (
           key TEXT PRIMARY KEY,
           value_json TEXT NOT NULL,
@@ -2632,8 +2843,19 @@ def ensure_state_schema(conn: sqlite3.Connection) -> None:
           receipt_paths_json TEXT NOT NULL,
           unresolved_risks_json TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS qwendex_state_migrations (
+          migration_id TEXT PRIMARY KEY,
+          from_version INTEGER NOT NULL,
+          to_version INTEGER NOT NULL,
+          status TEXT NOT NULL,
+          backup_path TEXT NOT NULL,
+          started_at TEXT NOT NULL,
+          completed_at TEXT NOT NULL
+        );
         """
-    )
+    for statement in schema_sql.split(";"):
+        if statement.strip():
+            conn.execute(statement)
     ensure_table_column(conn, "qwendex_agent_sessions", "context_packet_json", "TEXT NOT NULL DEFAULT '{}'")
     ensure_table_column(conn, "qwendex_agent_sessions", "routing_json", "TEXT NOT NULL DEFAULT '{}'")
     ensure_table_column(conn, "qwendex_agent_sessions", "validation_status", "TEXT NOT NULL DEFAULT 'pending'")
@@ -2650,6 +2872,13 @@ def ensure_state_schema(conn: sqlite3.Connection) -> None:
     ensure_table_column(conn, "qwendex_manager_decisions", "state_db_identity", "TEXT NOT NULL DEFAULT ''")
     ensure_table_column(conn, "qwendex_manager_decisions", "ledger_db_identity", "TEXT NOT NULL DEFAULT ''")
     ensure_table_column(conn, "qwendex_manager_decisions", "runtime_identity", "TEXT NOT NULL DEFAULT ''")
+    ensure_table_column(conn, "qwendex_manager_decisions", "runtime_generation", "TEXT NOT NULL DEFAULT ''")
+    ensure_table_column(conn, "qwendex_manager_decisions", "hook_generation", "TEXT NOT NULL DEFAULT ''")
+    ensure_table_column(conn, "qwendex_manager_decisions", "runtime_contract_sha256", "TEXT NOT NULL DEFAULT ''")
+    ensure_table_column(conn, "qwendex_manager_decisions", "patched_binary_sha256", "TEXT NOT NULL DEFAULT ''")
+    ensure_table_column(conn, "qwendex_manager_decisions", "codex_patch_sha256", "TEXT NOT NULL DEFAULT ''")
+    ensure_table_column(conn, "qwendex_manager_decisions", "config_sha256", "TEXT NOT NULL DEFAULT ''")
+    ensure_table_column(conn, "qwendex_manager_decisions", "runtime_state_schema_version", "INTEGER NOT NULL DEFAULT 0")
     ensure_table_column(conn, "qwendex_manager_decisions", "selected_mode", "TEXT NOT NULL DEFAULT ''")
     ensure_table_column(conn, "qwendex_manager_decisions", "effective_turn_mode", "TEXT NOT NULL DEFAULT ''")
     ensure_table_column(conn, "qwendex_manager_decisions", "task_class", "TEXT NOT NULL DEFAULT ''")
@@ -2667,6 +2896,7 @@ def ensure_state_schema(conn: sqlite3.Connection) -> None:
     ensure_table_column(conn, "qwendex_agent_sessions", "origin", "TEXT NOT NULL DEFAULT 'qwendex'")
     ensure_table_column(conn, "qwendex_agent_sessions", "final_report_present", "INTEGER NOT NULL DEFAULT 0")
     ensure_table_column(conn, "qwendex_agent_sessions", "completed_at", "TEXT NOT NULL DEFAULT ''")
+    ensure_table_column(conn, "qwendex_agent_sessions", "runtime_generation", "TEXT NOT NULL DEFAULT ''")
     conn.execute(
         """
         CREATE UNIQUE INDEX IF NOT EXISTS qwendex_manager_decisions_launch_key
@@ -2694,6 +2924,28 @@ def ensure_state_schema(conn: sqlite3.Connection) -> None:
         ON qwendex_agent_sessions(repo_root, session_id, turn_id, task_id, status)
         """
     )
+    if os.environ.get(STATE_MIGRATION_FAULT_ENV) == "after_schema":
+        raise RuntimeError("injected state migration failure after schema changes")
+    completed_at = utc_now()
+    migration_id = make_id("state_migration")
+    conn.execute(
+        """
+        INSERT INTO qwendex_state_migrations
+          (migration_id, from_version, to_version, status, backup_path, started_at, completed_at)
+        VALUES (?, ?, ?, 'pass', ?, ?, ?)
+        """,
+        (
+            migration_id,
+            current_version,
+            STATE_SCHEMA_VERSION,
+            str(backup_path or ""),
+            completed_at,
+            completed_at,
+        ),
+    )
+    conn.execute(f"PRAGMA user_version = {STATE_SCHEMA_VERSION}")
+    if os.environ.get(STATE_MIGRATION_FAULT_ENV) == "before_commit":
+        raise RuntimeError("injected state migration failure before commit")
     conn.commit()
 
 
@@ -3160,7 +3412,10 @@ def write_agent_output_artifacts(
     if repo_root:
         run_id = f"repo-{sha256_text(repo_root)[:12]}-{run_id}"
     safe_agent_id = safe_artifact_component(agent_id, "agent")
-    run_dir = ROOT / ".qwendex" / "runs" / run_id
+    artifact_root = Path(
+        os.environ.get("QWENDEX_AGENT_ARTIFACT_ROOT") or ROOT / ".qwendex"
+    ).expanduser().resolve(strict=False)
+    run_dir = artifact_root / "runs" / run_id
     agent_dir = run_dir / safe_agent_id
     agent_dir.mkdir(parents=True, exist_ok=True)
     raw_path = agent_dir / "raw-output.md"
@@ -7429,6 +7684,7 @@ def agent_mode_context(
             "Manager Mode: you are the root orchestrator and context curator. "
             "For non-trivial repo work, maintain an agent ledger and use scoped specialists. "
             "Spawn agents with the Qwendex-assigned model and reasoning from the manager plan or ledger. "
+            "A worker's final response is delivered directly to you: once it contains the required terminal contract, do not send follow-up work or interrupt that worker. "
             "Do not finalize until required agents have FINAL_REPORT, BLOCKED, FAILED, or TOMBSTONED status with evidence. "
             "Small trivial tasks may be handled directly with a recorded direct-work exception."
         ),
@@ -7497,8 +7753,8 @@ def subagent_start_context(
         f"Parent mode is {agent_policy.get('agent_use')}. Execute {task_name} now. "
         f"{assignment}{output_sentence} "
         "Do not merely acknowledge or stand by. Do not spawn subagents. "
-        "End with FINAL_REPORT, BLOCKED, or FAILED. Required FINAL_REPORT fields: "
-        "status, agent_id, task_name, summary, files_inspected, files_changed, "
+        "The final response must contain a line exactly FINAL_REPORT with no colon; if completion is impossible, use a line exactly BLOCKED or FAILED and put evidence on following lines. Required FINAL_REPORT fields: "
+        "status, validation_status (PASS or FAIL after classifying any non-blocking diagnostic), agent_id, task_name, summary, files_inspected, files_changed, "
         "commands_run, evidence, artifacts, blockers, remaining_risk, next_recommended_action."
     )
 
@@ -7827,9 +8083,9 @@ def reserve_manager_native_spawn(
              artifacts_json, status, heartbeat_at, created_at, updated_at,
              stop_reason, close_receipt, context_packet_json, routing_json,
              validation_status, repo_root, session_id, turn_id, assignment,
-             policy_hash, origin, final_report_present, completed_at)
+             policy_hash, origin, final_report_present, completed_at, runtime_generation)
             VALUES (?, ?, ?, ?, 'read-only', ?, '[]', 'reserved', ?, ?, ?, '', '', ?, ?,
-                    'pending', ?, ?, ?, ?, ?, 'qwendex', 0, '')
+                    'pending', ?, ?, ?, ?, ?, 'qwendex', 0, '', ?)
             """,
             (
                 pending_agent_id,
@@ -7847,6 +8103,7 @@ def reserve_manager_native_spawn(
                 str(decision.get("turn_id") or ""),
                 str(assignment.get("assignment") or ""),
                 str(decision.get("policy_hash") or agent_policy.get("policy_hash") or ""),
+                str(decision.get("runtime_generation") or os.environ.get("QWENDEX_RUNTIME_GENERATION_ID") or ""),
             ),
         )
         conn.commit()
@@ -8029,9 +8286,9 @@ def activate_manager_native_worker(
                  artifacts_json, status, heartbeat_at, created_at, updated_at,
                  stop_reason, close_receipt, context_packet_json, routing_json,
                  validation_status, repo_root, session_id, turn_id, assignment,
-                 policy_hash, origin, final_report_present, completed_at)
+                 policy_hash, origin, final_report_present, completed_at, runtime_generation)
                 VALUES (?, ?, ?, ?, 'read-only', ?, '[]', 'active', ?, ?, ?, '', '', ?, ?,
-                        'pending', ?, ?, ?, ?, ?, 'qwendex', 0, '')
+                        'pending', ?, ?, ?, ?, ?, 'qwendex', 0, '', ?)
                 """,
                 (
                     runtime_agent_id,
@@ -8049,6 +8306,7 @@ def activate_manager_native_worker(
                     str(decision.get("turn_id") or ""),
                     str(assignment.get("assignment") or ""),
                     policy_hash,
+                    str(decision.get("runtime_generation") or os.environ.get("QWENDEX_RUNTIME_GENERATION_ID") or ""),
                 ),
             )
             conn.execute(
@@ -10507,7 +10765,19 @@ def managed_hook_runtime_env(
         dev_root = str(work_root.parent)
     if dev_root:
         values["QWENDEX_DEV_ROOT"] = dev_root
-    values["QWENDEX_ROOT"] = str(source.get("QWENDEX_ROOT") or ROOT)
+    runtime_tree = str(source.get("QWENDEX_RUNTIME_TREE") or "").strip()
+    values["QWENDEX_ROOT"] = str(source.get("QWENDEX_ROOT") or runtime_tree or ROOT)
+    for key in (
+        "QWENDEX_RUNTIME_ROOT",
+        "QWENDEX_RUNTIME_TREE",
+        "QWENDEX_RUNTIME_GENERATION_DIR",
+        "QWENDEX_RUNTIME_GENERATION_ID",
+        "QWENDEX_RUNTIME_CONTRACT_SHA256",
+        "QWENDEX_HOOK_GENERATION",
+    ):
+        value = str(source.get(key) or "").strip()
+        if value:
+            values[key] = value
     return {key: values[key] for key in MANAGED_HOOK_RUNTIME_ENV_KEYS if values.get(key)}
 
 
@@ -10524,6 +10794,9 @@ def managed_agent_hook_command_base(
     explicit = str(command_base or "").strip()
     if explicit:
         return explicit
+    runtime_tree = str((runtime_env or {}).get("QWENDEX_RUNTIME_TREE") or "").strip()
+    if runtime_tree:
+        return str(Path(runtime_tree).expanduser() / "scripts" / "qwendex")
     dev_root = str((runtime_env or {}).get("QWENDEX_DEV_ROOT") or "").strip()
     if dev_root:
         dev_command = Path(dev_root).expanduser() / "scripts" / "qwendex"
@@ -10838,10 +11111,18 @@ def classify_manager_turn(prompt: str) -> str:
         r"\b(across|cross[- ](?:cutting|file)|end[- ]to[- ]end|many|multiple|repo[- ]wide|several|subsystems?)\b",
         lower,
     ))
+    explicit_single_file_read = bool(re.search(
+        r"^(?:please\s+)?(?:read|inspect|check|show|summarize)\s+"
+        r"(?:(?:the\s+)?(?:single|one)\s+file\s+)?"
+        r"\S+\.(?:py|rs|js|ts|md|toml|json)\b",
+        lower,
+    ))
     release_tag_intent = bool(re.search(
         r"\b(?:git|release|version)\s+tags?\b|\btags?\s+(?:a\s+)?(?:release|version)\b",
         lower,
     ))
+    if explicit_single_file_read:
+        return "single_file_read"
     if re.search(r"\b(release|publish|ship|distribution)\b", lower) or release_tag_intent:
         return "release_or_publish"
     if re.search(r"\b(security|credential|protocol|privacy|authentication|authorization|threat)\b", lower):
@@ -11195,7 +11476,9 @@ def persist_manager_decision(conn: sqlite3.Connection, decision: Mapping[str, An
         SET launch_ledger_id = ?, turn_id = ?, agent_task_id = ?,
             launch_pid = ?, launch_start_ticks = ?, launch_nonce = ?, launch_key = ?,
             root_session_id = ?, state_db_identity = ?,
-            ledger_db_identity = ?, runtime_identity = ?, selected_mode = ?,
+            ledger_db_identity = ?, runtime_identity = ?, runtime_generation = ?,
+            hook_generation = ?, runtime_contract_sha256 = ?, patched_binary_sha256 = ?,
+            codex_patch_sha256 = ?, config_sha256 = ?, runtime_state_schema_version = ?, selected_mode = ?,
             effective_turn_mode = ?, task_class = ?, agent_plan_json = ?,
             policy_snapshot_json = ?, desired_global_policy_hash = ?,
             prompt_source = ?, prompt_length = ?, prompt_schema_version = ?,
@@ -11214,6 +11497,13 @@ def persist_manager_decision(conn: sqlite3.Connection, decision: Mapping[str, An
             str(decision.get("state_db_identity") or ""),
             str(decision.get("ledger_db_identity") or ""),
             str(decision.get("runtime_identity") or ""),
+            str(decision.get("runtime_generation") or ""),
+            str(decision.get("hook_generation") or ""),
+            str(decision.get("runtime_contract_sha256") or ""),
+            str(decision.get("patched_binary_sha256") or ""),
+            str(decision.get("codex_patch_sha256") or ""),
+            str(decision.get("config_sha256") or ""),
+            int(decision.get("runtime_state_schema_version") or 0),
             str(decision.get("selected_manager_mode") or decision.get("selected_mode") or decision.get("mode") or ""),
             str(decision.get("effective_turn_mode") or decision.get("effective_agent_mode") or ""),
             str(decision.get("task_class") or ""),
@@ -11275,7 +11565,8 @@ def manager_preflight_payload(
     launch_nonce = str(source_env.get(MANAGER_LAUNCH_NONCE_ENV) or make_id("launch")).strip()
     codex_home_identity = path_digest_policy(codex_home)
     state_db_identity, ledger_db_identity = manager_store_identities(config)
-    runtime_identity = manager_runtime_identity()
+    runtime_identity = manager_runtime_identity(source_env)
+    runtime_generation = manager_runtime_generation_metadata(source_env)
     launch_key = (
         manager_launch_key(
             repo_root=repo_root,
@@ -11412,6 +11703,7 @@ def manager_preflight_payload(
         "state_db_identity": state_db_identity,
         "ledger_db_identity": ledger_db_identity,
         "runtime_identity": runtime_identity,
+        **runtime_generation,
         "turn_id": "",
         "agent_task_id": session_id,
         "timestamp": timestamp,
@@ -11497,6 +11789,9 @@ def manager_preflight_payload(
             MANAGER_STATE_DB_IDENTITY_ENV: state_db_identity,
             MANAGER_LEDGER_DB_IDENTITY_ENV: ledger_db_identity,
             MANAGER_RUNTIME_IDENTITY_ENV: runtime_identity,
+            "QWENDEX_RUNTIME_GENERATION_ID": str(runtime_generation.get("runtime_generation") or ""),
+            "QWENDEX_RUNTIME_CONTRACT_SHA256": str(runtime_generation.get("runtime_contract_sha256") or ""),
+            "QWENDEX_HOOK_GENERATION": str(runtime_generation.get("hook_generation") or ""),
             "QWENDEX_MANAGER_POLICY_HASH": str(agent_policy.get("policy_hash") or ""),
             "QWENDEX_MANAGER_STOP_STATUS": stop_status,
             "QWENDEX_OUTPUT_POLICY": str(agent_policy.get("env", {}).get("QWENDEX_OUTPUT_POLICY") or "standard"),
@@ -11612,7 +11907,7 @@ def manager_decision_static_mismatch(
     env: Mapping[str, str],
 ) -> tuple[str, dict[str, Any]]:
     state_identity, ledger_identity = manager_store_identities(config)
-    runtime_identity = manager_runtime_identity()
+    runtime_identity = manager_runtime_identity(env)
     expected_state = str(env.get(MANAGER_STATE_DB_IDENTITY_ENV) or "").strip()
     expected_ledger = str(env.get(MANAGER_LEDGER_DB_IDENTITY_ENV) or "").strip()
     expected_runtime = str(env.get(MANAGER_RUNTIME_IDENTITY_ENV) or "").strip()
@@ -11621,12 +11916,24 @@ def manager_decision_static_mismatch(
     recorded_state = str(decision.get("state_db_identity") or "").strip()
     recorded_ledger = str(decision.get("ledger_db_identity") or "").strip()
     recorded_runtime = str(decision.get("runtime_identity") or "").strip()
+    configured_generation = str(env.get("QWENDEX_RUNTIME_GENERATION_ID") or "").strip()
+    configured_hook_generation = str(env.get("QWENDEX_HOOK_GENERATION") or configured_generation).strip()
+    recorded_generation = str(decision.get("runtime_generation") or "").strip()
+    recorded_hook_generation = str(decision.get("hook_generation") or recorded_generation).strip()
     recorded_launch_key = str(decision.get("launch_key") or "").strip()
     recorded_launch_nonce = str(decision.get("launch_nonce") or "").strip()
     details = {
         "state_db_match": bool(expected_state and expected_state == state_identity and (not recorded_state or recorded_state == state_identity)),
         "ledger_db_match": bool(expected_ledger and expected_ledger == ledger_identity and (not recorded_ledger or recorded_ledger == ledger_identity)),
         "runtime_match": bool(expected_runtime and expected_runtime == runtime_identity and (not recorded_runtime or recorded_runtime == runtime_identity)),
+        "runtime_generation_match": bool(
+            not recorded_generation
+            or configured_generation == recorded_generation
+        ),
+        "hook_generation_match": bool(
+            not recorded_hook_generation
+            or configured_hook_generation == recorded_hook_generation
+        ),
         "launch_key_match": bool(expected_launch_key and expected_launch_key == recorded_launch_key),
         "launch_nonce_match": bool(expected_launch_nonce and expected_launch_nonce == recorded_launch_nonce),
     }
@@ -11635,6 +11942,8 @@ def manager_decision_static_mismatch(
     if not details["ledger_db_match"]:
         return "ledger_db_mismatch", details
     if not details["runtime_match"]:
+        return "runtime_mismatch", details
+    if not details["runtime_generation_match"] or not details["hook_generation_match"]:
         return "runtime_mismatch", details
     if not details["launch_key_match"] or not details["launch_nonce_match"]:
         return "missing_launch_identity", details
@@ -11735,7 +12044,7 @@ def resolve_manager_decision(
     configured_state_identity = str(source_env.get(MANAGER_STATE_DB_IDENTITY_ENV) or "").strip()
     configured_ledger_identity = str(source_env.get(MANAGER_LEDGER_DB_IDENTITY_ENV) or "").strip()
     configured_runtime_identity = str(source_env.get(MANAGER_RUNTIME_IDENTITY_ENV) or "").strip()
-    current_runtime_identity = manager_runtime_identity()
+    current_runtime_identity = manager_runtime_identity(source_env)
     if configured_state_identity != current_state_identity:
         return manager_resolution_result(
             status="unattached",
@@ -12709,6 +13018,13 @@ def manager_decision_receipt_payload(decision: Mapping[str, Any]) -> dict[str, A
         "state_db_identity": decision.get("state_db_identity") or "",
         "ledger_db_identity": decision.get("ledger_db_identity") or "",
         "runtime_identity": decision.get("runtime_identity") or "",
+        "runtime_generation": decision.get("runtime_generation") or "",
+        "hook_generation": decision.get("hook_generation") or "",
+        "runtime_contract_sha256": decision.get("runtime_contract_sha256") or "",
+        "patched_binary_sha256": decision.get("patched_binary_sha256") or "",
+        "codex_patch_sha256": decision.get("codex_patch_sha256") or "",
+        "config_sha256": decision.get("config_sha256") or "",
+        "runtime_state_schema_version": int(decision.get("runtime_state_schema_version") or 0),
         "turn_id": decision.get("turn_id") or "",
         "agent_task_id": decision.get("agent_task_id") or decision.get("session_id"),
         "timestamp": decision.get("timestamp_updated"),
@@ -12788,11 +13104,12 @@ def validation_text_state(text: str) -> bool | None:
         r"(?i)\b(?:pytest|unittest|ruff|py_compile|qwendex-dev\s+verify|"
         r"scripts/qwendex|receipts?|tests?|checks?)\b"
     )
+    explicit_lines: list[str] = []
     relevant_lines: list[str] = []
     for line in (text or "").splitlines():
-        match = re.match(r"(?i)^\s*validation\s*:\s*(.+?)\s*$", line)
+        match = re.match(r"(?i)^\s*validation(?:_status)?\s*:\s*(.+?)\s*$", line)
         if match:
-            relevant_lines.append(match.group(1).strip())
+            explicit_lines.append(match.group(1).strip())
         elif re.match(r"(?i)^\s*(?:[-*]\s*)?(?:outcome|result)\s*:\s*", line):
             # Native workers commonly put the command on one commands_run
             # bullet and its return summary on the following Outcome bullet.
@@ -12801,6 +13118,20 @@ def validation_text_state(text: str) -> bool | None:
             relevant_lines.append(line.strip())
         elif subject.search(line):
             relevant_lines.append(line.strip())
+    # A terminal report may include a failed exploratory invocation followed by
+    # the canonical passing validation command. Require the worker to classify
+    # that mixed history explicitly instead of letting an incidental earlier
+    # diagnostic permanently mask the final validation outcome.
+    for line in explicit_lines:
+        without_benign_negatives = re.sub(
+            r"(?i)\b(?:no|zero|0)\s+(?:errors?|failures?)\b",
+            "",
+            line,
+        )
+        if negative.search(without_benign_negatives):
+            return False
+    if explicit_lines and any(positive.search(line) for line in explicit_lines):
+        return True
     for line in relevant_lines:
         without_benign_negatives = re.sub(
             r"(?i)\b(?:no|zero|0)\s+(?:errors?|failures?)\b",
@@ -13847,10 +14178,10 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
                  artifacts_json, status, heartbeat_at, created_at, updated_at,
                  stop_reason, close_receipt, context_packet_json, routing_json,
                  validation_status, repo_root, session_id, turn_id, assignment,
-                 policy_hash, origin, final_report_present, completed_at)
+                 policy_hash, origin, final_report_present, completed_at, runtime_generation)
                 VALUES (?, ?, ?, 'root', 'read-only', 'explicit root waiver', '[]',
                         'waived', ?, ?, ?, ?, ?, ?, '{}', 'waived', ?, ?, ?, ?, ?,
-                        'root_waiver', 0, ?)
+                        'root_waiver', 0, ?, ?)
                 """,
                 (
                     waiver_id,
@@ -13868,6 +14199,7 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
                     assignment,
                     str(decision.get("policy_hash") or ""),
                     now,
+                    str(decision.get("runtime_generation") or os.environ.get("QWENDEX_RUNTIME_GENERATION_ID") or ""),
                 ),
             )
             conn.commit()
@@ -14076,8 +14408,8 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
                 """
                 INSERT INTO qwendex_agent_sessions
                 (agent_id, lane, task_id, owner, write_surface, stop_condition, artifacts_json, status, heartbeat_at, created_at, updated_at, stop_reason, close_receipt, context_packet_json, routing_json, validation_status, repo_root,
-                 session_id, turn_id, assignment, policy_hash, origin, final_report_present, completed_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, '', '', ?, ?, 'pending', ?, ?, ?, ?, ?, ?, 0, '')
+                 session_id, turn_id, assignment, policy_hash, origin, final_report_present, completed_at, runtime_generation)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, '', '', ?, ?, 'pending', ?, ?, ?, ?, ?, ?, 0, '', ?)
                 ON CONFLICT(agent_id) DO UPDATE SET
                   lane=excluded.lane,
                   task_id=excluded.task_id,
@@ -14100,7 +14432,11 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
                   policy_hash=excluded.policy_hash,
                   origin=CASE WHEN qwendex_agent_sessions.origin = '' THEN excluded.origin ELSE qwendex_agent_sessions.origin END,
                   final_report_present=0,
-                  completed_at=''
+                  completed_at='',
+                  runtime_generation=CASE
+                    WHEN qwendex_agent_sessions.runtime_generation = '' THEN excluded.runtime_generation
+                    ELSE qwendex_agent_sessions.runtime_generation
+                  END
                 """,
                 (
                     args.agent_id,
@@ -14121,6 +14457,7 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
                     assignment_text,
                     policy_hash,
                     origin,
+                    str((decision or {}).get("runtime_generation") or os.environ.get("QWENDEX_RUNTIME_GENERATION_ID") or ""),
                 ),
             )
             conn.execute(
@@ -14704,6 +15041,21 @@ def command_codex_status(args: argparse.Namespace, config: dict[str, Any]) -> di
     )
 
 
+def command_runtime(args: argparse.Namespace) -> dict[str, Any]:
+    module = script_module("qwendex_runtime")
+    return module.command(args)
+
+
+def command_manager_accept(args: argparse.Namespace) -> dict[str, Any]:
+    module = script_module("qwendex_manager_acceptance")
+    return module.command(args)
+
+
+def command_manager_evidence(args: argparse.Namespace) -> dict[str, Any]:
+    module = script_module("qwendex_manager_acceptance")
+    return module.command_evidence(args)
+
+
 def command_codex_patch(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, Any]:
     del config
     if args.action == "locations":
@@ -15005,7 +15357,7 @@ def command_line() -> argparse.ArgumentParser:
     learn.add_argument("--json", action="store_true")
 
     manager = sub.add_parser("manager")
-    manager.add_argument("action", nargs="?", choices=["status", "assign", "waive", "heartbeat", "close", "close-stale", "repair", "reconcile", "mode", "estimate", "preflight", "decision", "launch-status", "kaveman", "local"])
+    manager.add_argument("action", nargs="?", choices=["status", "assign", "waive", "heartbeat", "close", "close-stale", "repair", "reconcile", "mode", "estimate", "preflight", "decision", "launch-status", "kaveman", "local", "accept", "evidence"])
     manager.add_argument("--mode", choices=["manual", "off", "auto", "lite", "medium", "heavy", "manager", "manager_only"], default="")
     manager.add_argument("--set", default="")
     manager.add_argument("--cycle", action="store_true")
@@ -15043,7 +15395,25 @@ def command_line() -> argparse.ArgumentParser:
     manager.add_argument("--optional", action="store_true")
     manager.add_argument("--limit", type=int, default=20)
     manager.add_argument("--shortcut", action="store_true")
+    manager.add_argument("--profile", choices=["offline", "live", "production"], default="offline")
+    manager.add_argument("--run-id", default="")
+    manager.add_argument("--results-root", default="")
     manager.add_argument("--json", action="store_true")
+
+    runtime = sub.add_parser("runtime")
+    runtime.add_argument(
+        "action",
+        choices=["status", "generations", "build", "activate", "rollback", "prune"],
+        nargs="?",
+        default="status",
+    )
+    runtime.add_argument("--candidate", default="")
+    runtime.add_argument("--source-root", default="")
+    runtime.add_argument("--runtime-root", default="")
+    runtime.add_argument("--codex-bin", default="")
+    runtime.add_argument("--code-mode-host", default="")
+    runtime.add_argument("--safe", action="store_true")
+    runtime.add_argument("--json", action="store_true")
 
     codex_status = sub.add_parser("codex-status")
     codex_status.add_argument("--write", default="")
@@ -15081,6 +15451,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         return command_performance(args, config)
     if args.command == "search":
         return command_search(args, config)
+    # Runtime status and rollback must remain usable when Manager state or the
+    # selected generation is corrupt. Keep this standard-library recovery lane
+    # outside AgentPolicy and state-schema initialization.
+    if args.command == "runtime":
+        return command_runtime(args)
+    if args.command == "manager" and getattr(args, "action", "") == "accept":
+        return command_manager_accept(args)
+    if args.command == "manager" and getattr(args, "action", "") == "evidence":
+        return command_manager_evidence(args)
     manager_hook_launch = bool(
         getattr(args, "command", "") == "agent"
         and getattr(args, "action", "") == "hook"

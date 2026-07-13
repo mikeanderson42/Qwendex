@@ -1,0 +1,24 @@
+{
+  "schema_version": "qwendex.manager_performance_budget.v1",
+  "platform_scope": "Linux with Python 3.12+ and supported Codex 0.144.0",
+  "basis": "Initial production-hardening baseline with subprocess startup included and SQLite busy_timeout fixed at 2000 ms.",
+  "budgets_ms": {
+    "qdex_dry_preflight_p95": 2000,
+    "manager_status_p95": 1000,
+    "managed_hook_p95": 1500,
+    "sqlite_busy_upper_bound": 2500,
+    "terminal_recovery_p95": 2000
+  },
+  "budgets_seconds": {
+    "offline_acceptance": 240,
+    "bounded_close": 10,
+    "live_session": 900
+  },
+  "invariant_budgets": {
+    "duplicate_equivalent_lanes": 0,
+    "orphan_active_sessions": 0,
+    "unbounded_waits_or_closes": 0,
+    "policy_mutations_of_active_sessions": 0,
+    "normal_codex_contamination": 0
+  }
+}
