@@ -831,6 +831,48 @@ def test_live_supervisor_does_not_treat_pending_hook_wait_as_progress(tmp_path: 
     assert profile["termination"]["timeout_classification"] == "timeout_due_to_inactivity"
 
 
+def test_hook_lifecycle_reader_handles_late_lower_rowid_commits(tmp_path: Path) -> None:
+    lab = load_module("qwendex_optimization_lab")
+    hook_database = tmp_path / "hook-rowids.sqlite"
+    _create_hook_lifecycle_database(hook_database)
+    policy = live_supervisor_budget(lab)
+    profile = lab._new_live_runtime_profile(
+        run_id="private-test-run",
+        task_id="private-test-task",
+        variant="baseline",
+        attempt="initial",
+        candidate_id="baseline_raw_tools",
+        repository={"commit": "a" * 40, "tree_digest": "git:" + "b" * 40},
+        manifest_digest="sha256:" + "c" * 64,
+        model_policy={
+            "model_identifier": "test-model",
+            "reasoning_effort": "test",
+            "local_routing_state": "off",
+            "manager_mode": "Manager",
+            "permission_mode": "workspace-write",
+        },
+        budgets=policy,
+    )
+    with sqlite3.connect(hook_database) as connection:
+        connection.execute(
+            "INSERT INTO qwendex_performance_events (rowid, phase, event_kind, tool_family, terminal_classification) VALUES (?, ?, ?, ?, ?)",
+            (10, "subagent", "subagent_start", "collaboration", "observed"),
+        )
+    seen_rowids: set[int] = set()
+    now = float(profile["_runtime_start_monotonic"]) + 1.0
+    lab._consume_live_hook_lifecycle(profile, hook_database, seen_rowids=seen_rowids, now=now)
+
+    with sqlite3.connect(hook_database) as connection:
+        connection.execute(
+            "INSERT INTO qwendex_performance_events (rowid, phase, event_kind, tool_family, terminal_classification) VALUES (?, ?, ?, ?, ?)",
+            (1, "tool", "tool_call", "search", "completed"),
+        )
+    lab._consume_live_hook_lifecycle(profile, hook_database, seen_rowids=seen_rowids, now=now + 1.0)
+
+    assert profile["hook_lifecycle_event_counts"] == {"subagent_start": 1, "tool_completed": 1}
+    assert seen_rowids == {1, 10}
+
+
 def test_missing_live_final_message_is_not_a_guard_marker(tmp_path: Path) -> None:
     lab = load_module("qwendex_optimization_lab")
 

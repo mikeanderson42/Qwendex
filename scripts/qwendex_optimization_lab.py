@@ -1013,9 +1013,9 @@ def _consume_live_hook_lifecycle(
     profile: dict[str, Any],
     performance_db: Path | None,
     *,
-    after_rowid: int,
+    seen_rowids: set[int],
     now: float,
-) -> int:
+) -> None:
     """Consume only allowlisted metadata-only hook completions.
 
     The database belongs to one freshly isolated arm.  This reader never
@@ -1025,7 +1025,7 @@ def _consume_live_hook_lifecycle(
     """
 
     if performance_db is None or not performance_db.is_file():
-        return after_rowid
+        return
     try:
         connection = sqlite3.connect(f"file:{performance_db}?mode=ro", uri=True, timeout=0.05)
         try:
@@ -1033,22 +1033,23 @@ def _consume_live_hook_lifecycle(
                 f"""
                 SELECT rowid, phase, event_kind, tool_family, terminal_classification
                 FROM {LIVE_HOOK_PROGRESS_TABLE}
-                WHERE rowid > ?
                 ORDER BY rowid
                 """,
-                (after_rowid,),
             ).fetchall()
         finally:
             connection.close()
     except sqlite3.Error:
         # Hook capture is advisory for timing.  A transient SQLite lock or an
         # absent freshly-created table must never alter the supervisor policy.
-        return after_rowid
+        return
 
-    cursor = after_rowid
     for rowid, phase, event_kind, _tool_family, terminal in rows:
-        if isinstance(rowid, int):
-            cursor = max(cursor, rowid)
+        if not isinstance(rowid, int) or rowid in seen_rowids:
+            continue
+        # Concurrent hook transactions can commit a lower allocated rowid
+        # after a higher one.  Keep this bounded arm-local seen set instead of
+        # advancing a high-water mark and losing that late completion.
+        seen_rowids.add(rowid)
         category = ""
         if (
             phase == "tool"
@@ -1064,7 +1065,6 @@ def _consume_live_hook_lifecycle(
         _increment_runtime_count(profile, f"hook_{category}")
         _record_runtime_phase(profile, "last_trusted_progress", now=now, replace=True)
         profile["_last_trusted_monotonic"] = now
-    return cursor
 
 
 def _observe_live_structured_event(profile: dict[str, Any], event: Mapping[str, Any], *, now: float) -> None:
@@ -1315,7 +1315,7 @@ def _supervise_live_subprocess(
     if performance_capture != "metadata":
         performance_db_raw = ""
     performance_db = Path(performance_db_raw).resolve(strict=False) if performance_db_raw else None
-    hook_lifecycle_cursor = 0
+    hook_lifecycle_seen_rowids: set[int] = set()
 
     def observe_stdout(chunk: bytes) -> None:
         nonlocal stdout_buffer
@@ -1362,10 +1362,10 @@ def _supervise_live_subprocess(
         with state_lock:
             phase_offset = _consume_live_phase_markers(profile, phase_path, offset=phase_offset, now=now)
             if _runtime_phase_offset(profile, "codex_process_start") is not None:
-                hook_lifecycle_cursor = _consume_live_hook_lifecycle(
+                _consume_live_hook_lifecycle(
                     profile,
                     performance_db,
-                    after_rowid=hook_lifecycle_cursor,
+                    seen_rowids=hook_lifecycle_seen_rowids,
                     now=now,
                 )
             reason = _supervisor_timeout_reason(profile, budgets, now=now)
@@ -1410,10 +1410,10 @@ def _supervise_live_subprocess(
     with state_lock:
         phase_offset = _consume_live_phase_markers(profile, phase_path, offset=phase_offset, now=now)
         if _runtime_phase_offset(profile, "codex_process_start") is not None:
-            hook_lifecycle_cursor = _consume_live_hook_lifecycle(
+            _consume_live_hook_lifecycle(
                 profile,
                 performance_db,
-                after_rowid=hook_lifecycle_cursor,
+                seen_rowids=hook_lifecycle_seen_rowids,
                 now=now,
             )
         _record_runtime_phase(profile, "child_exit", now=now)

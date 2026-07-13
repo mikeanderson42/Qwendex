@@ -91,8 +91,10 @@ arm, the supervisor therefore consumes only completed allowlisted tool and
 subagent lifecycle categories from that arm's isolated performance database
 after the Codex root starts. It records fixed counts only; raw hook fields and
 identifiers remain excluded. A pending lifecycle entry, including a native
-wait, never resets inactivity, and the timing reader cannot change any hook or
-Manager safety decision.
+wait, never resets inactivity. Because concurrent hook transactions can commit
+out of row-ID order, the private reader de-duplicates an arm-local seen set
+instead of assuming a monotonic database cursor. The timing reader cannot
+change any hook or Manager safety decision.
 
 ## Patched Codex Contract
 
