@@ -8,6 +8,8 @@ import sqlite3
 import subprocess
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[2]
 QWENDEX = ROOT / "scripts" / "qwendex"
@@ -197,6 +199,79 @@ def test_production_acceptance_dispatches_executable_profiles_and_install_contra
         "normal_codex_isolation_receipt.json",
     ):
         assert required in install_source
+
+
+def test_install_acceptance_uses_canonical_runtime_validation_without_legacy_flag(
+    tmp_path, monkeypatch
+):
+    install_path = ROOT / "scripts" / "qwendex_manager_install_acceptance.py"
+    spec = importlib.util.spec_from_file_location("qwendex_manager_install_runtime_test", install_path)
+    assert spec is not None and spec.loader is not None
+    install = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(install)
+
+    generation_id = "rtg-" + "1" * 20
+    runtime_root = tmp_path / ".qwendex-dev" / "runtime"
+    generation_root = runtime_root / "generations" / generation_id
+    generation_root.mkdir(parents=True)
+    (tmp_path / ".qwendex-dev" / "bin").mkdir(parents=True)
+    (runtime_root / "current.json").write_text(
+        json.dumps({"current": generation_id}),
+        encoding="utf-8",
+    )
+    manifest = {
+        "schema_version": "qwendex.runtime_generation.v1",
+        "generation_id": generation_id,
+        "status": "validated",
+        "result": "pass",
+    }
+    (generation_root / "generation.json").write_text(json.dumps(manifest), encoding="utf-8")
+    observed: dict[str, object] = {}
+
+    def fake_run(command, **kwargs):
+        observed["command"] = command
+        observed["kwargs"] = kwargs
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=json.dumps(
+                {
+                    "status": "pass",
+                    "data": {
+                        "current_generation": {
+                            "generation_id": generation_id,
+                            "status": "validated",
+                            "valid": True,
+                        }
+                    },
+                }
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr(install.subprocess, "run", fake_run)
+
+    assert install.selected_manifest(tmp_path) == manifest
+    assert observed["command"] == [
+        str(tmp_path / ".qwendex-dev" / "bin" / "qwendex-runtime-recovery"),
+        "status",
+        "--runtime-root",
+        str(runtime_root),
+        "--json",
+    ]
+    assert "validated" not in manifest
+
+    def invalid_run(command, **kwargs):
+        return subprocess.CompletedProcess(
+            command,
+            1,
+            stdout=json.dumps({"status": "blocked", "data": {}}),
+            stderr="",
+        )
+
+    monkeypatch.setattr(install.subprocess, "run", invalid_run)
+    with pytest.raises(install.InstallAcceptanceError, match="no validated selected runtime"):
+        install.selected_manifest(tmp_path)
 
 
 def test_manager_acceptance_artifact_contract_requires_all_provenance_fields():

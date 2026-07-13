@@ -748,3 +748,18 @@ that two formatting-only patch-template changes produced a noncanonical fresh
 source digest and correctly blocked installation. Binding native waits to the
 sealed policy and restoring byte-identical patch output closes both gaps
 without changing the canonical Codex patch or binary contract.
+
+## Install Acceptance Runtime Authority
+
+Decision: fresh-install and upgrade acceptance resolve the selected generation
+through the sync-installed shell recovery command's canonical runtime status
+validator. They require the selected generation to be integrity-valid with
+`status: validated` and a sealed manifest whose result is `pass`; the harness
+does not maintain a parallel manifest-validity flag.
+
+Reason: production install acceptance built and activated a valid generation
+but then consulted a removed `generation.json.validated` boolean. The stale
+harness predicate falsely reported that no selected generation existed after a
+successful fresh build. Reusing the same standard-library validator as runtime
+status and rollback keeps install evidence aligned with the activation trust
+boundary and prevents schema drift between product and acceptance code.

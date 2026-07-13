@@ -234,7 +234,41 @@ def selected_manifest(source: Path) -> dict[str, Any]:
     selection = read_json(runtime_root / "current.json")
     generation_id = str(selection.get("current") or "")
     manifest = read_json(runtime_root / "generations" / generation_id / "generation.json")
-    if not generation_id or manifest.get("generation_id") != generation_id or not manifest.get("validated"):
+    recovery = source / ".qwendex-dev" / "bin" / "qwendex-runtime-recovery"
+    try:
+        status = subprocess.run(
+            [str(recovery), "status", "--runtime-root", str(runtime_root), "--json"],
+            cwd=source,
+            text=True,
+            capture_output=True,
+            timeout=120,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise InstallAcceptanceError(
+            "isolated install has no validated selected runtime generation"
+        ) from exc
+    try:
+        status_payload = json.loads(status.stdout)
+    except json.JSONDecodeError:
+        status_payload = {}
+    status_data = status_payload.get("data") if isinstance(status_payload.get("data"), Mapping) else {}
+    current = (
+        status_data.get("current_generation")
+        if isinstance(status_data.get("current_generation"), Mapping)
+        else {}
+    )
+    if (
+        status.returncode
+        or status_payload.get("status") != "pass"
+        or not generation_id
+        or current.get("generation_id") != generation_id
+        or current.get("valid") is not True
+        or current.get("status") != "validated"
+        or manifest.get("generation_id") != generation_id
+        or manifest.get("status") != "validated"
+        or manifest.get("result") != "pass"
+    ):
         raise InstallAcceptanceError("isolated install has no validated selected runtime generation")
     return manifest
 

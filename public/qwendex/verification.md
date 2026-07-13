@@ -38,7 +38,10 @@ Live runs fresh Medium, Heavy, repeated non-Ultra Manager, five-turn Manager,
 Ultra-coexistence, and two-repository concurrent fixtures. Production runs
 self-hosting first and adds fresh build/install, v0.5.7 upgrade, shell rollback,
 normal-Codex isolation, and sanitized manifest assembly. No profile chooses an
-artifact through an ambiguous latest pointer.
+artifact through an ambiguous latest pointer. Fresh and upgraded runtime
+selection is accepted only when the sync-installed shell recovery validator
+reports the selected generation integrity-valid with `status: validated`;
+the acceptance harness does not infer validity from a separate manifest flag.
 
 Development worktree gates:
 
