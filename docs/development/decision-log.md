@@ -92,9 +92,10 @@ subagent lifecycle categories from that arm's isolated performance database
 after the Codex root starts. It records fixed counts only; raw hook fields and
 identifiers remain excluded. A pending lifecycle entry, including a native
 wait, never resets inactivity. Because concurrent hook transactions can commit
-out of row-ID order, the private reader de-duplicates an arm-local seen set
-instead of assuming a monotonic database cursor. The timing reader cannot
-change any hook or Manager safety decision.
+out of row-ID order, the private reader keeps an arm-local safe state map
+instead of assuming a monotonic database cursor, so an in-place `pending` to
+`completed` transition is not lost. It never records identifiers or payloads.
+The timing reader cannot change any hook or Manager safety decision.
 
 ## Patched Codex Contract
 

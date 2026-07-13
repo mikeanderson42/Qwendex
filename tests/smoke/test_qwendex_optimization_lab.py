@@ -831,7 +831,7 @@ def test_live_supervisor_does_not_treat_pending_hook_wait_as_progress(tmp_path: 
     assert profile["termination"]["timeout_classification"] == "timeout_due_to_inactivity"
 
 
-def test_hook_lifecycle_reader_handles_late_lower_rowid_commits(tmp_path: Path) -> None:
+def test_hook_lifecycle_reader_handles_late_lower_rowid_commits_and_terminal_updates(tmp_path: Path) -> None:
     lab = load_module("qwendex_optimization_lab")
     hook_database = tmp_path / "hook-rowids.sqlite"
     _create_hook_lifecycle_database(hook_database)
@@ -858,19 +858,26 @@ def test_hook_lifecycle_reader_handles_late_lower_rowid_commits(tmp_path: Path) 
             "INSERT INTO qwendex_performance_events (rowid, phase, event_kind, tool_family, terminal_classification) VALUES (?, ?, ?, ?, ?)",
             (10, "subagent", "subagent_start", "collaboration", "observed"),
         )
-    seen_rowids: set[int] = set()
+    row_states: dict[int, str] = {}
     now = float(profile["_runtime_start_monotonic"]) + 1.0
-    lab._consume_live_hook_lifecycle(profile, hook_database, seen_rowids=seen_rowids, now=now)
+    lab._consume_live_hook_lifecycle(profile, hook_database, row_states=row_states, now=now)
 
     with sqlite3.connect(hook_database) as connection:
         connection.execute(
             "INSERT INTO qwendex_performance_events (rowid, phase, event_kind, tool_family, terminal_classification) VALUES (?, ?, ?, ?, ?)",
-            (1, "tool", "tool_call", "search", "completed"),
+            (1, "tool", "tool_call", "search", "pending"),
         )
-    lab._consume_live_hook_lifecycle(profile, hook_database, seen_rowids=seen_rowids, now=now + 1.0)
+    lab._consume_live_hook_lifecycle(profile, hook_database, row_states=row_states, now=now + 1.0)
+
+    with sqlite3.connect(hook_database) as connection:
+        connection.execute(
+            "UPDATE qwendex_performance_events SET terminal_classification = ? WHERE rowid = ?",
+            ("completed", 1),
+        )
+    lab._consume_live_hook_lifecycle(profile, hook_database, row_states=row_states, now=now + 2.0)
 
     assert profile["hook_lifecycle_event_counts"] == {"subagent_start": 1, "tool_completed": 1}
-    assert seen_rowids == {1, 10}
+    assert row_states == {1: "completed", 10: "observed"}
 
 
 def test_missing_live_final_message_is_not_a_guard_marker(tmp_path: Path) -> None:

@@ -1013,7 +1013,7 @@ def _consume_live_hook_lifecycle(
     profile: dict[str, Any],
     performance_db: Path | None,
     *,
-    seen_rowids: set[int],
+    row_states: dict[int, str],
     now: float,
 ) -> None:
     """Consume only allowlisted metadata-only hook completions.
@@ -1044,17 +1044,24 @@ def _consume_live_hook_lifecycle(
         return
 
     for rowid, phase, event_kind, _tool_family, terminal in rows:
-        if not isinstance(rowid, int) or rowid in seen_rowids:
+        if not isinstance(rowid, int):
+            continue
+        terminal_state = str(terminal or "")
+        previous_state = row_states.get(rowid)
+        if previous_state == terminal_state:
             continue
         # Concurrent hook transactions can commit a lower allocated rowid
-        # after a higher one.  Keep this bounded arm-local seen set instead of
-        # advancing a high-water mark and losing that late completion.
-        seen_rowids.add(rowid)
+        # after a higher one, and a PreToolUse row can later change from
+        # ``pending`` to ``completed`` in place. Keep only row-local terminal
+        # states, rather than advancing a high-water mark or treating first
+        # observation as terminal.
+        row_states[rowid] = terminal_state
         category = ""
         if (
             phase == "tool"
             and event_kind == LIVE_HOOK_PROGRESS_TOOL_EVENT
-            and terminal == "completed"
+            and terminal_state == "completed"
+            and previous_state != "completed"
         ):
             category = "tool_completed"
         elif phase == "subagent" and event_kind in LIVE_HOOK_PROGRESS_SUBAGENT_EVENTS:
@@ -1315,7 +1322,7 @@ def _supervise_live_subprocess(
     if performance_capture != "metadata":
         performance_db_raw = ""
     performance_db = Path(performance_db_raw).resolve(strict=False) if performance_db_raw else None
-    hook_lifecycle_seen_rowids: set[int] = set()
+    hook_lifecycle_row_states: dict[int, str] = {}
 
     def observe_stdout(chunk: bytes) -> None:
         nonlocal stdout_buffer
@@ -1365,7 +1372,7 @@ def _supervise_live_subprocess(
                 _consume_live_hook_lifecycle(
                     profile,
                     performance_db,
-                    seen_rowids=hook_lifecycle_seen_rowids,
+                    row_states=hook_lifecycle_row_states,
                     now=now,
                 )
             reason = _supervisor_timeout_reason(profile, budgets, now=now)
@@ -1413,7 +1420,7 @@ def _supervise_live_subprocess(
             _consume_live_hook_lifecycle(
                 profile,
                 performance_db,
-                seen_rowids=hook_lifecycle_seen_rowids,
+                row_states=hook_lifecycle_row_states,
                 now=now,
             )
         _record_runtime_phase(profile, "child_exit", now=now)
