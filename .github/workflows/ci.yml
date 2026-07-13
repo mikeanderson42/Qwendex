@@ -83,6 +83,12 @@ jobs:
       - name: Run full test suite
         run: python3 -m pytest -q
 
+      - name: Verify Manager production and immutable-runtime contracts
+        run: |
+          python3 -m pytest -q \
+            tests/smoke/test_qwendex_manager_production.py \
+            tests/smoke/test_qwendex_runtime_generations.py
+
       - name: Run strict public surface checks
         env:
           QWENDEX_STATE_DB: ${{ runner.temp }}/qwendex-ci.sqlite
@@ -221,6 +227,7 @@ jobs:
                   "downstream_install",
                   "json",
                   "lint",
+                  "manager_production_contract",
                   "pytest",
                   "python_floor",
                   "strict_surface",

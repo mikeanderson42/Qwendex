@@ -311,7 +311,7 @@ def test_qwendex_version_and_config_are_in_sync():
     sample_config = json.loads((ROOT / "config" / "qwendex" / "qwendex.sample.json").read_text(encoding="utf-8"))
     version = json_result("version", "--json")
 
-    assert qwendex.VERSION == "0.5.7"
+    assert qwendex.VERSION == "0.6.0-rc.1"
     assert version["data"]["version"] == qwendex.VERSION
     assert project_config["version"] == qwendex.VERSION
     assert sample_config["version"] == qwendex.VERSION
@@ -1745,7 +1745,7 @@ def assert_same_root_supports_quoted_path(tmp_path, path_fragment):
 
     assert config["projects"] == {str(checkout): {"trust_level": "trusted"}}
     assert qwendex.returncode == 0, qwendex.stderr or qwendex.stdout
-    assert json.loads(qwendex.stdout)["data"]["version"] == "0.5.7"
+    assert json.loads(qwendex.stdout)["data"]["version"] == "0.6.0-rc.1"
     assert qwendex_dev.returncode == 0, qwendex_dev.stderr or qwendex_dev.stdout
     assert sourced_env.returncode == 0, sourced_env.stderr or sourced_env.stdout
     assert sourced_env.stdout.strip() == str(checkout)
@@ -2314,11 +2314,13 @@ def test_qwendex_codex_status_warns_on_state_db_mismatch(tmp_path):
         "QWENDEX_STATE_DB": str(tmp_path / "state-a.sqlite"),
         "QWENDEX_CODEX_STATUS_FILE": str(status_file),
         "QWENDEX_FORCE_LOCAL_QWEN_AVAILABLE": "1",
+        "QWENDEX_MANAGER_ALLOW_UNHOOKED": "1",
     }
     env_b = {
         "QWENDEX_STATE_DB": str(tmp_path / "state-b.sqlite"),
         "QWENDEX_CODEX_STATUS_FILE": str(status_file),
         "QWENDEX_FORCE_LOCAL_QWEN_AVAILABLE": "1",
+        "QWENDEX_MANAGER_ALLOW_UNHOOKED": "1",
     }
 
     json_result("manager", "mode", "--set", "manager", "--json", env=env_a)
@@ -4935,6 +4937,30 @@ def test_qwendex_concurrent_agent_output_index_retains_every_entry(tmp_path, mon
     )
 
 
+def test_qwendex_agent_output_uses_writable_runtime_root_when_source_is_sealed(tmp_path, monkeypatch):
+    qwendex = load_qwendex()
+    immutable_root = tmp_path / "immutable-generation" / "tree"
+    immutable_root.mkdir(parents=True)
+    immutable_root.chmod(0o555)
+    artifact_root = tmp_path / "operator-root" / ".qwendex"
+    monkeypatch.setattr(qwendex, "ROOT", immutable_root)
+    monkeypatch.setenv("QWENDEX_AGENT_ARTIFACT_ROOT", str(artifact_root))
+
+    capture = qwendex.write_agent_output_artifacts(
+        event={"run_id": "immutable-runtime"},
+        session={"lane": "verification", "task_id": "immutable-runtime"},
+        agent_id="sealed-runtime-verifier",
+        message="raw verifier output",
+        report_message="FINAL_REPORT\nstatus: completed\nsummary: verified",
+        final_status={"status": "completed", "validation_status": "pass"},
+        now="2026-07-13T00:00:00Z",
+    )
+
+    assert not (immutable_root / ".qwendex").exists()
+    assert (artifact_root / "runs" / "immutable-runtime" / "sealed-runtime-verifier" / "raw-output.md").is_file()
+    assert all(Path(path).is_file() for path in capture["artifacts"])
+
+
 def test_qwendex_agent_output_paths_separate_repositories_with_reused_task_ids(tmp_path, monkeypatch):
     qwendex = load_qwendex()
     monkeypatch.setattr(qwendex, "ROOT", tmp_path)
@@ -5340,12 +5366,23 @@ def test_qwendex_stop_validation_evidence_requires_positive_outcome_language(tmp
         "Validation: all tests passed",
         "Validation: clean; no errors",
         "commands_run:\n- `pytest -q`\n- Outcome: 15 passed in 0.02s",
+        (
+            "validation_status: PASS\n"
+            "commands_run:\n"
+            "- `pytest -q` — exploratory launcher failed during collection\n"
+            "- `python -m pytest -q` — final canonical suite: 15 passed"
+        ),
     ):
         assert qwendex.stop_event_has_validation_evidence({}, message, config=config) is True, message
 
     assert qwendex.stop_event_has_validation_evidence(
         {},
         "commands_run:\n- `pytest -q`\n- Outcome: 1 failed in 0.02s",
+        config=config,
+    ) is False
+    assert qwendex.stop_event_has_validation_evidence(
+        {},
+        "validation_status: FAIL\ncommands_run:\n- `pytest -q` — 15 passed",
         config=config,
     ) is False
 
