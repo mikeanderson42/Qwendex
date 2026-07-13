@@ -241,6 +241,35 @@ def test_manager_acceptance_pytest_environment_drops_parent_generation_binding()
     assert isolated == {"HOME": "/isolated/home"}
 
 
+def test_manager_acceptance_sanitizes_embedded_workspace_paths_and_rejects_private_paths(tmp_path):
+    acceptance_path = ROOT / "scripts" / "qwendex_manager_acceptance.py"
+    spec = importlib.util.spec_from_file_location("qwendex_manager_privacy_test", acceptance_path)
+    assert spec is not None and spec.loader is not None
+    acceptance = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(acceptance)
+
+    command = acceptance.relative_command(
+        [
+            "python3",
+            f"--junitxml={ROOT / '.qwendex-dev' / 'results' / 'pytest.xml'}",
+            str(ROOT / "tests" / "smoke"),
+        ]
+    )
+    assert command == [
+        "python3",
+        "--junitxml=.qwendex-dev/results/pytest.xml",
+        "tests/smoke",
+    ]
+
+    private_artifact = tmp_path / "summary.json"
+    private_artifact.write_text('{"working_directory":"/home/alice/private/repo"}\n', encoding="utf-8")
+    privacy = acceptance.scan_privacy([private_artifact])
+    assert privacy["status"] == "fail"
+    assert privacy["failures"] == [
+        {"artifact": "summary.json", "reason": "private_absolute_path"}
+    ]
+
+
 def test_manager_evidence_distinguishes_current_history_debt_stale_and_quarantine(tmp_path):
     results = tmp_path / "results"
     current_run = "current-run-001"

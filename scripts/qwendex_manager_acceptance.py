@@ -83,6 +83,18 @@ SECRET_PATTERN = re.compile(
     r"(?:sk-[A-Za-z0-9_-]{16,}|ghp_[A-Za-z0-9_]{16,}|github_pat_[A-Za-z0-9_]{16,}|"
     r"(?i:password|secret|api[_-]?key)\s*[:=]\s*['\"]?[A-Za-z0-9_./+=-]{12,})"
 )
+PRIVATE_PATH_PATTERNS = (
+    re.compile(r"(?<![A-Za-z0-9_.-])/home/[A-Za-z0-9_.-]+(?=/)"),
+    re.compile(r"(?<![A-Za-z0-9_.-])/var/home/[A-Za-z0-9_.-]+(?=/)"),
+    re.compile(r"(?<![A-Za-z0-9_.-])/Users/[A-Za-z0-9_.-]+(?=/)"),
+    re.compile(r"(?<![A-Za-z0-9_.-])/root(?=/)"),
+    re.compile(
+        r"(?<![A-Za-z0-9_.-])/mnt/[a-z]/Users/[A-Za-z0-9_.-]+(?=/)", re.IGNORECASE
+    ),
+    re.compile(
+        r"(?<![A-Za-z0-9_.-])[A-Za-z]:\\Users\\[A-Za-z0-9_.-]+(?=\\)", re.IGNORECASE
+    ),
+)
 REQUIRED_ARTIFACT_FIELDS = frozenset(
     {
         "schema_version",
@@ -197,15 +209,21 @@ def safe_run_id(raw: str) -> str:
 
 
 def relative_command(command: Iterable[str]) -> list[str]:
+    def normalize(value: str) -> str:
+        if value == str(ROOT):
+            return "."
+        if value.startswith(str(ROOT) + os.sep):
+            return str(Path(value).relative_to(ROOT))
+        if "=" in value:
+            option, assigned = value.split("=", 1)
+            normalized_assigned = normalize(assigned)
+            if normalized_assigned != assigned:
+                return f"{option}={normalized_assigned}"
+        return value
+
     normalized: list[str] = []
     for item in command:
-        text = str(item)
-        if text == str(ROOT):
-            normalized.append(".")
-        elif text.startswith(str(ROOT) + os.sep):
-            normalized.append(str(Path(text).relative_to(ROOT)))
-        else:
-            normalized.append(text)
+        normalized.append(normalize(str(item)))
     return normalized
 
 
@@ -350,6 +368,8 @@ def scan_privacy(paths: Iterable[Path]) -> dict[str, Any]:
             continue
         if SECRET_PATTERN.search(text):
             failures.append({"artifact": path.name, "reason": "credential_pattern"})
+        if any(pattern.search(text) for pattern in PRIVATE_PATH_PATTERNS):
+            failures.append({"artifact": path.name, "reason": "private_absolute_path"})
     return {
         "status": "pass" if not failures else "fail",
         "scanned_artifact_count": sum(1 for path in paths if path.is_file()),

@@ -222,7 +222,7 @@ def evaluate(corpus_path: Path, run_id: str) -> dict[str, Any]:
                 "exit_code": 0 if passed else 1,
             }
         ],
-        "working_directory": str(ROOT),
+        "working_directory": ".",
         "corpus": {
             "path": str(corpus_path.relative_to(ROOT) if corpus_path.is_relative_to(ROOT) else corpus_path),
             "sha256": sha256_file(corpus_path),
