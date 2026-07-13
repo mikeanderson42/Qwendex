@@ -193,6 +193,8 @@ def test_production_acceptance_dispatches_executable_profiles_and_install_contra
         "fresh_install_non_ultra_live_manager",
         "upgrade_v0_5_7",
         "upgrade_old_dependency_install",
+        "upgrade_old_hook_install",
+        "upgrade_old_hook_verify",
         "upgrade_historical_evidence_classification",
         "rollback_shell_recovery",
         "rollback_injected_activation_failure",
@@ -279,7 +281,7 @@ def test_install_acceptance_uses_canonical_runtime_validation_without_legacy_fla
         install.selected_manifest(tmp_path)
 
 
-def test_upgrade_fixture_bootstraps_legacy_user_dependencies_without_system_writes(tmp_path):
+def test_upgrade_fixture_bootstraps_legacy_dependencies_and_hooks_without_system_writes(tmp_path):
     install_path = ROOT / "scripts" / "qwendex_manager_install_acceptance.py"
     spec = importlib.util.spec_from_file_location("qwendex_manager_install_upgrade_test", install_path)
     assert spec is not None and spec.loader is not None
@@ -293,6 +295,26 @@ def test_upgrade_fixture_bootstraps_legacy_user_dependencies_without_system_writ
         "--no-system",
         "--json",
     ]
+    for action in ("--install", "--verify"):
+        assert install.legacy_hook_command(source, "/isolated/codex-home", action) == [
+            str(source / "scripts" / "qwendex"),
+            "agent",
+            "hook-config",
+            action,
+            "--codex-home",
+            "/isolated/codex-home",
+            "--json",
+        ]
+    with pytest.raises(install.InstallAcceptanceError, match="unsupported legacy hook action"):
+        install.legacy_hook_command(source, "/isolated/codex-home", "--force")
+    assert install.legacy_codex_home(
+        {"QWENDEX_CODEX_HOME": "/legacy/codex-home"}
+    ) == "/legacy/codex-home"
+    assert install.legacy_codex_home(
+        {"CODEX_HOME": "/candidate/codex-home"}
+    ) == "/candidate/codex-home"
+    with pytest.raises(install.InstallAcceptanceError, match="no managed Codex home"):
+        install.legacy_codex_home({})
 
 
 def test_manager_acceptance_artifact_contract_requires_all_provenance_fields():

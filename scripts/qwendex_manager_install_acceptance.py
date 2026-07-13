@@ -250,6 +250,31 @@ def legacy_dependency_install_command(source: Path) -> list[str]:
     ]
 
 
+def legacy_hook_command(source: Path, codex_home: str, action: str) -> list[str]:
+    if action not in {"--install", "--verify"}:
+        raise InstallAcceptanceError(f"unsupported legacy hook action: {action}")
+    return [
+        str(source / "scripts" / "qwendex"),
+        "agent",
+        "hook-config",
+        action,
+        "--codex-home",
+        codex_home,
+        "--json",
+    ]
+
+
+def legacy_codex_home(environment: Mapping[str, str]) -> str:
+    codex_home = str(
+        environment.get("QWENDEX_CODEX_HOME")
+        or environment.get("CODEX_HOME")
+        or ""
+    ).strip()
+    if not codex_home:
+        raise InstallAcceptanceError("legacy environment has no managed Codex home")
+    return codex_home
+
+
 def selected_manifest(source: Path) -> dict[str, Any]:
     runtime_root = source / ".qwendex-dev" / "runtime"
     selection = read_json(runtime_root / "current.json")
@@ -747,6 +772,30 @@ def run_acceptance(run_id: str, output_root: Path) -> dict[str, Any]:
             if label == "upgrade_old_dependency_install":
                 require_pass(payload, label)
         old_environment = generated_environment(upgrade_source, upgrade_base)
+        old_hook_results: dict[str, dict[str, Any]] = {}
+        for label, action in (
+            ("upgrade_old_hook_install", "--install"),
+            ("upgrade_old_hook_verify", "--verify"),
+        ):
+            hook_record, hook_payload = command_record(
+                legacy_hook_command(
+                    upgrade_source,
+                    legacy_codex_home(old_environment),
+                    action,
+                ),
+                cwd=upgrade_source,
+                environment=old_environment,
+                raw_root=raw_root,
+                label=label,
+                public_command=(
+                    f"v0.5.7 scripts/qwendex agent hook-config {action} "
+                    "--codex-home <isolated-home> --json"
+                ),
+                timeout=120,
+            )
+            commands.append(hook_record)
+            require_pass(hook_payload, label)
+            old_hook_results[label] = hook_payload
         old_mode_record, old_mode = command_record(
             [str(upgrade_source / "scripts" / "qwendex"), "manager", "mode", "--set", "manager", "--json"],
             cwd=upgrade_source,
@@ -1060,6 +1109,11 @@ def run_acceptance(run_id: str, output_root: Path) -> dict[str, Any]:
         }
         upgrade_checks = {
             "started_from_v0_5_7": old_checkout == v057_commit,
+            "old_managed_hooks_installed_and_verified": all(
+                payload.get("status") == "pass"
+                for payload in old_hook_results.values()
+            )
+            and len(old_hook_results) == 2,
             "old_qdex_preflight_passed": (
                 ((old_dry.get("manager_preflight") or {}).get("data") or {}).get("stop_status")
                 == "STOP_MANAGER_PREFLIGHT_READY"
