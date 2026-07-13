@@ -219,6 +219,28 @@ def test_manager_acceptance_artifact_contract_requires_all_provenance_fields():
     assert acceptance.artifact_contract_errors(payload) == ["missing:artifact_digests"]
 
 
+def test_manager_acceptance_pytest_environment_drops_parent_generation_binding():
+    acceptance_path = ROOT / "scripts" / "qwendex_manager_acceptance.py"
+    spec = importlib.util.spec_from_file_location("qwendex_manager_pytest_environment_test", acceptance_path)
+    assert spec is not None and spec.loader is not None
+    acceptance = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(acceptance)
+    isolated = acceptance.isolated_pytest_environment(
+        {
+            "HOME": "/isolated/home",
+            "QWENDEX_STATE_DB": "/isolated/state.sqlite",
+            "QWENDEX_RUNTIME_GENERATION_REQUIRED": "1",
+            "QWENDEX_RUNTIME_GENERATION_ID": "rtg-parent",
+            "QWENDEX_RUNTIME_ROOT": "/parent/runtime",
+            "QWENDEX_ROOT": "/parent/generation/tree",
+            "QWENDEX_DEV_ROOT": "/parent/dev",
+            "QWENDEX_CODEX_HOME": "/parent/codex-home",
+            "QWENDEX_HOOK_GENERATION": "rtg-parent",
+        }
+    )
+    assert isolated == {"HOME": "/isolated/home"}
+
+
 def test_manager_evidence_distinguishes_current_history_debt_stale_and_quarantine(tmp_path):
     results = tmp_path / "results"
     current_run = "current-run-001"

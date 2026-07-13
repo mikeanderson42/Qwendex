@@ -100,6 +100,25 @@ REQUIRED_ARTIFACT_FIELDS = frozenset(
         "privacy_status",
     }
 )
+PYTEST_RUNTIME_ISOLATION_KEYS = frozenset(
+    {
+        "CODEX_HOME",
+        "QWENDEX_AGENT_ARTIFACT_ROOT",
+        "QWENDEX_CODEX_HOME",
+        "QWENDEX_CODEX_RUNTIME",
+        "QWENDEX_CODEX_STATUS_FILE",
+        "QWENDEX_DEV_ROOT",
+        "QWENDEX_DEV_SOURCE_ROOT",
+        "QWENDEX_HOOK_GENERATION",
+        "QWENDEX_LEDGER_DB",
+        "QWENDEX_META_ROOT",
+        "QWENDEX_PERFORMANCE_DB",
+        "QWENDEX_RESULTS_ROOT",
+        "QWENDEX_ROOT",
+        "QWENDEX_RUN_ID",
+        "QWENDEX_STATE_DB",
+    }
+)
 
 
 class AcceptanceError(RuntimeError):
@@ -135,6 +154,14 @@ def artifact_contract_errors(payload: Mapping[str, Any]) -> list[str]:
     if "privacy_status" in payload and payload.get("privacy_status") not in {"pass", "fail", "unknown"}:
         errors.append("invalid:privacy_status")
     return errors
+
+
+def isolated_pytest_environment(environment: Mapping[str, str]) -> dict[str, str]:
+    isolated = dict(environment)
+    for key in tuple(isolated):
+        if key in PYTEST_RUNTIME_ISOLATION_KEYS or key.startswith("QWENDEX_RUNTIME_"):
+            isolated.pop(key, None)
+    return isolated
 
 
 def atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
@@ -205,11 +232,14 @@ def read_json(path: Path) -> dict[str, Any]:
 
 
 def selected_runtime_manifest() -> dict[str, Any]:
+    generation_id_raw = str(os.environ.get("QWENDEX_RUNTIME_GENERATION_ID") or "").strip()
     generation_dir_raw = str(os.environ.get("QWENDEX_RUNTIME_GENERATION_DIR") or "").strip()
     if generation_dir_raw:
         manifest = read_json(Path(generation_dir_raw) / "generation.json")
-        if manifest:
+        if manifest and (not generation_id_raw or manifest.get("generation_id") == generation_id_raw):
             return manifest
+    if generation_id_raw:
+        return {}
     dev_root = Path(str(os.environ.get("QWENDEX_DEV_ROOT") or ROOT)).expanduser()
     runtime_root = Path(str(os.environ.get("QWENDEX_RUNTIME_ROOT") or dev_root / ".qwendex-dev" / "runtime"))
     selector = read_json(runtime_root / "current.json")
@@ -385,7 +415,7 @@ def offline_profile(run_id: str, results_root: Path) -> dict[str, Any]:
     ]
     pytest_record = run_recorded(
         pytest_command,
-        environment=environment,
+        environment=isolated_pytest_environment(environment),
         stdout_path=run_root / "pytest.stdout.log",
         stderr_path=run_root / "pytest.stderr.log",
         timeout=900,
