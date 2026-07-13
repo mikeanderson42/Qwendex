@@ -48,6 +48,9 @@ managed hooks, then proves its preflight before the candidate checkout,
 migration, and rollback checks.
 The first upgraded status may be `standby` when the isolated state has no
 sessions; the gate accepts it only with Manager mode and ready write safety.
+Normal-Codex isolation compares stable upstream config, hooks, and installation
+identity plus complete decoy homes. Authentication is intentionally shared;
+the volatile version cache is copied into each generation rather than linked.
 
 Development worktree gates:
 

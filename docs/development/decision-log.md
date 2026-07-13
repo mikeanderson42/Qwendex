@@ -784,3 +784,20 @@ without verified lifecycle hooks and does not install them implicitly on sync.
 After candidate sync, an empty isolated Manager state is healthy when status is
 `standby`; acceptance additionally requires Manager mode, no errors, and ready
 single-writer safety instead of treating the absence of sessions as a failure.
+
+## Normal Codex Version-Cache Isolation
+
+Decision: validated Qwendex generations and the dev seed home share only the
+authentication file by symlink. They copy `version.json` and `installation_id`
+into the isolated Codex home. Normal-home acceptance hashes stable upstream
+control files (`config.toml`, `hooks.json`, and `installation_id`); full
+isolated decoy trees still include and protect their version caches and all
+sentinel files.
+
+Reason: Codex may rewrite `~/.codex/version.json` during an ordinary concurrent
+version check. Sharing that volatile cache let a Qwendex runtime affect the
+normal home and also made a long isolation comparison fail because an unrelated
+normal Codex process refreshed it. A generation-local copy removes the write
+path, while excluding the volatile host cache from the cross-process snapshot
+preserves a deterministic control-file claim. Authentication remains shared
+intentionally so the isolated runtime can use the operator's login.

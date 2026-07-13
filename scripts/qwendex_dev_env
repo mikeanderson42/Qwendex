@@ -420,8 +420,11 @@ link_codex_identity() {
   if [[ -f "$HOME/.codex/auth.json" && ! -e "$CODEX_HOME_DIR/auth.json" ]]; then
     ln -s "$HOME/.codex/auth.json" "$CODEX_HOME_DIR/auth.json"
   fi
+  if [[ -L "$CODEX_HOME_DIR/version.json" ]]; then
+    rm "$CODEX_HOME_DIR/version.json"
+  fi
   if [[ -f "$HOME/.codex/version.json" && ! -e "$CODEX_HOME_DIR/version.json" ]]; then
-    ln -s "$HOME/.codex/version.json" "$CODEX_HOME_DIR/version.json"
+    cp "$HOME/.codex/version.json" "$CODEX_HOME_DIR/version.json"
   fi
   if [[ -f "$HOME/.codex/installation_id" && ! -e "$CODEX_HOME_DIR/installation_id" ]]; then
     cp "$HOME/.codex/installation_id" "$CODEX_HOME_DIR/installation_id"

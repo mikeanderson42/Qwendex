@@ -216,6 +216,34 @@ def test_runtime_lock_wait_is_bounded(tmp_path):
                 raise AssertionError("nested lock unexpectedly acquired")
 
 
+def test_runtime_shares_auth_but_copies_version_cache_and_installation_identity(
+    tmp_path, monkeypatch
+):
+    home = tmp_path / "home"
+    normal_home = home / ".codex"
+    normal_home.mkdir(parents=True)
+    authentication = normal_home / "auth.json"
+    version = normal_home / "version.json"
+    installation = normal_home / "installation_id"
+    authentication.write_text('{"auth":"fixture"}\n', encoding="utf-8")
+    version.write_text('{"latest":"0.144.0"}\n', encoding="utf-8")
+    installation.write_text("installation-fixture\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+
+    codex_home = tmp_path / "generation" / "codex_home"
+    codex_home.mkdir(parents=True)
+    RUNTIME.link_identity_files(codex_home)
+
+    assert (codex_home / "auth.json").is_symlink()
+    assert (codex_home / "auth.json").resolve() == authentication.resolve()
+    assert not (codex_home / "version.json").is_symlink()
+    assert (codex_home / "version.json").read_bytes() == version.read_bytes()
+    assert not (codex_home / "installation_id").is_symlink()
+    assert (codex_home / "installation_id").read_bytes() == installation.read_bytes()
+    (codex_home / "version.json").write_text('{"latest":"fixture-new"}\n', encoding="utf-8")
+    assert version.read_text(encoding="utf-8") == '{"latest":"0.144.0"}\n'
+
+
 def test_corrupt_selector_fails_closed(tmp_path):
     runtime_root = tmp_path / "runtime"
     runtime_root.mkdir()

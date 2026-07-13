@@ -106,6 +106,10 @@ Codex `0.144.0` canonical-patch matrix. Qwendex orchestration policy is not an
 operating-system sandbox: normal Qdex uses its documented approval/sandbox
 contract, while `qwendex-dev` bypass mode is development-only. Stock Codex and
 its normal home remain independent and provide the Off-mode recovery path.
+Qwendex shares the operator's authentication file intentionally, but keeps a
+generation-local copy of Codex's volatile `version.json` cache and installation
+identity. Acceptance compares the normal home's stable config, hooks, and
+installation identity and separately compares complete isolated decoy homes.
 
 Runtime source, hooks, patch identity, binary pair, config/schema, and state
 schema are bound into one validated generation for each Qdex process. Mutable

@@ -1242,12 +1242,17 @@ def run_acceptance(run_id: str, output_root: Path) -> dict[str, Any]:
                 artifact_digests={},
             ),
             "checked_actual_static_files": sorted(actual_normal_before),
+            "volatile_actual_files_excluded": ["auth.json", "version.json"],
             "fresh_decoy_files": sorted(fresh_normal_before),
             "upgrade_decoy_files": sorted(upgrade_normal_before),
             "authentication_copied_only_to_isolated_generation": True,
+            "version_cache_policy": "generation-local-copy",
             "normal_home_unchanged": normal_unchanged,
             "stock_codex_version": stock_version.stdout.strip(),
-            "claim_scope": "tested Linux and Codex 0.144.0 static-home isolation only",
+            "claim_scope": (
+                "tested Linux and Codex 0.144.0 stable-control-file plus "
+                "full-decoy-home isolation only"
+            ),
             "result": "pass",
             "final_status": "STOP_MANAGER_NORMAL_CODEX_ISOLATION_ACCEPTED",
         }

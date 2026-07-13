@@ -506,6 +506,9 @@ def test_qdex_isolated_home_leaves_normal_codex_home_byte_for_byte_unchanged(tmp
     normal_home.mkdir(parents=True)
     (normal_home / "config.toml").write_text('model = "normal-decoy"\n', encoding="utf-8")
     (normal_home / "hooks.json").write_text('{"hooks":{"PreToolUse":[]}}\n', encoding="utf-8")
+    (normal_home / "auth.json").write_text('{"auth":"normal-decoy"}\n', encoding="utf-8")
+    (normal_home / "version.json").write_text('{"latest":"0.144.0"}\n', encoding="utf-8")
+    (normal_home / "installation_id").write_text("normal-installation\n", encoding="utf-8")
     (normal_home / "sentinel.bin").write_bytes(b"normal-codex-home-must-not-change\x00")
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -566,6 +569,33 @@ def test_qdex_isolated_home_leaves_normal_codex_home_byte_for_byte_unchanged(tmp
     )
     assert qdex.returncode == 0, qdex.stderr or qdex.stdout
     payload = json.loads(qdex.stdout)
+    isolated_codex_home = dev_root / ".qwendex-dev" / "codex_home"
     assert payload["codex_home"] == str(dev_root / ".qwendex-dev" / "codex_home")
     assert payload["codex_home"] != str(normal_home)
+    assert (isolated_codex_home / "auth.json").is_symlink()
+    assert (isolated_codex_home / "auth.json").resolve() == (normal_home / "auth.json").resolve()
+    assert not (isolated_codex_home / "version.json").is_symlink()
+    assert (isolated_codex_home / "version.json").read_bytes() == (
+        normal_home / "version.json"
+    ).read_bytes()
     assert snapshot() == before
+
+
+def test_actual_normal_home_snapshot_ignores_volatile_auth_and_version_cache(tmp_path):
+    install_path = ROOT / "scripts" / "qwendex_manager_install_acceptance.py"
+    spec = importlib.util.spec_from_file_location("qwendex_manager_install_snapshot_test", install_path)
+    assert spec is not None and spec.loader is not None
+    install = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(install)
+
+    normal = tmp_path / ".codex"
+    normal.mkdir()
+    for name in ("config.toml", "hooks.json", "installation_id", "auth.json", "version.json"):
+        (normal / name).write_text(f"{name}:before\n", encoding="utf-8")
+    before = install.LIVE.static_normal_home_snapshot(tmp_path)
+    assert sorted(before) == ["config.toml", "hooks.json", "installation_id"]
+    (normal / "auth.json").write_text("auth:after\n", encoding="utf-8")
+    (normal / "version.json").write_text("version:after\n", encoding="utf-8")
+    assert install.LIVE.static_normal_home_snapshot(tmp_path) == before
+    (normal / "config.toml").write_text("config:after\n", encoding="utf-8")
+    assert install.LIVE.static_normal_home_snapshot(tmp_path) != before

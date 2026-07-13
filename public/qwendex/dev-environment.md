@@ -111,6 +111,10 @@ have an executable `codex-code-mode-host` companion in the same directory; the
 wrapper blocks before launch when that Codex 0.144.0 runtime contract is
 incomplete.
 
+The isolated Qwendex Codex home links the operator's authentication file for
+login continuity. Its version cache and installation identity are local copies,
+so Qdex version checks cannot rewrite the upstream Codex home's cache.
+
 The generated environment also exports a Codex-versioned
 `QWENDEX_MODELS_CACHE_FILE`. The Qwendex source patch makes the active build use
 that file inside the otherwise shared isolated home, so an older still-running

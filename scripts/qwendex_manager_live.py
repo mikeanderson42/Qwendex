@@ -113,7 +113,7 @@ def test_render_record():
 def static_normal_home_snapshot(home: Path) -> dict[str, str]:
     normal = home / ".codex"
     result: dict[str, str] = {}
-    for name in ("config.toml", "hooks.json", "installation_id", "version.json"):
+    for name in ("config.toml", "hooks.json", "installation_id"):
         path = normal / name
         if path.is_file():
             result[name] = sha256_file(path)
@@ -694,6 +694,8 @@ def run_matrix(run_id: str, output: Path) -> dict[str, Any]:
         "usage": total_usage,
         "normal_codex_isolation": {
             "static_files_checked": sorted(normal_before),
+            "volatile_files_excluded": ["auth.json", "version.json"],
+            "version_cache_policy": "generation-local-copy",
             "unchanged": normal_before == normal_after,
             "authentication_copied_to_isolated_home": True,
         },

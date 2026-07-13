@@ -406,14 +406,14 @@ exec "$codex" "$@"
 
 def link_identity_files(codex_home: Path) -> None:
     normal_home = Path.home() / ".codex"
-    for name in ("auth.json", "version.json"):
+    authentication = normal_home / "auth.json"
+    if authentication.is_file() and not (codex_home / authentication.name).exists():
+        (codex_home / authentication.name).symlink_to(authentication)
+    for name in ("version.json", "installation_id"):
         source = normal_home / name
         target = codex_home / name
         if source.is_file() and not target.exists():
-            target.symlink_to(source)
-    installation = normal_home / "installation_id"
-    if installation.is_file() and not (codex_home / installation.name).exists():
-        shutil.copy2(installation, codex_home / installation.name)
+            shutil.copy2(source, target)
 
 
 def write_generation_codex_config(dev_root: Path, codex_home: Path) -> None:
