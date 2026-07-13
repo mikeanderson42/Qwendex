@@ -63,6 +63,28 @@ pairs cannot reject or promote the candidate. V2 remains held until a frozen
 live workload completes enough valid paired tasks; it must never become the
 default as a consequence of this decision.
 
+## Live Optimization Runtime Supervisor
+
+Decision: live optimization-lab sessions use a private,
+`qwendex.live_runtime_profile.v1` progress-aware supervisor rather than one
+opaque `communicate()` wall-clock timeout. Calibration first replays the frozen
+legacy wall with profiling only. A subsequent paired run accepts one
+canonicalized, hash-bound policy with separate startup/preflight,
+first-model-activity, inactivity, hard-wall, graceful-termination,
+process-group cleanup, and pipe-draining ceilings. Both arms must use the same
+policy identity; raw byte arrival, warnings, and noisy descendants do not reset
+the inactivity clock.
+
+Reason: the prior held-out pilot had structured activity but no trustworthy
+timestamps or process-state samples at its 180-second boundary. Treating that
+absence as either model success or candidate failure would be unsound. The
+profile stores only ignored, metadata-only diagnostics—safe phase offsets,
+event counts, PID/PGID process state/CPU/RSS buckets, pipe byte counts, timeout
+class, and sanitized Manager counts—and excludes prompts, commands, queries,
+task paths, tool content, stdout/stderr, transcripts, credentials, and tokens.
+The larger hard wall is an evidence-gathering ceiling, not a performance claim
+or permission to enable Search V2 by default.
+
 ## Patched Codex Contract
 
 Decision: Qwendex patches Codex source by versioned anchors, not by mutating the

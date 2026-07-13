@@ -72,6 +72,14 @@ integration emits it, but the generated managed hook set does not invent a
 startup probe. Startup/preflight timing therefore remains `not_observed` until
 an observable trusted source supplies it.
 
+The developer-only live optimization lab has a separate ignored runtime-profile
+artifact for timeout diagnosis. Its `qwendex.live_runtime_profile.v1` contract
+is not a telemetry event and is never stored in this SQLite database or exposed
+by aggregate telemetry commands. It keeps only phase timing, fixed lifecycle
+event counts, process-state/RSS buckets, pipe byte counts, timeout class, and
+sanitized Manager counts. It must not retain prompts, commands, queries, task
+paths, tool input/output, stdout/stderr, transcripts, credentials, or tokens.
+
 The Manager safety classifier remains stricter than telemetry classification.
 For example, a shell-capable tool is still treated conservatively by the safety
 gate, while a verified read-only `rg` command is attributed as a search event.

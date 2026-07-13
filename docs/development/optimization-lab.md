@@ -61,6 +61,66 @@ grades. A live timeout or other invalid pair is not a candidate rejection. It
 requires a valid rerun/adjudication path and still cannot promote a candidate
 without at least 12 valid pairs.
 
+Before any live paired rerun, calibrate the runtime supervisor on a frozen
+baseline task that previously reached the old wall-clock boundary:
+
+```bash
+scripts/qwendex performance lab calibrate \
+  --manifest /ignored/workload.json \
+  --auth-source /ignored/auth.json \
+  --task-id <frozen-timeout-task> \
+  --json
+```
+
+Calibration first observes the original single hard wall, then applies a
+same-wall progress-aware diagnostic to any precisely classified timeout. It
+selects a paired-evaluation policy only when a baseline completes or the
+same-wall run shows continuous trusted lifecycle progress. The generated ignored
+`05_selected_supervisor_budget_policy.json` is immutable input to the paired
+rerun:
+
+```bash
+scripts/qwendex performance lab live-run \
+  --manifest /ignored/workload.json \
+  --candidate search_evidence_compaction_v2 \
+  --auth-source /ignored/auth.json \
+  --supervisor-policy /ignored/05_selected_supervisor_budget_policy.json \
+  --json
+```
+
+The supervisor records separate startup/preflight, first-model-activity,
+inactivity, hard-wall, graceful-termination, forced-cleanup, and pipe-drain
+ceilings. It resets inactivity only on recognized structured lifecycle
+transitions, never on raw byte arrival. The policy is canonicalized and hashed;
+every baseline and candidate arm must record the same identity. A profile is
+written only below the ignored live run directory using
+`qwendex.live_runtime_profile.v1`. It contains safe phase timestamps, duration
+summaries, event counts, process-state/RSS buckets, pipe byte counts, timeout
+classification, and sanitized Manager health—never prompt text, commands,
+queries, paths from task output, tool content, stdout/stderr, transcripts,
+credentials, or tokens.
+
+A progress-aware hard wall is not a speed claim and does not itself validate a
+candidate. The pilot remains invalid when a failed arm lacks a precise timeout
+classification, cleanup leaves state behind, or candidate timeouts materially
+exceed baseline timeouts.
+
+If calibration proves a nonprogress lifecycle blocker before a valid pair can
+start, record the held result rather than manufacturing a paired outcome:
+
+```bash
+scripts/qwendex performance lab runtime-closeout \
+  --prior-run /ignored/prior-closeout \
+  --calibration-run /ignored/live-runtime-calibration \
+  --validation-summary /ignored/safe-validation-summary.json \
+  --json
+```
+
+That closeout verifies the prior artifact hashes, preserves the frozen manifest
+digest, records only safe timelines/classifications, and emits explicit
+not-run pilot/full artifacts. It holds the candidate; it never treats an
+incomplete arm as a regression or a success.
+
 ## V2 Candidate: `search_evidence_compaction_v2`
 
 The v1 candidate was retained only as historical controlled evidence after its
