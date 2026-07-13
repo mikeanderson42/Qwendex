@@ -97,13 +97,16 @@ instead of assuming a monotonic database cursor, so an in-place `pending` to
 `completed` transition is not lost. It never records identifiers or payloads.
 The timing reader cannot change any hook or Manager safety decision.
 
-Update: when a native collaboration wait remains pending, Qwendex derives only
-a fixed `timeout_ms` bucket from the accepted hook input and carries its count
-into the ignored runtime profile. The local telemetry database stores no raw
-tool input or number, public aggregates omit the bucket, and the observation
-cannot reset inactivity or change a budget. This distinguishes a requested
-long native wait from a wait that should already have produced a terminal
-event without expanding the telemetry content boundary.
+Update: when an emitted hook exposes an accepted collaboration wait, Qwendex
+derives only a fixed `timeout_ms` bucket and carries its count into the ignored
+runtime profile. The local telemetry database stores no raw tool input or
+number, public aggregates omit the bucket, and the observation cannot reset
+inactivity or change a budget. Native collaboration lifecycle items can omit
+arguments and have no correlated hook input; an empty bucket is therefore
+explicitly `not_observed`, not a default timeout or proof that the native wait
+should have completed. Distinguishing an explicit long wait from an upstream
+pre-deadline stall remains a separately scoped Codex observability/handler
+frontier.
 
 ## Patched Codex Contract
 

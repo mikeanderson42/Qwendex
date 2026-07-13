@@ -45,12 +45,12 @@ tokens. Query comparison uses an install-local random salt and HMAC-SHA-256;
 the query itself is immediately discarded. Output content is counted in memory
 and immediately discarded.
 
-For an accepted native `wait` or `wait_agent` tool call, the adapter may also
-derive one fixed `timeout_ms` bucket (`at_most_30s`, `31_to_60s`,
-`61_to_120s`, `over_120s`, or a missing/invalid category). It stores neither
-the input object nor the numeric timeout. This diagnostic is omitted from
-aggregate commands and is consumed only as a bounded count in an ignored live
-runtime profile.
+When an emitted `PreToolUse` hook identifies a `wait` or `wait_agent` tool
+call, the adapter may derive one fixed `timeout_ms` bucket
+(`at_most_30s`, `31_to_60s`, `61_to_120s`, `over_120s`, or a missing/invalid
+category). It stores neither the input object nor the numeric timeout. This
+diagnostic is omitted from aggregate commands and is consumed only as a bounded
+count in an ignored live runtime profile.
 
 Public summary and run commands omit event, run, and launch identifiers. A
 blocked hook does not create telemetry; capture runs only after the existing
@@ -97,6 +97,12 @@ hook decision, and never treats a pending wait as progress.
 When a pending collaboration wait is present, its fixed timeout bucket can be
 counted for diagnosis only. It cannot extend inactivity, alter a supervisor
 budget, or grant the hook/Manager any authority.
+
+Some native collaboration lifecycle events expose only the wait transition and
+no hook input. In that case the profile has no timeout bucket: that means
+`not_observed`, not a missing/default timeout or a completed native wait. A
+calibration must retain that distinction and cannot infer the model-requested
+timeout from lifecycle timing alone.
 
 The Manager safety classifier remains stricter than telemetry classification.
 For example, a shell-capable tool is still treated conservatively by the safety

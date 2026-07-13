@@ -95,10 +95,11 @@ transitions, never on raw byte arrival. After the Codex root starts, an
 isolated metadata-capture arm may also contribute allowlisted completed
 tool/subagent hook lifecycle categories from its own performance database. A
 pending tool call, including native `wait_agent`, never extends the inactivity
-deadline. For a pending native collaboration wait, the private profile may
-record only a fixed timeout bucket; it never retains the numeric input, changes
-the selected budget, or treats that observation as progress. The policy is
-canonicalized and hashed;
+deadline. Only an emitted hook with recognized wait input can add a fixed
+timeout bucket to the private profile; no bucket is explicitly `not_observed`,
+not a default or inferred timeout. The profile never retains numeric input,
+changes the selected budget, or treats that observation as progress. The policy
+is canonicalized and hashed;
 every baseline and candidate arm must record the same identity. A profile is
 written only below the ignored live run directory using
 `qwendex.live_runtime_profile.v1`. It contains safe phase timestamps, duration
