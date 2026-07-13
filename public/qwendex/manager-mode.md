@@ -257,6 +257,13 @@ compact report JSON beside it, and records those artifact paths on the manager
 ledger row. `context compact-plan` and `context pack` carry compact agent
 outcomes and artifact links, not full raw transcripts.
 
+If a verifier reports failed or pending evidence and the root then remediates
+the finding, Manager Mode permits one bounded `followup_task` to that same
+verifier for final-state revalidation. The second SubagentStop updates the same
+ledger identity, so Qwendex neither admits nor counts a duplicate verification
+lane. A second failed or pending result remains blocked and must be disclosed as
+remaining risk; it does not authorize another retry loop.
+
 ## Lifecycle
 
 Default manager settings:
@@ -343,7 +350,10 @@ Manager Mode launches use a 10-second minimum, 30-second default, and
 60-second maximum native wait; the product-wide ceiling for non-Off modes is
 120 seconds. Qdex appends these V2 settings after caller arguments, so a
 per-launch Codex override cannot widen the approved lifecycle budget. Off mode
-sets all three native wait values to zero.
+sets all three native wait values to zero. The supported Codex patch returns
+immediately when `wait_agent` finds no running child. After a real wait timeout,
+the root inspects `list_agents` once and does not retry unless a child is still
+running; terminal evidence is integrated or the turn is finalized instead.
 
 ## Recovery And Rollback
 

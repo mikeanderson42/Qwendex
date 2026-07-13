@@ -801,3 +801,25 @@ normal Codex process refreshed it. A generation-local copy removes the write
 path, while excluding the volatile host cache from the cross-process snapshot
 preserves a deterministic control-file claim. Authentication remains shared
 intentionally so the isolated runtime can use the operator's login.
+
+## Bounded Verifier Revalidation And Empty-Wait Termination
+
+Decision: when a required verifier returns failed or pending evidence and the
+Manager root subsequently changes the workspace, the root may issue exactly one
+`followup_task` to that same verifier for a final-state check. The existing
+agent and ledger identity is reused; a duplicate verification lane is not
+spawned. If the revalidation does not pass, the turn remains blocked with the
+remaining risk disclosed. Qdex root guidance requires `list_agents` before a
+wait and after a timeout. The canonical Codex patch makes `wait_agent` return
+immediately when no child is pending or running and explicitly forbids an empty
+retry loop.
+
+Reason: a production live verifier correctly found a defect, then terminated
+with pending validation. After the root repaired and tested the defect, strict
+duplicate-lane admission prevented a replacement worker, while the model
+repeated mailbox waits for agents that did not exist until the 900-second outer
+trial expired. Reusing the native follow-up turn preserves independent
+final-state verification without weakening the verifier gate or duplicating a
+lane. The native no-running-agent check closes the control-flow hole at the
+runtime boundary while retaining the sealed 10/30/60-second Manager wait
+budget.

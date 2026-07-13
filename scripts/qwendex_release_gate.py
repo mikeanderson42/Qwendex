@@ -113,6 +113,8 @@ CODEX_ALLOWED_BUILD_PATHS = {
     "codex-rs/core/src/config/config_tests.rs",
     "codex-rs/core/src/config/mod.rs",
     "codex-rs/core/src/hook_runtime.rs",
+    "codex-rs/core/src/tools/handlers/multi_agents_spec.rs",
+    "codex-rs/core/src/tools/handlers/multi_agents_v2/wait.rs",
     "codex-rs/core/src/tools/spec_plan.rs",
     "codex-rs/hooks/src/events/session_start.rs",
     "codex-rs/hooks/src/schema.rs",

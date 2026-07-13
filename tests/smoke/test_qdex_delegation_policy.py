@@ -391,7 +391,16 @@ def test_qdex_preserves_native_ultra_proactive_mode_without_weakening_qwendex_po
     assert "root Qwendex orchestrator" in str(
         overrides["features.multi_agent_v2.root_agent_usage_hint_text"]
     )
+    assert "After a wait timeout, inspect list_agents once" in str(
+        overrides["features.multi_agent_v2.root_agent_usage_hint_text"]
+    )
+    assert "at most one followup_task on that same verifier" in str(
+        overrides["features.multi_agent_v2.root_agent_usage_hint_text"]
+    )
     assert "do not spawn or manage subagents" in str(
+        overrides["features.multi_agent_v2.subagent_usage_hint_text"]
+    )
+    assert "Run read-only validation commands separately" in str(
         overrides["features.multi_agent_v2.subagent_usage_hint_text"]
     )
 
@@ -508,6 +517,8 @@ def test_generated_codex_config_has_safe_v2_baseline(tmp_path: Path) -> None:
     assert v2["max_concurrent_threads_per_session"] == 1
     assert "explicit-only delegation" in v2["multi_agent_mode_hint_text"]
     assert "root Qwendex orchestrator" in v2["root_agent_usage_hint_text"]
+    assert "do not retry wait_agent" in v2["root_agent_usage_hint_text"]
+    assert "followup_task" in v2["root_agent_usage_hint_text"]
     assert "do not spawn or manage subagents" in v2["subagent_usage_hint_text"]
     guidance = " ".join(
         v2[key]

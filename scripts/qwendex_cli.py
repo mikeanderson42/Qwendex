@@ -620,6 +620,14 @@ CODEX_PATCH_MANIFESTS: dict[str, dict[str, Any]] = {
                 "anchors": ["fn collab_tools_enabled", "MultiAgentVersion::V2"],
             },
             {
+                "path": "codex-rs/core/src/tools/handlers/multi_agents_v2/wait.rs",
+                "anchors": ["wait_for_activity", "WaitOutcome::TimedOut"],
+            },
+            {
+                "path": "codex-rs/core/src/tools/handlers/multi_agents_spec.rs",
+                "anchors": ["create_wait_agent_tool_v2", "Wait for a mailbox update"],
+            },
+            {
                 "path": "codex-rs/core/src/config/mod.rs",
                 "anchors": ["validate_multi_agent_v2_config", "effective_agent_max_threads"],
             },
@@ -642,6 +650,7 @@ CODEX_PATCH_MANIFESTS: dict[str, dict[str, Any]] = {
             "Append the active Kaveman directive from QWENDEX_CODEX_STATUS_FILE to TUI developer instructions.",
             "Expose canonical task_name and parent_session_id on SubagentStart hook input for exact Qwendex ledger binding.",
             "Restrict native MultiAgentV2 collaboration management tools to the root thread.",
+            "Return immediately from V2 wait_agent when no child is running and direct the root away from empty retry loops.",
             "Allow V2 to ignore a legacy agents.max_threads value while retaining its own per-session cap.",
             "Honor QWENDEX_MODELS_CACHE_FILE so mixed Codex versions do not overwrite one shared model catalog.",
         ],
@@ -5274,6 +5283,159 @@ pub(crate) fn with_terminal_visualization_instructions(
             ],
         },
         {
+            "path": "codex-rs/core/src/tools/handlers/multi_agents_v2/wait.rs",
+            "replacements": [
+                (
+                    """use super::*;
+use crate::session::InputQueueActivity;
+""",
+                    f"""use super::*;
+use crate::agent::control::ListedAgent;
+use crate::session::InputQueueActivity;
+
+{marker}
+""",
+                ),
+                (
+                    """        let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
+        let outcome = wait_for_activity(&mut activity_rx, pending_activity, deadline).await;
+        let result = WaitAgentResult::from_outcome(outcome);
+""",
+                    """        let outcome = if pending_activity.is_some() {
+            let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
+            wait_for_activity(&mut activity_rx, pending_activity, deadline).await
+        } else {
+            session
+                .services
+                .agent_control
+                .register_session_root(session.thread_id, turn.parent_thread_id);
+            let agents = session
+                .services
+                .agent_control
+                .list_agents(&turn.session_source, None)
+                .await
+                .map_err(collab_spawn_error)?;
+            if has_running_worker(&agents) {
+                let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
+                wait_for_activity(&mut activity_rx, pending_activity, deadline).await
+            } else {
+                WaitOutcome::NoRunningAgents
+            }
+        };
+        let result = WaitAgentResult::from_outcome(outcome);
+""",
+                ),
+                (
+                    """        let message = match outcome {
+            WaitOutcome::MailboxActivity => "Wait completed.",
+            WaitOutcome::Steered => "Wait interrupted by new input.",
+            WaitOutcome::TimedOut => "Wait timed out.",
+        };
+""",
+                    """        let message = match outcome {
+            WaitOutcome::MailboxActivity => "Wait completed.",
+            WaitOutcome::Steered => "Wait interrupted by new input.",
+            WaitOutcome::TimedOut => {
+                "Wait timed out. Inspect list_agents before any retry; do not retry when no child is running."
+            }
+            WaitOutcome::NoRunningAgents => {
+                "No child agent is running. Do not retry wait_agent; integrate terminal results, finalize, or use one explicitly bounded followup_task for revalidation."
+            }
+        };
+""",
+                ),
+                (
+                    """enum WaitOutcome {
+    MailboxActivity,
+    Steered,
+    TimedOut,
+}
+
+async fn wait_for_activity(
+""",
+                    """enum WaitOutcome {
+    MailboxActivity,
+    Steered,
+    TimedOut,
+    NoRunningAgents,
+}
+
+fn has_running_worker(agents: &[ListedAgent]) -> bool {
+    agents.iter().any(|agent| {
+        agent.agent_name != AgentPath::ROOT
+            && matches!(
+                agent.agent_status,
+                AgentStatus::PendingInit | AgentStatus::Running
+            )
+    })
+}
+
+async fn wait_for_activity(
+""",
+                ),
+                (
+                    """        Ok(Err(_)) | Err(_) => WaitOutcome::TimedOut,
+    }
+}
+""",
+                    """        Ok(Err(_)) | Err(_) => WaitOutcome::TimedOut,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn listed_agent(name: &str, status: AgentStatus) -> ListedAgent {
+        ListedAgent {
+            agent_name: name.to_string(),
+            agent_status: status,
+            last_task_message: None,
+        }
+    }
+
+    #[test]
+    fn running_worker_excludes_root_and_terminal_children() {
+        let terminal = vec![
+            listed_agent(AgentPath::ROOT, AgentStatus::Running),
+            listed_agent("/root/verifier", AgentStatus::Completed(None)),
+        ];
+        assert!(!has_running_worker(&terminal));
+
+        let active = vec![
+            listed_agent(AgentPath::ROOT, AgentStatus::Running),
+            listed_agent("/root/verifier", AgentStatus::PendingInit),
+        ];
+        assert!(has_running_worker(&active));
+    }
+
+    #[test]
+    fn no_running_agent_result_forbids_wait_retry() {
+        let result = WaitAgentResult::from_outcome(WaitOutcome::NoRunningAgents);
+        assert!(!result.timed_out);
+        assert!(result.message.contains("Do not retry wait_agent"));
+        assert!(result.message.contains("followup_task"));
+    }
+}
+""",
+                ),
+            ],
+        },
+        {
+            "path": "codex-rs/core/src/tools/handlers/multi_agents_spec.rs",
+            "replacements": [
+                (
+                    """        description: "Wait for a mailbox update from any live agent, including queued messages and final-status notifications. The wait also ends early when new user input is steered into the active turn. Does not return the content; returns either a summary of which agents have updates (if any), an interruption summary for steered input, or a timeout summary if no activity arrives before the deadline."
+            .to_string(),
+""",
+                    f"""        {marker}
+        description: "Wait for a mailbox update from any running child agent, including queued messages and final-status notifications. Returns immediately when no child is running. The wait also ends early when new user input is steered into the active turn. Does not return agent content. After a timeout, inspect list_agents once and do not retry wait_agent unless a child is still running."
+            .to_string(),
+""",
+                ),
+            ],
+        },
+        {
             "path": "codex-rs/core/src/config/mod.rs",
             "replacements": [
                 (
@@ -7679,7 +7841,9 @@ def agent_mode_context(
             "Manager Mode: you are the root orchestrator and context curator. "
             "For non-trivial repo work, maintain an agent ledger and use scoped specialists. "
             "Spawn agents with the Qwendex-assigned model and reasoning from the manager plan or ledger. "
-            "A worker's final response is delivered directly to you: once it contains the required terminal contract, do not send follow-up work or interrupt that worker. "
+            "A worker's final response is delivered directly to you: once it contains the required terminal contract, do not send ordinary follow-up work or interrupt that worker. "
+            "If a verifier reports failed or pending evidence and you remediate the finding, you may issue exactly one followup_task to that same verifier for final-state revalidation; never spawn a duplicate verification lane, and stop with the remaining risk if the bounded revalidation does not pass. "
+            "Call wait_agent only while list_agents shows a running worker. After a wait timeout, inspect list_agents once; if no worker is running, do not retry wait_agent and instead integrate terminal evidence or finalize. "
             "Do not finalize until required agents have FINAL_REPORT, BLOCKED, FAILED, or TOMBSTONED status with evidence. "
             "Small trivial tasks may be handled directly with a recorded direct-work exception."
         ),
@@ -7748,6 +7912,7 @@ def subagent_start_context(
         f"Parent mode is {agent_policy.get('agent_use')}. Execute {task_name} now. "
         f"{assignment}{output_sentence} "
         "Do not merely acknowledge or stand by. Do not spawn subagents. "
+        "Run read-only validation commands separately in the narrow canonical form allowed by your lane, and classify any blocked diagnostic explicitly. "
         "The final response must contain a line exactly FINAL_REPORT with no colon; if completion is impossible, use a line exactly BLOCKED or FAILED and put evidence on following lines. Required FINAL_REPORT fields: "
         "status, validation_status (PASS or FAIL after classifying any non-blocking diagnostic), agent_id, task_name, summary, files_inspected, files_changed, "
         "commands_run, evidence, artifacts, blockers, remaining_risk, next_recommended_action."

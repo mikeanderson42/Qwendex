@@ -2467,6 +2467,15 @@ def test_qwendex_codex_patch_apply_updates_supported_source_checkout(tmp_path):
     ).read_text(encoding="utf-8")
     assert "multi_agent_v2_ignores_legacy_agents_max_threads" in config_tests
     assert "downstream legacy setting keeps V2 launches backward compatible" in config_mod
+    wait_handler = (
+        source / "codex-rs/core/src/tools/handlers/multi_agents_v2/wait.rs"
+    ).read_text(encoding="utf-8")
+    wait_spec = (
+        source / "codex-rs/core/src/tools/handlers/multi_agents_spec.rs"
+    ).read_text(encoding="utf-8")
+    assert "WaitOutcome::NoRunningAgents" in wait_handler
+    assert "Do not retry wait_agent" in wait_handler
+    assert "Returns immediately when no child is running" in wait_spec
 
 
 def test_qwendex_codex_patch_preflight_rejects_partially_applied_source(tmp_path):
@@ -4148,6 +4157,8 @@ def test_qwendex_session_context_respects_local_toggle_for_token_saver_context(t
     assert "default lane model=qwen-local" not in on_context
     assert "token_saver=true" not in on_context
     assert "root orchestrator" in on_context
+    assert "exactly one followup_task to that same verifier" in on_context
+    assert "do not retry wait_agent" in on_context
 
 
 def test_qwendex_manager_estimate_is_bounded_and_reasoning_agnostic():

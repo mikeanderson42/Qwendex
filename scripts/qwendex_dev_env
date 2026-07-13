@@ -35,7 +35,7 @@ QWENDEX_RELEASE_CODEX_SOURCE_REPO="https://github.com/openai/codex.git"
 QWENDEX_CODEX_SOURCE_REPO="${QWENDEX_CODEX_SOURCE_REPO:-$QWENDEX_RELEASE_CODEX_SOURCE_REPO}"
 QWENDEX_RELEASE_CODEX_VERSION="0.144.0"
 QWENDEX_RELEASE_CODEX_SOURCE_COMMIT="767822446c7a594caa19609ca435281a9ec67e0d"
-QWENDEX_RELEASE_CODEX_PATCH_SHA256="3e370b67c71cc5ee4589112c78fe1dc88b672b4c0f018c5206b3de68f863683c"
+QWENDEX_RELEASE_CODEX_PATCH_SHA256="4161a55808e18e86724a42fcb2050923b9f5544a9e93f445210b77060d23af5f"
 QWENDEX_RELEASE_CODEX_CARGO_LOCK_SHA256="2a3f5a7bd2b571e94cf39e35180e88567989421893f2b600607026d7896ad9c6"
 QWENDEX_CODEX_SOURCE_REF="${QWENDEX_CODEX_SOURCE_REF:-rust-v$QWENDEX_RELEASE_CODEX_VERSION}"
 QWENDEX_MODELS_CACHE_FILE="models_cache.qwendex-$QWENDEX_RELEASE_CODEX_VERSION.json"
@@ -171,8 +171,8 @@ multi_agent = true
 enabled = true
 max_concurrent_threads_per_session = 1
 multi_agent_mode_hint_text = "Qwendex uses explicit-only delegation until Qdex applies the immutable launch AgentPolicy. Do not proactively spawn workers; delegate only when the user, applicable AGENTS.md instructions, or an active skill explicitly requires it."
-root_agent_usage_hint_text = "You are the root Qwendex orchestrator. Keep the root as the default sole writer and integrator, delegate only bounded independent lanes authorized by the active AgentPolicy, and do not ask workers to delegate recursively."
-subagent_usage_hint_text = "You are a bounded Qwendex worker. Execute only the assigned lane, do not spawn or manage subagents, and return a concise FINAL_REPORT with evidence, validation, and blockers."
+root_agent_usage_hint_text = "You are the root Qwendex orchestrator. Keep the root as the default sole writer and integrator, delegate only bounded independent lanes authorized by the active AgentPolicy, and do not ask workers to delegate recursively. Call wait_agent only while list_agents shows a running worker; after a timeout inspect once, and if none is running do not retry wait_agent. For post-fix verifier revalidation, use at most one followup_task on the same verifier and never spawn a duplicate lane."
+subagent_usage_hint_text = "You are a bounded Qwendex worker. Execute only the assigned lane, do not spawn or manage subagents, run narrow read-only validation commands separately, and return a concise FINAL_REPORT with evidence, validation, and blockers."
 
 [projects.$dev_root_toml]
 trust_level = "trusted"
@@ -1336,6 +1336,8 @@ allowed_changes = {
     "codex-rs/core/src/config/config_tests.rs",
     "codex-rs/core/src/config/mod.rs",
     "codex-rs/core/src/hook_runtime.rs",
+    "codex-rs/core/src/tools/handlers/multi_agents_spec.rs",
+    "codex-rs/core/src/tools/handlers/multi_agents_v2/wait.rs",
     "codex-rs/core/src/tools/spec_plan.rs",
     "codex-rs/hooks/src/events/session_start.rs",
     "codex-rs/hooks/src/schema.rs",
