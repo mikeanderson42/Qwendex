@@ -4411,6 +4411,41 @@ def _safe_calibration_profiles(calibration_run: Path) -> tuple[list[dict[str, An
     return profiles, classifications
 
 
+def _calibration_blocker_posture(calibration_decision: Mapping[str, Any]) -> dict[str, str]:
+    """Describe a blocked calibration without discarding its progress evidence."""
+
+    continuous_progress = bool(calibration_decision.get("continuous_trusted_progress_at_same_wall"))
+    if continuous_progress:
+        return {
+            "hard_wall_expansion": "permitted_for_calibration_after_same_wall_continuous_progress",
+            "final_report_observation": (
+                "The same-wall diagnostic proved continuous trusted progress, then the bounded expanded "
+                "baseline still reached a true inactivity timeout with an unclosed collaboration wait."
+            ),
+            "next_frontier": (
+                "GOAL: Diagnose the native Codex collaboration-wait and missing subagent terminal-lifecycle "
+                "path under Manager Mode using the recorded metadata-only receipt. First reproduce one isolated "
+                "frozen baseline and prove whether every spawned agent reaches a terminal status or the wait call "
+                "returns its bounded timeout. Do not change Search V2, its frozen workload, model, routing, or "
+                "default-off posture. If Qwendex-layer diagnosis proves a specific upstream Codex defect, stop and "
+                "open a separately scoped Codex patch goal.\n"
+            ),
+        }
+    return {
+        "hard_wall_expansion": "not_permitted_without_continuous_trusted_progress",
+        "final_report_observation": (
+            "The same-wall diagnostic did not prove continuous trusted progress before its precise runtime blocker."
+        ),
+        "next_frontier": (
+            "GOAL: Trace and repair the native Codex collaboration-wait completion path under Manager Mode using "
+            "the recorded metadata-only lifecycle receipt. First reproduce it with one isolated frozen baseline, "
+            "then prove the wait call emits a terminal event and leaves no receiver thread/session before rerunning "
+            "the unchanged Search V2 held-out manifest. Do not change Search V2, its frozen workload, model, "
+            "routing, or default-off posture in that goal.\n"
+        ),
+    }
+
+
 def live_runtime_stability_closeout(
     *,
     prior_run_dir: Path | str,
@@ -4436,6 +4471,7 @@ def live_runtime_stability_closeout(
     calibration_decision = _read_json(calibration / "06_calibration_decision.json")
     if not isinstance(calibration_decision, Mapping):
         raise LabError("live runtime calibration decision is unavailable")
+    blocker_posture = _calibration_blocker_posture(calibration_decision)
     timelines, prior_classifications = _prior_timeout_timelines(authoritative)
     calibration_profiles, calibration_classifications = _safe_calibration_profiles(calibration)
     if not calibration_profiles:
@@ -4507,7 +4543,7 @@ def live_runtime_stability_closeout(
             "legacy_budget": _read_json(calibration / "02_legacy_budget_policy.json"),
             "same_wall_progress_aware_budget": same_wall_policy if isinstance(same_wall_policy, Mapping) else "not_observed",
             "selected_paired_budget": "not_selected_due_to_calibration_blocker",
-            "hard_wall_expansion": "not_permitted_without_continuous_trusted_progress",
+            "hard_wall_expansion": blocker_posture["hard_wall_expansion"],
         },
     )
     _write_json(
@@ -4605,10 +4641,7 @@ def live_runtime_stability_closeout(
     )
     _write_text(
         run_dir / "16_next_frontier.md",
-        "# Next frontier\n\n"
-        "GOAL: Trace and repair the native Codex collaboration-wait completion path under Manager Mode using the recorded metadata-only lifecycle receipt. "
-        "First reproduce it with one isolated frozen baseline, then prove the wait call emits a terminal event and leaves no receiver thread/session before rerunning the unchanged Search V2 held-out manifest. "
-        "Do not change Search V2, its frozen workload, model, routing, or default-off posture in that goal.\n",
+        "# Next frontier\n\n" + blocker_posture["next_frontier"],
     )
     _write_text(
         run_dir / "FINAL_REPORT.md",
@@ -4616,7 +4649,7 @@ def live_runtime_stability_closeout(
         "- Primary STOP: `STOP_V060_LIVE_RUNTIME_TIMEOUT_CLASSIFIED`\n"
         "- Candidate STOP: `STOP_V060_SEARCH_V2_HELD_FOR_LIVE_EVIDENCE`\n"
         "- The frozen workload was reused unchanged.\n"
-        "- The legacy 180-second boundary was reproduced; same-wall profiling classified reproducible inactivity after a native collaboration-wait transition.\n"
+        f"- {blocker_posture['final_report_observation']}\n"
         "- Qwendex repaired the opaque timeout, concurrent-pipe/cleanup observability gap, and missing-final-message guard false positive.\n"
         "- No valid paired pilot or full evaluation was run because calibration did not select a valid paired budget.\n"
         "- Search V2 remains explicit, opt-in, default-off, and is not promoted.\n"

@@ -880,6 +880,18 @@ def test_hook_lifecycle_reader_handles_late_lower_rowid_commits_and_terminal_upd
     assert row_states == {1: "completed", 10: "observed"}
 
 
+def test_calibration_blocker_posture_keeps_continuous_progress_evidence() -> None:
+    lab = load_module("qwendex_optimization_lab")
+
+    continuous = lab._calibration_blocker_posture({"continuous_trusted_progress_at_same_wall": True})
+    noncontinuous = lab._calibration_blocker_posture({"continuous_trusted_progress_at_same_wall": False})
+
+    assert continuous["hard_wall_expansion"] == "permitted_for_calibration_after_same_wall_continuous_progress"
+    assert "expanded baseline still reached a true inactivity timeout" in continuous["final_report_observation"]
+    assert "separately scoped Codex patch goal" in continuous["next_frontier"]
+    assert noncontinuous["hard_wall_expansion"] == "not_permitted_without_continuous_trusted_progress"
+
+
 def test_missing_live_final_message_is_not_a_guard_marker(tmp_path: Path) -> None:
     lab = load_module("qwendex_optimization_lab")
 
