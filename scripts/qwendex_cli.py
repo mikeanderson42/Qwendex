@@ -4689,7 +4689,7 @@ def codex_source_patch_specs(version: str) -> list[dict[str, Any]]:
 """,
                     """            StatusLineItem::TaskProgress => {
                 "Latest task progress from update_plan (omitted until available)"
-            },
+            }
             StatusLineItem::QwendexManager => {
                 "Qwendex manager mode, Kaveman, and local routing state"
             }
@@ -4976,12 +4976,7 @@ impl ChatWidget {{
                     """    pub(super) async fn handle_key_event(
 """,
                     f"""    {marker}
-    fn run_qwendex_toggle_command(
-        &mut self,
-        tui: &mut tui::Tui,
-        label: &str,
-        args: &[&str],
-    ) {{
+    fn run_qwendex_toggle_command(&mut self, tui: &mut tui::Tui, label: &str, args: &[&str]) {{
         let output = std::process::Command::new("qwendex").args(args).output();
         match output {{
             Ok(output) if output.status.success() => {{

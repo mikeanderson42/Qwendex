@@ -338,6 +338,13 @@ Once those facts are present, the retry closes the decision and releases the
 launch locks. Bounded close timeouts preserve the ledger row and tombstone an
 uncloseable worker so capacity cannot remain silently held.
 
+Qdex also binds native collaboration waits to the immutable `AgentPolicy`.
+Manager Mode launches use a 10-second minimum, 30-second default, and
+60-second maximum native wait; the product-wide ceiling for non-Off modes is
+120 seconds. Qdex appends these V2 settings after caller arguments, so a
+per-launch Codex override cannot widen the approved lifecycle budget. Off mode
+sets all three native wait values to zero.
+
 ## Recovery And Rollback
 
 When status reports policy drift, finish or stop the current turn and restart

@@ -728,3 +728,23 @@ session to diverge from the policy the operator approved. Sealing authority,
 keeping planning deterministic and privacy-minimized, and requiring lifecycle
 evidence makes delegation auditable without conflating reasoning effort with
 the decision to delegate.
+
+## Native Wait Bounds And Deterministic Patch Bytes
+
+Decision: Qdex maps the sealed `AgentPolicy.wait_timeout_ms` into final Codex
+V2 minimum, default, and maximum wait settings after caller configuration. The
+Manager maximum is 60 seconds and the non-Off product ceiling is 120 seconds;
+Off sets all three values to zero. A fresh pinned Codex source apply must also
+reproduce the canonical binary full-index patch digest after isolated
+`Cargo.lock` normalization. Patch templates therefore preserve the exact
+canonical byte form even when an alternate Rust layout would be semantically
+equivalent.
+
+Reason: a repeated production live trial reached its 900-second outer timeout
+inside one native wait after every receiver had already terminated. The
+Manager ledger was healthy, but its lifecycle budget had not been connected to
+Codex's independently configurable wait ceiling. The same production run found
+that two formatting-only patch-template changes produced a noncanonical fresh
+source digest and correctly blocked installation. Binding native waits to the
+sealed policy and restoring byte-identical patch output closes both gaps
+without changing the canonical Codex patch or binary contract.

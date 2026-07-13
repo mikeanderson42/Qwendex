@@ -162,18 +162,30 @@ def command_config(command: list[str]) -> dict[str, object]:
 
 
 @pytest.mark.parametrize(
-    ("agent_use", "policy", "expected_native_threads", "active_guidance"),
+    (
+        "agent_use",
+        "policy",
+        "expected_native_threads",
+        "expected_wait_timeout_ms",
+        "active_guidance",
+    ),
     [
         (
             "Manager",
-            {"mode": "manager", "max_threads": 6, "native_max_concurrent_threads": 7},
+            {
+                "mode": "manager",
+                "max_threads": 6,
+                "native_max_concurrent_threads": 7,
+                "wait_timeout_ms": 60000,
+            },
             7,
+            60000,
             True,
         ),
-        ("Heavy", {"mode": "heavy", "max_threads": 3}, 4, True),
-        ("Medium", {"mode": "medium", "max_threads": 2}, 3, True),
-        ("Lite", {"mode": "lite", "max_threads": 1}, 2, False),
-        ("Off", {"mode": "off", "max_threads": 0}, 1, False),
+        ("Heavy", {"mode": "heavy", "max_threads": 3, "wait_timeout_ms": 90000}, 4, 90000, True),
+        ("Medium", {"mode": "medium", "max_threads": 2, "wait_timeout_ms": 120000}, 3, 120000, True),
+        ("Lite", {"mode": "lite", "max_threads": 1, "wait_timeout_ms": 90000}, 2, 90000, False),
+        ("Off", {"mode": "off", "max_threads": 0, "wait_timeout_ms": 0}, 1, 0, False),
     ],
 )
 def test_qdex_dry_run_wires_agent_policy_into_supported_v2_config(
@@ -181,6 +193,7 @@ def test_qdex_dry_run_wires_agent_policy_into_supported_v2_config(
     agent_use: str,
     policy: dict[str, object],
     expected_native_threads: int,
+    expected_wait_timeout_ms: int,
     active_guidance: bool,
 ) -> None:
     repo, env, _, _ = qdex_fixture(tmp_path, agent_use=agent_use, policy=policy)
@@ -194,6 +207,13 @@ def test_qdex_dry_run_wires_agent_policy_into_supported_v2_config(
     assert (
         overrides["features.multi_agent_v2.max_concurrent_threads_per_session"]
         == expected_native_threads
+    )
+    assert overrides["features.multi_agent_v2.max_wait_timeout_ms"] == expected_wait_timeout_ms
+    assert overrides["features.multi_agent_v2.min_wait_timeout_ms"] == (
+        0 if expected_wait_timeout_ms == 0 else 10000
+    )
+    assert overrides["features.multi_agent_v2.default_wait_timeout_ms"] == (
+        0 if expected_wait_timeout_ms == 0 else 30000
     )
     mode_hint = str(overrides["features.multi_agent_v2.multi_agent_mode_hint_text"])
     root_hint = str(overrides["features.multi_agent_v2.root_agent_usage_hint_text"])
@@ -229,6 +249,8 @@ def test_qdex_immutable_policy_follows_exec_local_config_and_wins(tmp_path: Path
         "-c",
         "features.multi_agent_v2.max_concurrent_threads_per_session=1",
         "-c",
+        "features.multi_agent_v2.max_wait_timeout_ms=3600000",
+        "-c",
         'model_reasoning_effort="medium"',
         "Inspect the repository",
     )["command"]
@@ -244,6 +266,35 @@ def test_qdex_immutable_policy_follows_exec_local_config_and_wins(tmp_path: Path
     ]
     assert matching[0][0] < matching[1][0]
     assert command_config(command)["features.multi_agent_v2.max_concurrent_threads_per_session"] == 5
+    wait_matching = [
+        (index, value)
+        for index, value in enumerate(command)
+        if value.startswith("features.multi_agent_v2.max_wait_timeout_ms=")
+    ]
+    assert [value for _, value in wait_matching] == [
+        "features.multi_agent_v2.max_wait_timeout_ms=3600000",
+        "features.multi_agent_v2.max_wait_timeout_ms=60000",
+    ]
+    assert wait_matching[0][0] < wait_matching[1][0]
+    assert command_config(command)["features.multi_agent_v2.max_wait_timeout_ms"] == 60000
+
+
+def test_qdex_caps_policy_wait_at_product_ceiling(tmp_path: Path) -> None:
+    repo, env, _, _ = qdex_fixture(
+        tmp_path,
+        agent_use="Heavy",
+        policy={
+            "mode": "heavy",
+            "max_threads": 3,
+            "wait_timeout_ms": 3600000,
+        },
+    )
+
+    overrides = command_config(qdex_dry_run(repo, env)["command"])
+
+    assert overrides["features.multi_agent_v2.min_wait_timeout_ms"] == 10000
+    assert overrides["features.multi_agent_v2.default_wait_timeout_ms"] == 30000
+    assert overrides["features.multi_agent_v2.max_wait_timeout_ms"] == 120000
 
 
 def test_qdex_blocks_launch_when_preflight_policy_hash_drifted(tmp_path: Path) -> None:

@@ -42,6 +42,9 @@ def assert_qdex_v2_policy_prefix(test: unittest.TestCase, command: list[str]) ->
     values = qdex_v2_config_values(command)
     test.assertIn("features.multi_agent_v2.enabled=true", values)
     test.assertTrue(any(value.startswith("features.multi_agent_v2.max_concurrent_threads_per_session=") for value in values))
+    test.assertTrue(any(value.startswith("features.multi_agent_v2.min_wait_timeout_ms=") for value in values))
+    test.assertTrue(any(value.startswith("features.multi_agent_v2.max_wait_timeout_ms=") for value in values))
+    test.assertTrue(any(value.startswith("features.multi_agent_v2.default_wait_timeout_ms=") for value in values))
     for field in (
         "multi_agent_mode_hint_text",
         "root_agent_usage_hint_text",

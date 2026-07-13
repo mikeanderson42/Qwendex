@@ -6,6 +6,7 @@ QWENDEX_ENV="$QWENDEX_DEV_ROOT/.qwendex-dev/env.sh"
 QWENDEX_YOLO_FLAG="${QWENDEX_YOLO_FLAG:---dangerously-bypass-approvals-and-sandbox}"
 QWENDEX_HOOK_TRUST_FLAG="${QWENDEX_HOOK_TRUST_FLAG:---dangerously-bypass-hook-trust}"
 QWENDEX_CODEX_MAX_CONCURRENT_THREADS=9
+QWENDEX_CODEX_MAX_WAIT_TIMEOUT_MS=120000
 caller_cwd="$PWD"
 
 # The installed launcher is a stable selector.  It reads one atomically
@@ -432,6 +433,7 @@ if not isinstance(policy, dict):
 print(policy.get("mode", ""))
 print(policy.get("max_threads", ""))
 print(policy.get("native_max_concurrent_threads", ""))
+print(policy.get("wait_timeout_ms", ""))
 print("1" if data.get("manager_preflight_required") else "0")
 print(data.get("agent_policy_hash", policy.get("policy_hash", "")))
 PY
@@ -440,8 +442,9 @@ agent_use="${qwendex_status_fields[0]:-}"
 agent_mode="${qwendex_status_fields[1]:-}"
 agent_policy_max_threads="${qwendex_status_fields[2]:-}"
 agent_policy_native_max_threads="${qwendex_status_fields[3]:-}"
-manager_preflight_required="${qwendex_status_fields[4]:-0}"
-agent_policy_hash="${qwendex_status_fields[5]:-}"
+agent_policy_wait_timeout_ms="${qwendex_status_fields[4]:-}"
+manager_preflight_required="${qwendex_status_fields[5]:-0}"
+agent_policy_hash="${qwendex_status_fields[6]:-}"
 
 if [[ -z "$agent_mode" ]]; then
   agent_mode="${agent_use,,}"
@@ -496,6 +499,47 @@ elif (( codex_native_max_threads > QWENDEX_CODEX_MAX_CONCURRENT_THREADS )); then
 fi
 codex_worker_cap="$((codex_native_max_threads - 1))"
 
+# Keep native collaboration waits inside the immutable AgentPolicy lifecycle
+# budget. Codex otherwise permits one wait call to last up to an hour, which
+# can strand a root after all receivers have already completed.
+if [[ "$agent_policy_wait_timeout_ms" =~ ^[0-9]+$ ]]; then
+  codex_wait_timeout_ms="$agent_policy_wait_timeout_ms"
+else
+  case "$agent_mode" in
+    off)
+      codex_wait_timeout_ms=0
+      ;;
+    lite|heavy)
+      codex_wait_timeout_ms=90000
+      ;;
+    auto|medium)
+      codex_wait_timeout_ms=120000
+      ;;
+    manager)
+      codex_wait_timeout_ms=60000
+      ;;
+    *)
+      codex_wait_timeout_ms=60000
+      ;;
+  esac
+fi
+if (( codex_wait_timeout_ms > QWENDEX_CODEX_MAX_WAIT_TIMEOUT_MS )); then
+  codex_wait_timeout_ms="$QWENDEX_CODEX_MAX_WAIT_TIMEOUT_MS"
+fi
+if (( codex_wait_timeout_ms == 0 )); then
+  codex_wait_min_timeout_ms=0
+  codex_wait_default_timeout_ms=0
+else
+  if (( codex_wait_timeout_ms < 10000 )); then
+    codex_wait_timeout_ms=10000
+  fi
+  codex_wait_min_timeout_ms=10000
+  codex_wait_default_timeout_ms=30000
+  if (( codex_wait_default_timeout_ms > codex_wait_timeout_ms )); then
+    codex_wait_default_timeout_ms="$codex_wait_timeout_ms"
+  fi
+fi
+
 case "$agent_mode" in
   medium)
     multi_agent_mode_hint="Qwendex Medium delegation is active independently of reasoning effort. Opportunistically delegate independent read-heavy mapping, focused investigation, or verification when it materially helps. Use no more than ${codex_worker_cap} bounded workers, keep direct work for small or tightly coupled tasks, and state the direct-work reason when useful."
@@ -524,6 +568,9 @@ cmd=(
 codex_policy_args=(
   --config "features.multi_agent_v2.enabled=true"
   --config "features.multi_agent_v2.max_concurrent_threads_per_session=$codex_native_max_threads"
+  --config "features.multi_agent_v2.min_wait_timeout_ms=$codex_wait_min_timeout_ms"
+  --config "features.multi_agent_v2.max_wait_timeout_ms=$codex_wait_timeout_ms"
+  --config "features.multi_agent_v2.default_wait_timeout_ms=$codex_wait_default_timeout_ms"
   --config "features.multi_agent_v2.root_agent_usage_hint_text=$(toml_string "$root_agent_usage_hint")"
   --config "features.multi_agent_v2.subagent_usage_hint_text=$(toml_string "$subagent_usage_hint")"
 )

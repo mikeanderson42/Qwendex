@@ -83,6 +83,10 @@ scripts/qwendex codex-patch apply --source /path/to/codex --dry-run --json
 ```
 
 Unknown Codex versions or moved anchors block the patch instead of guessing.
+Applying the patch to a fresh pinned checkout must reproduce the canonical
+binary full-index Git diff digest after the isolated build normalizes
+`Cargo.lock`. Marker presence and equivalent Rust formatting are not
+substitutes for that byte-for-byte build boundary.
 After applying, rebuild/install Codex from that checkout and run:
 
 ```bash

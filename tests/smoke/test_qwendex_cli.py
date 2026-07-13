@@ -160,6 +160,12 @@ def assert_qdex_v2_policy_prefix(args, *, expected_native_threads=None):
             for value in values
         )
     for field in (
+        "min_wait_timeout_ms",
+        "max_wait_timeout_ms",
+        "default_wait_timeout_ms",
+    ):
+        assert any(value.startswith(f"features.multi_agent_v2.{field}=") for value in values)
+    for field in (
         "multi_agent_mode_hint_text",
         "root_agent_usage_hint_text",
         "subagent_usage_hint_text",
@@ -2420,6 +2426,16 @@ def test_qwendex_codex_patch_apply_updates_supported_source_checkout(tmp_path):
     assert qwendex.QWENDEX_CODEX_PATCH_MARKER in (
         source / "codex-rs/tui/src/app/input.rs"
     ).read_text(encoding="utf-8")
+    assert (
+        "fn run_qwendex_toggle_command(&mut self, tui: &mut tui::Tui, label: &str, args: &[&str])"
+        in (source / "codex-rs/tui/src/app/input.rs").read_text(encoding="utf-8")
+    )
+    assert (
+        '"Latest task progress from update_plan (omitted until available)"\n            }\n'
+        in (source / "codex-rs/tui/src/bottom_pane/status_line_setup.rs").read_text(
+            encoding="utf-8"
+        )
+    )
     assert "qwendex_toggle_manager" in (
         source / "codex-rs/tui/src/keymap.rs"
     ).read_text(encoding="utf-8")
