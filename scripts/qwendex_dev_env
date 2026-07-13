@@ -33,7 +33,7 @@ QWENDEX_RELEASE_CODEX_SOURCE_REPO="https://github.com/openai/codex.git"
 QWENDEX_CODEX_SOURCE_REPO="${QWENDEX_CODEX_SOURCE_REPO:-$QWENDEX_RELEASE_CODEX_SOURCE_REPO}"
 QWENDEX_RELEASE_CODEX_VERSION="0.144.0"
 QWENDEX_RELEASE_CODEX_SOURCE_COMMIT="767822446c7a594caa19609ca435281a9ec67e0d"
-QWENDEX_RELEASE_CODEX_PATCH_SHA256="2cb83aba4b1063d339d8f156473e2c6fe748546fa63bf87fe0d99c648d716301"
+QWENDEX_RELEASE_CODEX_PATCH_SHA256="3e370b67c71cc5ee4589112c78fe1dc88b672b4c0f018c5206b3de68f863683c"
 QWENDEX_RELEASE_CODEX_CARGO_LOCK_SHA256="2a3f5a7bd2b571e94cf39e35180e88567989421893f2b600607026d7896ad9c6"
 QWENDEX_CODEX_SOURCE_REF="${QWENDEX_CODEX_SOURCE_REF:-rust-v$QWENDEX_RELEASE_CODEX_VERSION}"
 QWENDEX_MODELS_CACHE_FILE="models_cache.qwendex-$QWENDEX_RELEASE_CODEX_VERSION.json"
@@ -164,6 +164,13 @@ persistent_instructions = "Qwendex dev environment active. Act as the senior Qwe
 
 [features]
 multi_agent = true
+
+[features.multi_agent_v2]
+enabled = true
+max_concurrent_threads_per_session = 1
+multi_agent_mode_hint_text = "Qwendex uses explicit-only delegation until Qdex applies the immutable launch AgentPolicy. Do not proactively spawn workers; delegate only when the user, applicable AGENTS.md instructions, or an active skill explicitly requires it."
+root_agent_usage_hint_text = "You are the root Qwendex orchestrator. Keep the root as the default sole writer and integrator, delegate only bounded independent lanes authorized by the active AgentPolicy, and do not ask workers to delegate recursively."
+subagent_usage_hint_text = "You are a bounded Qwendex worker. Execute only the assigned lane, do not spawn or manage subagents, and return a concise FINAL_REPORT with evidence, validation, and blockers."
 
 [projects.$dev_root_toml]
 trust_level = "trusted"
@@ -1203,6 +1210,12 @@ source_path = Path(source)
 allowed_changes = {
     "codex-rs/Cargo.lock",
     "codex-rs/config/src/tui_keymap.rs",
+    "codex-rs/core/src/config/config_tests.rs",
+    "codex-rs/core/src/config/mod.rs",
+    "codex-rs/core/src/hook_runtime.rs",
+    "codex-rs/core/src/tools/spec_plan.rs",
+    "codex-rs/hooks/src/events/session_start.rs",
+    "codex-rs/hooks/src/schema.rs",
     "codex-rs/models-manager/src/manager.rs",
     "codex-rs/tui/src/app/input.rs",
     "codex-rs/tui/src/bottom_pane/status_line_setup.rs",

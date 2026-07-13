@@ -211,8 +211,9 @@ and `Alt+L` toggles Local. `Local: [Off]` means Qwendex will skip local
 subagents even when the local model endpoint is healthy; `Local: [Unavailable]`
 means intent is on but the probe could not confirm a usable local route.
 
-Manager Mode defaults to `max_subagents: 10`, which is also the Qwendex product
-ceiling for concurrent subagent lanes.
+Manager Mode defaults to `max_subagents: 4`. Operators may configure a lower or
+higher bounded value up to the conservative product ceiling of 8 concurrent
+worker lanes; Codex V2 counts the root separately.
 
 `manager_deploy_policy` defaults to `auto`: when the selected mode is Manager
 Mode, Qwendex expects at least one active registered agent lane. Routine

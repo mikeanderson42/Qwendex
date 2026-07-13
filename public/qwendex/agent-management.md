@@ -83,8 +83,8 @@ and an active legacy write lock remains conservatively blocking until reviewed.
 
 ## Manager Decision Ledger
 
-Normal `qdex` launches in Manager Mode run `scripts/qwendex manager preflight`
-before Codex starts. The preflight creates a `manager_decision` record separate
+Normal non-Off `qdex` launches run `scripts/qwendex manager preflight` before
+Codex starts. The preflight creates a `manager_decision` record separate
 from subagent sessions and honors the effective mode passed by command handling,
 including `--mode manager`. It stores the policy hash, hook status, local/cloud
 availability, prompt digest or `interactive_prompt_unknown_prelaunch`, selected
@@ -111,11 +111,11 @@ recorded. `manager_subagents` still requires bounded lane evidence and parent
 review.
 
 Agent plan assignments expose `spawn_instruction` alongside `assign_command` so
-operators can see the model and reasoning to pass when creating the subagent.
-High-risk security, release, architecture, and protocol lanes surface `gpt-5.5`
-with high or xhigh reasoning. Eligible low-risk bounded artifact-summary lanes
-can surface `qwen-local`, low reasoning, and token-saver routing when local
-Qwen is enabled and usable.
+operators can see the generic model class and reasoning level to pass when
+creating the subagent. Managed hook messages intentionally do not name a
+configured GPT model. Eligible low-risk bounded artifact-summary lanes can
+surface `qwen-local`, low reasoning, and token-saver routing when local Qwen is
+enabled and usable.
 
 ## Write Safety
 
@@ -160,11 +160,14 @@ writer counts.
 
 For the managed `PreToolUse` hook, read-only profiles may invoke only bare
 `pwd`, `ls`, `rg`, `grep`, `cat`, `file`, `head`, `tail`, `stat`, `jq`, `find`,
-and `wc` commands, Python's `-V`, `-VV`, or `--version` query, plus `git status`,
+`nl`, `wc`, `true`, and the non-mutating `sed -n N[,N]p file...` form, Python's
+`-V`, `-VV`, or `--version` query, plus `git status`,
 `git diff`, `git log`, `git show`, and `git rev-parse`. Git accepts only `-C`
 and `--no-pager` before the subcommand. Quote-aware lists and pipelines using
 newline, `;`, `&&`, `||`, and `|` are accepted only when every segment passes
-the same allowlist.
+the same allowlist. A registered verifier may additionally run `pytest`,
+`py.test`, or `python -m pytest` without cache-clearing or redirected test-root
+options; other read-only profiles cannot execute tests.
 
 The read-only shell grammar rejects executable paths, environment assignments,
 wrappers, interpreters, scripts, redirects, background jobs, command or
@@ -248,10 +251,11 @@ probe, so an unavailable startup duration is reported as `not_observed`.
 
 The gates enforce the current CLI policy boundary:
 
-- prompt hooks inject the active mode contract, Qwendex model/reasoning policy,
-  and the AgentPolicy Kaveman output policy when enabled
+- prompt hooks inject the active mode, planner, lifecycle, and AgentPolicy
+  Kaveman output contracts when enabled; they never name a configured GPT model
 - subagent-start hooks inject the worker execution and final-report contract,
-  plus the selected model, reasoning, and AgentPolicy Kaveman output policy
+  plus a generic inherited reasoning assignment and the AgentPolicy Kaveman
+  output policy
 - subagent-stop hooks require `FINAL_REPORT`, `BLOCKED`, or `FAILED`
 - Manager stop hooks require a preflight decision ledger, block unresolved
   required agents, missing verifier evidence after edits, missing direct-work
@@ -292,8 +296,13 @@ same session/turn is idempotent, while a different claimant or multiple exact
 candidates is rejected.
 
 The effective AgentPolicy exported by preflight is pinned for that live launch.
-Changing Agent Manager mode updates the next launch but does not change the
-policy hash used by hooks in an already-running Qdex process.
+Its content hash covers Agent Manager mode, Kaveman output policy, Local enabled
+state, and launch-relevant local routing configuration. Changing any of those
+updates the next launch but does not change the policy used by hooks in an
+already-running Qdex process. The snapshot is content-hash verified on every
+hook. Status reports the desired global hash, `policy_drift`,
+`restart_required`, and `session_policy_valid`; later turns keep the recorded
+launch policy and launch-time Local availability until restart.
 
 `manager launch-status --pid <pid> --repo-root <path> --json` exposes a stable,
 read-only health projection for generic supervisors. It does not return
@@ -349,16 +358,19 @@ scripts/qwendex agent team --json
 scripts/qwendex --agent-use Manager agent plan --prompt "Team, update routing and tests" --task-id task-routing --json
 ```
 
-The built-in roster is `explorer`, `implementer`, `verifier`,
-`docs_researcher`, `release_manager`, and `scribe`. Child profiles cannot spawn
-recursive agents by default. Release manager denies publish/push operations
-unless an explicit release gate approves them.
+The built-in roster remains available for manual lifecycle commands, but the
+deterministic turn planner uses bounded read-only `explorer`, `verifier`,
+`reviewer`, and `docs_researcher` lanes. Child profiles cannot spawn recursive
+agents. The root is the sole default writer and integrator.
 
-`agent plan` classifies the prompt, applies the effective AgentPolicy, and
-returns either a direct-work exception or concrete `manager assign` commands
-for the selected profiles. Manager plans include a non-blocking scribe lane.
-Release/publish plans select `release_manager` plus `verifier`; Lite plans stay
-direct unless the prompt explicitly asks for agents.
+`agent plan` classifies the prompt without a model call, applies the effective
+AgentPolicy, and returns either a direct-work exception or exact planned lane
+IDs and concrete `manager assign` commands. Heavy non-trivial edits require
+explorer plus verifier; Manager adds required risk review for security,
+release, protocol, and live-acceptance tasks. Lite stays direct unless one
+bounded lookup is explicitly or materially useful. Exact native task paths bind
+Codex worker IDs to those planned lanes, and duplicate native starts are
+advised to stop without consuming a second ledger slot.
 
 `agent metrics` reports ledger counts, required incomplete lanes,
 final-contract compliance, raw-output artifact counts, active file locks, and
@@ -367,8 +379,10 @@ acceptance by itself.
 
 ## Current Boundary
 
-This CLI release enforces the effective policy at the Qwendex facade, native
-gate evaluator, and manager ledger surface. Native Codex tool-registry
-filtering and automatic/global hook installation are separate integration
-points and must stay labeled as such until a patched Codex build proves them
-end to end.
+This release enforces the policy at the Qwendex facade, native gate evaluator,
+manager ledger, Qdex V2 launch configuration, and the supported patched Codex
+runtime. The patch provides exact SubagentStart task/parent identity, removes
+management tools from child V2 threads, and permits V2 to ignore a downstream
+legacy `agents.max_threads` setting while retaining Qwendex's V2 cap. Stock
+Codex lacks those exact Qwendex patch guarantees. Managed hook installation
+remains explicit and operator-controlled rather than global or automatic.

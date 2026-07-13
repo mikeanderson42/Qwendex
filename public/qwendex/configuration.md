@@ -220,9 +220,14 @@ is configured; it does not probe availability.
   registered agent lanes unless this is set to `disabled`
 - `kaveman`: persisted enabled state and the enforced terse-output directive
 - `local_subagents`: default Local enabled state
-- `mode_profiles`: status label and enforced agent capacity per mode; Manager
-  Mode has `max_subagents: 10`
-- `local_qwen_eligibility`: task classes and max risk for local lanes
+- `mode_profiles`: status label and default enforced worker capacity per mode:
+  Off 0, Auto 4, Lite 1, Medium 2, Heavy 3, and Manager 4; configured capacity
+  is bounded by the conservative hard ceiling of 8
+- `local_qwen_eligibility`: deterministic classifier classes and max risk for
+  Local lanes; the shipped allowlist covers repository mapping, read-heavy
+  investigation, single-file reads, small edits, and test/regression lanes,
+  while cross-cutting, security/protocol, release, and live-acceptance classes
+  stay denied
 - `escalation_thresholds`: terms that move lanes to high or xhigh
 - `stale_session_thresholds_minutes`: cleanup windows per mode
 
@@ -232,7 +237,15 @@ through the Codex TUI keymap. `manager estimate` is a deterministic CLI
 heuristic; it does not invoke a model or skill and has no model-budget config.
 The selected mode profile's `max_subagents` also supplies
 `AgentPolicy.max_threads`, so status, ledger capacity, and backend policy share
-one limit.
+one limit. Codex V2 counts the root thread separately, so Qdex supplies a
+native per-session ceiling of `max_subagents + 1`.
+
+The selected policy is sealed into each non-Off Qdex launch. The snapshot hash
+covers its behavioral fields and is revalidated on every managed hook. Current
+global state is retained separately as `desired_global_policy_hash`; changing
+Manager mode, Kaveman, or Local routing affects the next launch and marks an
+existing session as drifted rather than mutating it in place. Prompt admission
+continues with the recorded launch availability and local-routing snapshot.
 
 `QWENDEX_MANAGER_MODE` and `QWENDEX_ORCHESTRATION_MODE` override the configured
 default mode for a fresh state DB. Once `scripts/qwendex manager mode ...` or

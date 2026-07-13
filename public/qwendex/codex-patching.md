@@ -1,9 +1,10 @@
 # Codex TUI Patching
 
-Qwendex can run without patching Codex, but the native footer item and hotkeys
-require a small Codex TUI source patch. The installed Codex npm package ships a
-stripped native binary, so Qwendex treats the TUI integration as a versioned
-source patch instead of mutating the binary in place.
+Qwendex can run without patching Codex, but the native footer, hotkeys, and
+exact Manager V2 identity and root-only management guarantees require the
+supported Codex source patch. The installed Codex npm package ships a stripped
+native binary, so Qwendex treats the integration as a versioned source patch
+instead of mutating the binary in place.
 
 ## Contract
 
@@ -67,8 +68,8 @@ scripts/qwendex codex-patch apply --source /path/to/codex --json
 ```
 
 The apply step is idempotent. It first checks the version manifest and source
-anchors, writes only the known TUI/keymap and model-cache-path edits, then
-reruns the source preflight state check. For a dry run:
+anchors, writes only the known TUI, keymap, model-cache, hook-identity, and V2
+policy edits, then reruns the source preflight state check. For a dry run:
 
 ```bash
 scripts/qwendex codex-patch apply --source /path/to/codex --dry-run --json
@@ -107,6 +108,12 @@ locations):
 - `codex-rs/tui/src/keymap.rs`
 - `codex-rs/tui/src/app/input.rs`
 - `codex-rs/tui/src/terminal_visualization_instructions.rs`
+- `codex-rs/hooks/src/events/session_start.rs`
+- `codex-rs/hooks/src/schema.rs`
+- `codex-rs/core/src/hook_runtime.rs`
+- `codex-rs/core/src/tools/spec_plan.rs`
+- `codex-rs/core/src/config/mod.rs`
+- `codex-rs/core/src/config/config_tests.rs`
 - `codex-rs/models-manager/src/manager.rs`
 
 Inspect the active manifest with:
@@ -114,3 +121,15 @@ Inspect the active manifest with:
 ```bash
 scripts/qwendex codex-patch locations --json
 ```
+
+The Manager-specific edits add canonical `task_name` and parent identity to
+`SubagentStart`, remove collaboration-management tools from child V2 threads,
+and let V2 ignore a downstream legacy `agents.max_threads` value while using
+its own per-session ceiling. Stock Codex remains a valid Off-mode recovery
+binary, but it does not provide those exact Qwendex guarantees.
+
+The canonical development workflow is `qwendex-dev codex-patch apply`, focused
+Rust tests, `cargo fmt --check`, `codex-patch preflight --require-applied`, and
+`qwendex-dev build-codex --release`. A successful build receipt records the
+manifest/source digest and binary SHA-256; changing a required source edit
+invalidates that evidence until the patch is reapplied and rebuilt.

@@ -27,12 +27,20 @@ def load_release_gate():
     return module
 
 
-def test_codex_build_contract_requires_the_versioned_model_cache_patch():
+def test_codex_build_contract_requires_the_current_canonical_patch_surface():
     release_gate = load_release_gate()
-    path = "codex-rs/models-manager/src/manager.rs"
+    required_paths = {
+        "codex-rs/core/src/config/config_tests.rs",
+        "codex-rs/core/src/config/mod.rs",
+        "codex-rs/core/src/hook_runtime.rs",
+        "codex-rs/core/src/tools/spec_plan.rs",
+        "codex-rs/hooks/src/events/session_start.rs",
+        "codex-rs/hooks/src/schema.rs",
+        "codex-rs/models-manager/src/manager.rs",
+    }
 
-    assert path in release_gate.CODEX_ALLOWED_BUILD_PATHS
-    assert path in release_gate.CODEX_REQUIRED_PATCH_PATHS
+    assert required_paths <= release_gate.CODEX_ALLOWED_BUILD_PATHS
+    assert required_paths <= release_gate.CODEX_REQUIRED_PATCH_PATHS
     assert "codex-rs/Cargo.lock" in release_gate.CODEX_ALLOWED_BUILD_PATHS
     assert "codex-rs/Cargo.lock" not in release_gate.CODEX_REQUIRED_PATCH_PATHS
 

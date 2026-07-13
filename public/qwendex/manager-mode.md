@@ -1,9 +1,10 @@
 # Manager Modes
 
-Qwendex behaves like normal Codex by default. Manager orchestration is additive:
-the main session keeps the user's selected model and reasoning, while Qwendex
-routes only specific subagent lanes to local Qwen, GPT-5.5 low/medium, or
-high/xhigh reasoning when the lane actually needs it.
+Qwendex behaves like normal Codex in Off mode. Delegation duty is independent
+of model reasoning effort: the main session keeps the user's selected model and
+reasoning, while the Agent Manager mode determines whether and how bounded
+native workers are planned. Changing reasoning does not silently change the
+selected delegation mode.
 
 Public modes are ordered:
 
@@ -61,8 +62,10 @@ operator-directed.
 
 ## Manager Preflight
 
-When Agent Manager resolves to Manager Mode, write-capable `qdex` launches run a
-Manager preflight before Codex starts. The preflight honors the effective mode
+Every non-Off `qdex` launch runs a Manager preflight before Codex starts. Lite
+and Medium keep missing-hook posture advisory; Heavy and Manager fail closed
+without verified managed hooks or an explicitly recorded unhooked override.
+The preflight honors the effective mode
 selected by command handling, including `scripts/qwendex manager preflight
 --mode manager`, rather than falling back to stored Auto state. The preflight
 writes a `manager_decision` ledger record and receipt containing the effective
@@ -70,7 +73,9 @@ policy hash, active `CODEX_HOME`, hook status, local/cloud availability, prompt
 digest or `interactive_prompt_unknown_prelaunch`, selected route, routing
 reason, verifier requirement, validation plan, launcher-derived root ownership
 id, and STOP status. `qdex` clears inherited per-launch Manager identities
-before preflight so a restarted shell cannot reuse an earlier lease.
+before preflight so a restarted shell cannot reuse an earlier lease. Qdex also
+binds the preflight policy hash to the earlier `codex-status` policy; a mode
+change in that interval blocks launch instead of mixing two policies.
 
 Useful dry-run commands:
 
@@ -94,6 +99,13 @@ later turns get a fresh ledger id and `agent_task_id` keyed by Codex `turn_id`,
 so old verifier evidence cannot satisfy a new edit. Every spawned worker must
 be registered with the exact agent id returned by Codex so its `SubagentStop`
 event joins the current turn ledger.
+
+Prompt admission stores only schema version, source, character length, and
+SHA-256 metadata; raw prompt text is not persisted in the manager receipt.
+Missing, empty, malformed, or unattached root prompt events block Heavy and
+Manager turns with a stable admission error. Lite and Medium stay direct and
+surface the admission warning. Child lifecycle events are not root prompt
+authority and do not mutate the root admission record.
 
 Missing or incomplete Qwendex Codex hooks block write-capable Manager Mode
 launches by default:
@@ -124,16 +136,41 @@ for the hook-status decision.
 
 ## Mode Meaning
 
-- `Off`: no manager delegation duty.
-- `Auto`: deterministic checks recommend a mode; capacity is 4.
-- `Lite`: bounded coordination with capacity 2.
-- `Medium`: normal multi-lane coordination with capacity 4.
-- `Heavy`: verification-oriented coordination with capacity 6.
-- `Manager Mode`: full coordination capacity 10; the main session coordinates,
-  reviews, and validates.
+- `Off`: zero workers; Qdex skips manager preflight and Codex uses explicit-only
+  native delegation behavior.
+- `Auto`: capacity 4; the deterministic task classifier selects the effective
+  Lite, Medium, Heavy, or Manager behavior for each turn.
+- `Lite`: capacity 1; direct work is the default, with at most one bounded
+  read-only lookup for an explicit or clearly read-heavy need.
+- `Medium`: capacity 2; independent mapping, investigation, or verification
+  lanes may be delegated while small or tightly coupled work stays direct.
+- `Heavy`: capacity 3; non-trivial edits are orchestration-first with a
+  read-only explorer and a required post-edit verifier.
+- `Manager Mode`: capacity 4; the root plans and integrates bounded explorer,
+  verifier, and risk-review lanes while remaining the sole default writer.
 
 Legacy compatibility remains: the `manager_only` spelling maps to
 `Manager Mode`.
+
+The preflight policy is immutable for the life of the Qdex process. Its
+content hash includes the selected Manager level, Kaveman output policy, Local
+enabled state, and launch-relevant local routing configuration. A later global
+Manager, Kaveman, or Local change affects only a new launch. Existing-session status reports
+`policy_drift`, `restart_required`, `policy_hash`,
+`desired_global_policy_hash`, and `session_policy_valid`; later turns retain the
+original selected mode, Local routing eligibility, and policy hash until Qdex
+restarts. Prompt admission uses launch-time Local availability and does not
+re-probe or reinterpret Local state inside the prompt hook.
+
+Qdex always enables the supported Codex V2 surface and injects the selected
+worker cap plus root/worker usage hints. For non-Ultra reasoning it also injects
+the Qwendex mode hint. When the final caller override selects Ultra, Qdex omits
+only that custom mode hint so Codex's native Ultra proactive policy remains
+active. Qwendex still owns the immutable cap, root-only management surface,
+single-writer rule, exact planned-lane binding, lifecycle ledger, and
+duplicate-start suppression. The native proactive source participates in both
+the `codex-status` and preflight policy hashes; a mismatch blocks launch rather
+than combining an Ultra runtime with a non-Ultra authority snapshot.
 
 ## Status Semantics
 
@@ -145,6 +182,12 @@ Manager status separates operator intent, advisory health, and blocking state:
   local availability drift, but no writer lifecycle problem requires repair.
 - `blocked`: a required Manager Mode deployment contract is unmet, or a stale
   writer lane requires integration or an explicit stop.
+
+For an attached turn, `manager status --json` also exposes selected and
+effective mode, task class, route and routing reason, prompt known/source/length
+and admission code, planned profiles, required/registered/active/terminal lane
+counts, validation counts, why no worker was used, policy source/hash/drift,
+restart requirement, native proactive source, waivers, and receipt paths.
 
 Status JSON may expose these labels in manager health data before every wrapper
 or footer renders them. Treat the JSON fields as the source of truth and verify
@@ -189,17 +232,16 @@ Every assigned lane records a context packet:
 - receipt path
 - context budget
 - model/reasoning assignment
-- spawn instruction naming the selected model and reasoning
+- spawn instruction naming the generic model class and reasoning
 - review requirement
 
-Prompt hooks tell the root orchestrator to spawn agents using Qwendex
-model/reasoning assignments. When Kaveman is enabled, `SessionStart` and
-`UserPromptSubmit` additional context also includes the configured Kaveman
-directive. `SubagentStart` additional context includes the selected model and
-reasoning from the hook event or the manager session ledger, so high-risk,
-security, release, and protocol lanes surface `gpt-5.5` with high or xhigh
-reasoning while eligible low-risk token-saver lanes surface `qwen-local` with
-low reasoning.
+Prompt hooks tell the root orchestrator to follow the Qwendex plan and lifecycle
+contract. When Kaveman is enabled, `SessionStart` and `UserPromptSubmit`
+additional context also includes the configured Kaveman directive.
+`SubagentStart` additional context supplies the generic inherited reasoning
+class and worker contract from the manager ledger. Hook-facing messages never
+name a configured GPT model; eligible low-risk token-saver lanes may still name
+`qwen-local` when local Qwen is enabled and usable.
 
 Subagent output is advisory until reviewed and backed by artifacts or tests.
 When a worker reaches `FINAL_REPORT`, `BLOCKED`, or `FAILED`, the native
@@ -212,8 +254,10 @@ outcomes and artifact links, not full raw transcripts.
 
 Default manager settings:
 
-- `max_subagents`: mode-specific, 1 to 10. The Qwendex product ceiling is 10;
-  the same value drives manager registration and `AgentPolicy.max_threads`.
+- `max_subagents`: defaults are mode-specific, from 0 to 4. Manager capacity is
+  configurable up to the conservative hard ceiling of 8. The effective value
+  drives manager registration and the supported Codex V2 worker ceiling; V2
+  counts the root separately.
 - `stale_after_minutes`: mode-specific, 15 to 45.
 - Active subagent limits and single-writer locks apply per canonical repository
   root, so independent repositories do not consume or block each other's lanes.
@@ -249,9 +293,9 @@ scripts/qwendex agent hook Stop --event-json '{"last_assistant_message":"Agent o
 Use `Alt+M`, `scripts/qwendex manager mode ...`, `QWENDEX_AGENT_USE`, or
 `CODEX_AGENT_USE` to select `Off`, `Auto`, `Lite`, `Medium`, `Heavy`, or
 `Manager` for a CLI session. Explicit selectors override the effective
-`AgentPolicy` for normal CLI commands, but a selected Manager Mode still makes
-`qdex` run the Manager preflight so an env selector cannot silently skip the
-decision ledger. The resolved `AgentPolicy`, source, and policy hash are
+`AgentPolicy` for normal CLI commands. Every resulting non-Off Qdex policy runs
+preflight; an explicit Off selector intentionally selects the documented stock
+recovery boundary. The resolved `AgentPolicy`, source, and policy hash are
 included in `agent`, `manager`, `check`, `doctor`, and `codex-status`
 diagnostics. Native
 `agent hook` stop gates read the same ledger and block Manager Mode finalization
@@ -279,6 +323,24 @@ verified hooks or recorded hook override, verifier requirement, validation
 evidence, and dirty worktree classification. Missing validation returns
 `STOP_MANAGER_VALIDATION_PENDING`; successful managed-lane or direct-exception
 completion records `STOP_MANAGER_CLOSED`.
+
+Stop is reevaluated after a continuation request. Required active or failed
+lanes, missing final reports, missing post-edit verifier evidence, or a root
+summary without agent outcomes, validation, and risks keep the turn blocked.
+Once those facts are present, the retry closes the decision and releases the
+launch locks. Bounded close timeouts preserve the ledger row and tombstone an
+uncloseable worker so capacity cannot remain silently held.
+
+## Recovery And Rollback
+
+When status reports policy drift, finish or stop the current turn and restart
+Qdex to adopt the desired mode; do not try to rewrite the live snapshot. If a
+strict launch blocks on hook or patch health, inspect `manager preflight`,
+reinstall the managed hooks, and run `codex-patch preflight --require-applied`
+against the supported source checkout. Setting the next-launch mode to `Off`
+provides a stock-Codex recovery path without granting the old Manager session
+new authority. Preserve the decision and lifecycle receipts while diagnosing a
+blocked close so stale capacity and tombstones remain auditable.
 
 The first release also uses a single-writer file-lock strategy in the base
 worktree. Codex root events intentionally have no top-level `agent_id`, so

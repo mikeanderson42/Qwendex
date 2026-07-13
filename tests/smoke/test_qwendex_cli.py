@@ -4621,6 +4621,7 @@ def test_manager_subagent_start_binds_exact_plan_without_pretool_reservation(tmp
     )
     assignment = prompt["data"]["agent_plan"]["assignments"][0]
     planned_agent_id = assignment["agent_id"]
+    native_task_name = f"{'/' + 'root'}/{planned_agent_id}"
 
     started = json_result(
         "agent",
@@ -4630,7 +4631,7 @@ def test_manager_subagent_start_binds_exact_plan_without_pretool_reservation(tmp
         json.dumps({
             "agent_id": "native-runtime-explorer",
             "agent_type": "explorer",
-            "task_name": f"/root/{planned_agent_id}",
+            "task_name": native_task_name,
             "parent_session_id": "native-root-session",
             "session_id": "native-child-session",
             "turn_id": "native-child-turn",
@@ -4661,7 +4662,7 @@ def test_manager_subagent_start_binds_exact_plan_without_pretool_reservation(tmp
         json.dumps({
             "agent_id": "native-runtime-duplicate",
             "agent_type": "explorer",
-            "task_name": f"/root/{planned_agent_id}",
+            "task_name": native_task_name,
             "parent_session_id": "native-root-session",
             "session_id": "native-duplicate-child-session",
             "turn_id": "native-duplicate-child-turn",

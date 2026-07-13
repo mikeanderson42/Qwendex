@@ -100,6 +100,36 @@ the isolated bench root. The Qwendex source checkout supplies executables and
 configuration, but it is not added as a writable or MCP-trusted root unless it
 is itself the selected project.
 
+Normal Qdex launches also allocate a per-launch metadata directory under the
+configured metadata root. Status and preflight JSON files are therefore not
+shared by concurrent launches. Manager capacity, locks, and worker ledgers are
+keyed by canonical repository root, so two repositories can hold independent
+live sessions without consuming one another's lanes.
+
+## Manager Delegation Acceptance
+
+The Manager runtime acceptance matrix covers Lite direct work, Medium bounded
+mapping, Heavy edit plus post-edit verification, full Manager root-only
+integration, Ultra/native proactive coexistence, immutable policy drift, and
+two simultaneous repository sessions. Each non-Off launch must prove prompt
+admission, a sealed launch policy, deterministic plan data, final worker
+reports, validation evidence, and a closed Stop status.
+
+Run the repository smoke suite and inspect the durable acceptance bundle:
+
+```bash
+python3 -m pytest -q tests/smoke/test_qdex_delegation_policy.py tests/smoke/test_qdex_manager_attachment.py
+scripts/qwendex manager status --json
+qwendex-dev verify --tier full
+```
+
+Development acceptance artifacts live below the ignored results root at
+`qwendex/manager-delegation/`. `validation_summary.json` links the mode,
+prompt-admission, policy-drift, native-capability, dual-session, and status
+schema receipts. Live receipt rows identify workers by exact native ID and task
+path; raw prompts and worker transcripts are not copied into the acceptance
+bundle.
+
 ## Notes
 
 When the installed Codex version changes, rerun `scripts/qwendex codex-patch

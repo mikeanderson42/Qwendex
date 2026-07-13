@@ -283,6 +283,13 @@ root ownership id, and policy hash to Codex only after the preflight record
 exists. Manager Stop gates require that ledger and close either a managed-lane
 completion or a direct-work exception with validation evidence.
 
+Update: the immutable launch hash also seals Local enabled state and the
+launch-relevant local routing and eligibility configuration. Prompt admission
+uses the recorded launch availability rather than re-reading or probing the
+global Local setting. Manager, Kaveman, or Local changes therefore appear as
+desired policy drift while the active session remains valid under its original
+snapshot.
+
 Reason: Manager Mode is an execution contract, not only a selected label. The
 operator should not be able to start write-capable direct Codex work in Manager
 Mode without a recorded route decision, hook posture, verifier expectation, and
@@ -643,3 +650,40 @@ Reason: an upgrade can execute new source through an older generated wrapper.
 Environment inheritance must not let a removed Qwendex wrapper masquerade as
 the upstream recovery binary, because sync would delete the wrapper after
 embedding its path and leave installed Qdex unable to start.
+
+## Immutable Native Manager Delegation Runtime
+
+Decision: Agent Manager duty is orthogonal to model reasoning. Every non-Off
+Qdex launch runs prompt-aware preflight and seals one content-hashed policy;
+Lite and Medium treat missing managed hooks as advisory, while Heavy and
+Manager fail closed. A deterministic classifier and planner select bounded
+read-only worker lanes, the root remains the sole default writer, exact Codex
+V2 task/parent identities bind native workers to planned ledger rows, and Stop
+closes only after required final reports and post-edit validation. Global mode
+changes mark a live session drifted and restart-required without changing its
+authority. Ultra retains native proactive delegation while Qwendex retains the
+cap, lifecycle, root-only management, and duplicate-start controls.
+
+The supported Codex patch exposes exact SubagentStart task and parent identity,
+hides management tools from V2 children, and makes V2 ignore the legacy
+`agents.max_threads` setting in favor of its own ceiling. Qdex stores status and
+preflight handoff files per launch, so concurrent repositories cannot overwrite
+one another's authority metadata. Stock Codex remains an explicit Off-mode
+recovery boundary and does not carry these Manager guarantees.
+
+The native Ultra proactive source is sealed before both `codex-status` and
+Manager preflight hashing. Qdex omits its custom mode hint only after those two
+surfaces agree on the same Ultra-aware policy hash; disagreement fails the
+launch boundary.
+
+The release Codex-build allowlist names the complete canonical patch surface,
+including the core configuration, hook runtime, tool-spec, and hook-schema
+files used by Manager delegation. A successful build is not release evidence
+when that surface is absent from or exceeds the source-bound allowlist.
+
+Reason: mutable launch policy, prompt-free planning, guessed native identities,
+shared preflight files, and child-visible management tools each permit a live
+session to diverge from the policy the operator approved. Sealing authority,
+keeping planning deterministic and privacy-minimized, and requiring lifecycle
+evidence makes delegation auditable without conflating reasoning effort with
+the decision to delegate.
