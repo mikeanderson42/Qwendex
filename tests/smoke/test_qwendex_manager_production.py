@@ -337,6 +337,29 @@ def test_manager_acceptance_artifact_contract_requires_all_provenance_fields():
     assert acceptance.artifact_contract_errors(payload) == ["missing:artifact_digests"]
 
 
+def test_install_acceptance_treats_empty_manager_standby_as_healthy():
+    install_path = ROOT / "scripts" / "qwendex_manager_install_acceptance.py"
+    spec = importlib.util.spec_from_file_location("qwendex_manager_install_status_test", install_path)
+    assert spec is not None and spec.loader is not None
+    install = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(install)
+
+    healthy = {
+        "status": "standby",
+        "errors": [],
+        "data": {"mode": "manager", "write_safety": {"status": "ready"}},
+    }
+    install.require_healthy_manager_status(healthy, "upgraded Manager status")
+    for invalid in (
+        {**healthy, "status": "blocked"},
+        {**healthy, "errors": ["failure"]},
+        {**healthy, "data": {"mode": "off", "write_safety": {"status": "ready"}}},
+        {**healthy, "data": {"mode": "manager", "write_safety": {"status": "blocked"}}},
+    ):
+        with pytest.raises(install.InstallAcceptanceError, match="healthy Manager status"):
+            install.require_healthy_manager_status(invalid, "upgraded Manager status")
+
+
 def test_manager_acceptance_pytest_environment_drops_parent_generation_binding():
     acceptance_path = ROOT / "scripts" / "qwendex_manager_acceptance.py"
     spec = importlib.util.spec_from_file_location("qwendex_manager_pytest_environment_test", acceptance_path)

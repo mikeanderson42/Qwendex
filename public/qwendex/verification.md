@@ -46,6 +46,8 @@ The isolated v0.5.7 baseline first runs that release's user-scoped dependency
 installer with system writes disabled, explicitly installs and verifies its
 managed hooks, then proves its preflight before the candidate checkout,
 migration, and rollback checks.
+The first upgraded status may be `standby` when the isolated state has no
+sessions; the gate accepts it only with Manager mode and ready write safety.
 
 Development worktree gates:
 

@@ -781,3 +781,6 @@ creates the realistic old baseline whose state, preflight, candidate migration,
 and rollback the acceptance gate is intended to validate. Hook installation is
 equally part of that baseline: v0.5.7 intentionally blocks Manager launches
 without verified lifecycle hooks and does not install them implicitly on sync.
+After candidate sync, an empty isolated Manager state is healthy when status is
+`standby`; acceptance additionally requires Manager mode, no errors, and ready
+single-writer safety instead of treating the absence of sessions as a failure.

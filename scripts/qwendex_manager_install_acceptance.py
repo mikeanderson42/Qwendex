@@ -229,6 +229,22 @@ def require_pass(payload: Mapping[str, Any], label: str) -> None:
         raise InstallAcceptanceError(f"{label} did not return a passing status")
 
 
+def require_healthy_manager_status(payload: Mapping[str, Any], label: str) -> None:
+    data = payload.get("data") if isinstance(payload.get("data"), Mapping) else {}
+    write_safety = (
+        data.get("write_safety")
+        if isinstance(data.get("write_safety"), Mapping)
+        else {}
+    )
+    if (
+        payload.get("status") not in {"pass", "standby"}
+        or bool(payload.get("errors"))
+        or data.get("mode") != "manager"
+        or write_safety.get("status") != "ready"
+    ):
+        raise InstallAcceptanceError(f"{label} did not return a healthy Manager status")
+
+
 def manifest_is_canonically_validated(
     manifest: Mapping[str, Any],
     generation_id: str,
@@ -882,7 +898,7 @@ def run_acceptance(run_id: str, output_root: Path) -> dict[str, Any]:
             timeout=120,
         )
         commands.append(status_record)
-        require_pass(status_payload, "upgraded Manager status")
+        require_healthy_manager_status(status_payload, "upgraded Manager status")
         new_schema = state_schema_version(Path(str(upgrade_environment["QWENDEX_STATE_DB"])))
         new_work = upgrade_root / "candidate-preflight-repository"
         LIVE.initialize_work_repo(new_work, variant=1760)
