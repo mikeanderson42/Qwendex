@@ -23,7 +23,9 @@ The public contract is intentionally narrow:
 - JSON commands return a stable envelope with status, summary, artifacts,
   next actions, errors, and version.
 - Local Qwen routes are advisory and receipt-backed.
-- Manager Mode subagent lanes are reviewed before acceptance.
+- Manager Mode lanes are lifecycle- and verifier-gated when Qdex uses the
+  supported patched Codex runtime; stock Codex remains the Off-mode recovery
+  plane.
 - Public behavior is backed by smoke tests, evals, and release gates.
 
 ## What Is Included
@@ -65,6 +67,14 @@ Manager routing is per lane. The main Codex session keeps the user's selected
 model and reasoning. Low-risk bounded lanes may use local Qwen; high-risk lanes
 escalate to GPT/Codex authority.
 
+Qwendex `0.6.0-rc.1` installs validated runtime generations side by side. Each
+Qdex process is pinned to one immutable source/hook/binary/config contract;
+activation affects only new sessions, and shell recovery can restore the prior
+known-good generation without invoking Qdex. Stock Codex supports Qwendex's
+standalone CLI, routing, receipts, checks, and Off-mode recovery, but it does
+not provide the patched native identity, child-tool-surface, or lifecycle-hook
+guarantees required for enforced Heavy/Manager delegation.
+
 ## How It Is Built
 
 Qwendex is primarily Python, shell, and JSON:
@@ -83,14 +93,17 @@ Qwendex is primarily Python, shell, and JSON:
 
 ## Quick Start
 
-Clone the current tagged release into the default Qwendex root:
+Clone a published tagged release into the default Qwendex root:
 
 ```bash
 git clone https://github.com/mikeanderson42/Qwendex.git ~/qwendex-dev
 cd ~/qwendex-dev
 git fetch --tags origin
-git switch --detach v0.5.7
+git switch --detach <published-release-tag>
 ```
+
+The `v0.6.0-rc.1` name in this checkout is candidate metadata only. It is not
+a published tag until a separate release operation creates and pushes it.
 
 Qwendex is currently distributed as source; GitHub source archives and the
 matching git tag are the release artifact. It does not install as a Python or
@@ -164,6 +177,18 @@ Run an exact-marker local probe when the local stack is intentionally available:
 ```bash
 scripts/qwendex exec "Reply exactly QWENDEX_OK" --seat auto --json
 ```
+
+Inspect and validate the immutable runtime and Manager acceptance surfaces:
+
+```bash
+scripts/qwendex runtime status --json
+scripts/qwendex runtime generations --json
+scripts/qwendex manager accept --profile offline --run-id <run-id> --json
+```
+
+The `live` profile runs fresh real-model sessions; `production` additionally
+runs self-hosting, fresh install, v0.5.7 upgrade, shell rollback, security,
+performance, and normal-Codex isolation gates. Raw live receipts stay ignored.
 
 ## Manager Mode And Local Routing
 
@@ -315,10 +340,10 @@ claims require GPT/Codex review and the appropriate Qwendex verification tier.
 
 ## Current Release / Known Limits
 
-This checkout is seeded as `v0.5.7`. The latest captured max-depth
-validation summary in this repository is still
-[`docs/validation/v0.1.0-rc.1-validation_summary.json`](docs/validation/v0.1.0-rc.1-validation_summary.json)
-until a newer release validation run is recorded.
+This checkout is prepared as the `v0.6.0-rc.1` candidate. Its source-bound
+Manager production validation summary is generated only after the offline,
+live, self-hosting, fresh-install, upgrade, rollback, and release tiers pass;
+the candidate is not a published tag until the separate publication goal.
 
 Known limits:
 
@@ -331,3 +356,7 @@ Known limits:
   are not yet a general permission engine in the public CLI.
 - Patched Codex footer and hotkeys depend on a supported source checkout and a
   rebuilt Codex binary.
+- Enforced Manager guarantees are certified only on the tested Linux / Codex
+  `0.144.0` canonical patch combination. Stock Codex is supported for Off-mode
+  recovery and non-native Qwendex CLI functions, not as an equivalent Manager
+  enforcement runtime.

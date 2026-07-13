@@ -1,3 +1,25 @@
+# v0.6.0-rc.1
+
+Manager production-hardening release candidate. This metadata prepares the
+candidate only; no tag or publication is part of the hardening goal.
+
+- Adds immutable, side-by-side Qwendex runtime generations with validated
+  source/hook/Codex-binary/config contracts, atomic activation for new
+  sessions, active-session pinning, safe pruning, and shell-only rollback.
+- Reproduces the historical Qdex self-edit failure and proves old-session/new-
+  session continuity plus injected activation-failure recovery.
+- Adds first-class offline, live, and production Manager acceptance profiles,
+  a 70-case routing corpus, 100 deterministic event-fault permutations,
+  migration/security/soak/performance gates, and explicit evidence history
+  classification.
+- Adds repeated fresh non-Ultra Manager, five-turn, Ultra-coexistence, and
+  two-repository concurrency fixtures with zero-orphan lifecycle invariants.
+- Adds clean install with a pinned Codex rebuild, upgrade from v0.5.7,
+  standalone known-good rollback, and normal-Codex isolation acceptance.
+- Limits enforced Manager claims to the supported Linux/Codex `0.144.0`
+  canonical patch. Stock Codex remains the Off-mode recovery path and supports
+  non-native Qwendex CLI functions.
+
 # v0.5.7
 
 Qdex managed-session continuity hotfix.

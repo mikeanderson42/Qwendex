@@ -98,3 +98,20 @@ Codex home, verified hooks, and policy hash. A direct internal-runtime process
 cannot become trusted by selecting the same repository or state database.
 Untrusted `UserPromptSubmit` fails before model work; untrusted `Stop` is
 non-blocking and cannot attach to or mutate a decision.
+
+## Certified Boundary
+
+The production-hardening claim is deliberately limited to the tested Linux and
+Codex `0.144.0` canonical-patch matrix. Qwendex orchestration policy is not an
+operating-system sandbox: normal Qdex uses its documented approval/sandbox
+contract, while `qwendex-dev` bypass mode is development-only. Stock Codex and
+its normal home remain independent and provide the Off-mode recovery path.
+
+Runtime source, hooks, patch identity, binary pair, config/schema, and state
+schema are bound into one validated generation for each Qdex process. Mutable
+agent reports are written outside the sealed tree. Environment changes cannot
+replace an active policy or generation, child threads lack root collaboration
+tools in the canonical patch, read-only lanes cannot acquire writer ownership,
+and repository/symlink or policy-hash spoof attempts fail closed. These
+controls do not make claims about unsupported platforms, Codex versions, or
+arbitrary commands outside the managed-hook and host-sandbox boundary.

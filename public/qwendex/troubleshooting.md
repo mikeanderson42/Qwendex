@@ -1,5 +1,23 @@
 # Troubleshooting
 
+## Qdex Cannot Start After A Runtime Update
+
+Do not repair a selected generation in place. From an ordinary shell or stock
+Codex session, inspect the selector and roll back to the retained known-good
+generation:
+
+```bash
+scripts/qwendex runtime status --json
+~/qwendex-dev/.qwendex-dev/bin/qwendex-runtime-recovery rollback \
+  --runtime-root ~/qwendex-dev/.qwendex-dev/runtime --json
+```
+
+An interrupted build or activation must leave the previous selector usable.
+Preserve the failed candidate and receipt for diagnosis; prune only with
+`runtime prune --safe`, which retains selected and ledger-referenced
+generations. If the affected checkout is v0.5.7, exit the old session and
+relaunch after upgrade because that release predates generation pinning.
+
 ## Manager Prompt Is Rejected As An Untrusted Launch
 
 Use `qdex -C <repo>` rather than invoking Qwendex's internal runtime directly.

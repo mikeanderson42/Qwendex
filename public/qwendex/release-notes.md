@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+## 0.6.0-rc.1 (candidate)
+
+- Added immutable runtime generations that bind Qwendex source, hooks, Codex
+  patch and binary pair, config/schema, and state schema. Activation affects
+  new sessions only; rollback works from a standalone shell recovery copy.
+- Added `qwendex manager accept --profile offline|live|production` with explicit
+  run IDs, source-bound evidence, repeated non-Ultra Manager trials, Ultra
+  coexistence, concurrency, fault injection, security, migration, performance,
+  fresh-install, v0.5.7-upgrade, rollback, and normal-Codex isolation gates.
+- Reproduced the earlier Qdex self-edit failure: hooks were executing mutable
+  source whose content identity changed during the active session. Runtime
+  generations keep active hooks and binaries immutable while allowing a next
+  generation to be built beside them.
+- Kept mutable worker reports outside the sealed generation tree and made
+  terminal validation classification explicit, preventing bounded workers from
+  being trapped in repeated SubagentStop continuation.
+- Certified enforced Manager guarantees only for the tested Linux/Codex
+  `0.144.0` canonical patch. Stock Codex remains supported for Off-mode
+  recovery and standalone Qwendex CLI functions.
+
 ## 0.5.7
 
 - Fixed Manager Mode sessions becoming permanently blocked with

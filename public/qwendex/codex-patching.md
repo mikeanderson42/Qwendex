@@ -6,6 +6,13 @@ supported Codex source patch. The installed Codex npm package ships a stripped
 native binary, so Qwendex treats the integration as a versioned source patch
 instead of mutating the binary in place.
 
+With stock Codex, the standalone Qwendex CLI, checks, routing, receipts,
+offline evals, and Off-mode recovery remain supported. Enforced Heavy/Manager
+claims require the canonical Linux/Codex `0.144.0` patch, its matching
+`codex-code-mode-host`, verified managed hooks, and one validated runtime
+generation. Unknown versions or anchor drift fail closed rather than silently
+downgrading to prompt-only policy.
+
 ## Contract
 
 Qwendex owns a stable runtime contract:
@@ -133,3 +140,8 @@ Rust tests, `cargo fmt --check`, `codex-patch preflight --require-applied`, and
 `qwendex-dev build-codex --release`. A successful build receipt records the
 manifest/source digest and binary SHA-256; changing a required source edit
 invalidates that evidence until the patch is reapplied and rebuilt.
+
+Qwendex copies the validated binary pair into each immutable runtime
+generation. It never replaces the pair used by an active Qdex process;
+activation selects a side-by-side generation for new sessions, and rollback is
+available from the sync-installed standard-library recovery command.

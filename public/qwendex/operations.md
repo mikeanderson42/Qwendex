@@ -206,6 +206,23 @@ scripts/qwendex manager mode --set manager --json
 scripts/qwendex manager status --json
 ```
 
+Runtime generations and acceptance are operator-visible CLI surfaces:
+
+```bash
+scripts/qwendex runtime status --json
+scripts/qwendex runtime generations --json
+scripts/qwendex runtime activate --candidate <generation-id> --json
+scripts/qwendex runtime rollback --json
+scripts/qwendex runtime prune --safe --json
+scripts/qwendex manager accept --profile offline --run-id <run-id> --json
+```
+
+Activation is atomic for new Qdex processes and does not rewrite an active
+session. Rollback is also installed as a standalone shell recovery copy so it
+does not depend on a functioning Qdex session. Production acceptance adds live
+model, install/upgrade/rollback, security, performance, and normal-Codex decoy
+gates; it never publishes or tags a release.
+
 In a patched Codex TUI, `Alt+M` cycles Agent Manager, `Alt+K` toggles Kaveman,
 and `Alt+L` toggles Local. `Local: [Off]` means Qwendex will skip local
 subagents even when the local model endpoint is healthy; `Local: [Unavailable]`

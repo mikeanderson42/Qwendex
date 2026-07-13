@@ -6,6 +6,13 @@ reasoning, while the Agent Manager mode determines whether and how bounded
 native workers are planned. Changing reasoning does not silently change the
 selected delegation mode.
 
+Enforcement boundary: deterministic planning and status inspection are
+available from the Qwendex CLI, but exact native parent/worker identity,
+root-only collaboration management, SubagentStop/Stop continuity, and the
+Heavy/Manager fail-closed guarantees require the supported canonical Codex
+patch. Ordinary stock Codex is the independent Off-mode recovery plane; it is
+not an equivalent enforced Manager runtime.
+
 Public modes are ordered:
 
 ```text
@@ -341,6 +348,25 @@ against the supported source checkout. Setting the next-launch mode to `Off`
 provides a stock-Codex recovery path without granting the old Manager session
 new authority. Preserve the decision and lifecycle receipts while diagnosing a
 blocked close so stale capacity and tombstones remain auditable.
+
+Qdex sessions launched by this candidate are pinned to one immutable runtime
+generation. Building a candidate does not change the active session; atomic
+activation changes only the selector used by new processes. Inspect or recover
+from a shell or stock Codex session with:
+
+```bash
+scripts/qwendex runtime status --json
+scripts/qwendex runtime generations --json
+scripts/qwendex runtime activate --candidate <generation-id> --json
+scripts/qwendex runtime rollback --json
+scripts/qwendex runtime prune --safe --json
+```
+
+The sync-installed `qwendex-runtime-recovery` copy is the preferred rollback
+surface when Qdex or mutable source is broken. Safe prune retains selected,
+known-good, and ledger-referenced generations. Manager lifecycle raw/compact
+reports remain mutable under the writable operator-local `.qwendex/runs/`
+root; hook code and source remain sealed in the selected generation.
 
 The first release also uses a single-writer file-lock strategy in the base
 worktree. Codex root events intentionally have no top-level `agent_id`, so

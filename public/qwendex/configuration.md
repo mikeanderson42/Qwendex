@@ -77,6 +77,18 @@ Use a temporary DB for isolated probes:
 QWENDEX_STATE_DB=/tmp/qwendex.sqlite scripts/qwendex task status --json
 ```
 
+Manager state schema version 2 uses transactional migration, a pre-migration
+backup, WAL, and a bounded busy timeout. Each Manager decision and worker row
+records its runtime and hook generation; historical acceptance is visible but
+cannot satisfy a current source-bound gate.
+
+`QWENDEX_RUNTIME_ROOT` contains side-by-side immutable generations plus the
+atomically replaced `current.json` selector. `QWENDEX_RUNTIME_GENERATION_ID`,
+`QWENDEX_HOOK_GENERATION`, and the runtime contract digest are process-pinned
+outputs, not supported knobs for rewriting a live session. Mutable child
+reports use `QWENDEX_AGENT_ARTIFACT_ROOT`, which Qdex fixes to the writable
+operator-local `.qwendex` root outside the sealed source tree.
+
 ## Exploration Performance Telemetry
 
 The optional `performance` object controls a separate local telemetry database;

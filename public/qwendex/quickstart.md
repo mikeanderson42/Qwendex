@@ -1,17 +1,22 @@
 # Quickstart
 
-## Install A Tagged Release
+## Install a Published Tagged Release
 
 Qwendex is distributed as a source repository, not as a Python or npm package.
-Clone it directly at the default runtime root, then pin the current release:
+Clone it directly at the default runtime root, then pin a tag that is already
+published:
 
 ```bash
 git clone https://github.com/mikeanderson42/Qwendex.git ~/qwendex-dev
 cd ~/qwendex-dev
 git fetch --tags origin
-git switch --detach v0.5.7
+git switch --detach <published-release-tag>
 git status --short
 ```
+
+`v0.6.0-rc.1` is candidate metadata in this checkout, not a published tag.
+Use its source commit only for candidate validation until a separate release
+operation publishes the tag.
 
 Stop if `git status --short` prints unexpected files. Install the
 release-compatible dependencies, create isolated runtime wiring, and load the
@@ -56,7 +61,17 @@ isolated `CODEX_HOME` only for its child process. Sourcing the environment
 leaves the caller's `CODEX_HOME` and ordinary upstream `codex` unchanged, so
 upstream Codex remains available for recovery; `codex-main` is an explicit
 captured-upstream alias. The release tag pins the Qwendex source. Patched Codex
-footer/hotkey support remains a separately built, version-checked integration.
+footer/hotkey support and enforced Manager identity/lifecycle guarantees remain
+a separately built, version-checked integration.
+
+After the pinned Codex build is available, `sync` builds a sealed runtime
+generation, validates its hooks and binary pair, and atomically selects it for
+new Qdex processes. Inspect the selected and retained generations with:
+
+```bash
+scripts/qwendex runtime status --json
+scripts/qwendex runtime generations --json
+```
 
 A plain `qdex` inherits `$PWD` without synthesizing a
 directory option, while native `-C`/`--cd` is forwarded unchanged and also
@@ -87,6 +102,20 @@ scripts/qwendex eval --all --json
 Always run `scripts/qwendex_dev_env sync` from the newly selected tag before
 invoking `qdex`; this replaces an older installed launcher and its generated
 runtime together.
+
+For a failed candidate activation, recover from an ordinary shell or stock
+Codex session; this path does not invoke Qdex:
+
+```bash
+~/qwendex-dev/.qwendex-dev/bin/qwendex-runtime-recovery rollback \
+  --runtime-root ~/qwendex-dev/.qwendex-dev/runtime --json
+```
+
+The exact recovery path is also printed by `scripts/qwendex runtime status
+--json`. Existing v0.5.7 sessions must exit and relaunch during upgrade because
+that version predates immutable generation pinning. Once on this candidate,
+active sessions retain their old generation while activation selects a new one
+only for future sessions.
 
 For rollback between `0.5.x` and newer compatible releases, repeat the same
 sequence with the prior tag. Do not reuse newer runtime state with an older
@@ -124,6 +153,18 @@ scripts/qwendex_install_deps --check --json
 ```bash
 scripts/qwendex check --json
 ```
+
+Run source-bound Manager acceptance with an explicit run ID:
+
+```bash
+scripts/qwendex manager accept --profile offline --run-id <run-id> --json
+scripts/qwendex manager accept --profile live --run-id <run-id> --json
+scripts/qwendex manager accept --profile production --run-id <run-id> --json
+```
+
+`live` and `production` consume authenticated real-model capacity and operate
+only in isolated fixtures. Production is release-candidate evidence, not a
+publish or tag command.
 
 Start the stack when you want live local Qwen runs:
 

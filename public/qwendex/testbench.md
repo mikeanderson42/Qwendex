@@ -120,15 +120,18 @@ Run the repository smoke suite and inspect the durable acceptance bundle:
 ```bash
 python3 -m pytest -q tests/smoke/test_qdex_delegation_policy.py tests/smoke/test_qdex_manager_attachment.py
 scripts/qwendex manager status --json
+scripts/qwendex manager accept --profile offline --run-id <run-id> --json
 qwendex-dev verify --tier full
 ```
 
 Development acceptance artifacts live below the ignored results root at
 `qwendex/manager-delegation/`. `validation_summary.json` links the mode,
 prompt-admission, policy-drift, native-capability, dual-session, and status
-schema receipts. Live receipt rows identify workers by exact native ID and task
-path; raw prompts and worker transcripts are not copied into the acceptance
-bundle.
+schema receipts. The current production bundle lives under
+`manager-production/<run-id>/`; live receipt rows identify workers by exact
+native ID and sanitized repository alias. Raw prompts, worker transcripts,
+credentials, and local databases remain ignored and are not copied into the
+tracked validation summary.
 
 ## Notes
 

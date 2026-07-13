@@ -22,6 +22,24 @@ release-readiness claims.
 Use `--case exact_marker` only for an offline marker fixture; it is not live
 model evidence.
 
+The first-class Manager production profiles are separate from the local-Qwen
+bridge gates and always require an explicit run ID:
+
+```bash
+scripts/qwendex manager accept --profile offline --run-id <run-id> --json
+scripts/qwendex manager accept --profile live --run-id <run-id> --json
+scripts/qwendex manager accept --profile production --run-id <run-id> --json
+```
+
+Offline rejects zero collection and any skip in its required Manager suite,
+then runs the synthetic routing corpus, 100 deterministic fault permutations,
+migration, security, four-session soak, performance budgets, and privacy scan.
+Live runs fresh Medium, Heavy, repeated non-Ultra Manager, five-turn Manager,
+Ultra-coexistence, and two-repository concurrent fixtures. Production runs
+self-hosting first and adds fresh build/install, v0.5.7 upgrade, shell rollback,
+normal-Codex isolation, and sanitized manifest assembly. No profile chooses an
+artifact through an ambiguous latest pointer.
+
 Development worktree gates:
 
 ```bash

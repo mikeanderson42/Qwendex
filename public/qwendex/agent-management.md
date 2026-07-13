@@ -217,6 +217,10 @@ terminal. For a ledger-backed agent, Qwendex writes:
 `manager status`, `context compact-plan`, and `context pack` expose artifact
 paths and compact agent outcomes so the root session can preserve evidence
 without injecting full worker transcripts into context.
+For an immutable Qdex generation, the hook implementation remains in the
+read-only generation tree while Qdex binds this artifact directory to the
+writable operator root. A report-capture failure blocks terminalization rather
+than silently discarding the worker's evidence.
 The repository digest keeps reused task/session ids from sharing an aggregate
 index across repositories without exposing the repository path in the artifact
 name.

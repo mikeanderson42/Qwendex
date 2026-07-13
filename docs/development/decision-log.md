@@ -242,6 +242,47 @@ context with raw logs or rewritten worker transcripts. Keeping raw output local
 and ignored preserves reviewability while maintaining the public/private
 artifact boundary.
 
+For immutable runtime generations, the selected source tree remains sealed
+read-only. Qdex therefore pins hook and implementation paths to that tree while
+exporting the Manager artifact root as the writable operator-local
+`$QWENDEX_DEV_ROOT/.qwendex`. This keeps per-session raw and compact lifecycle
+artifacts mutable without weakening generation integrity or writing into a
+downstream project worktree.
+
+## Immutable Runtime Generation Boundary
+
+Decision: Qdex selects a validated, read-only runtime generation for each new
+process. A generation binds the Qwendex source snapshot, managed hooks, Codex
+`0.144.0` patch and binary pair, public config/schema, and Manager state schema.
+Candidate build and validation occur beside the selected generation; atomic
+selector replacement is the only activation step. Active processes retain
+their inherited generation, safe prune preserves selected/known-good/ledger-
+referenced generations, and a sync-installed standard-library recovery copy
+performs status, activation, and rollback without Qdex.
+
+Reason: the pre-v0.5.7 Manager runtime identity hashed mutable
+`qwendex_cli.py`, so an accepted self-edit changed the active identity and the
+next hook rejected the session. v0.5.7's path identity stopped that rejection
+but still allowed later hooks to execute changed bytes. Side-by-side immutable
+trees are required to keep source, hooks, binaries, and config coherent across
+self-hosted edits and interrupted activation.
+
+## Manager Production Acceptance And Claim Ceiling
+
+Decision: `manager accept` has offline, live, and production profiles with
+explicit run IDs and exact source/config/schema/runtime binding. Production
+runs self-hosting before repeated live trials and adds a clean pinned-Codex
+build, v0.5.7 upgrade, shell rollback, normal-Codex isolation, security,
+persistence, routing, fault, soak, and performance evidence. Historical or
+unbound artifacts remain visible but cannot satisfy the current gate.
+
+Reason: a single successful live delegation or an ambiguous newest artifact is
+not production evidence. The public claim is limited to the tested Linux and
+Codex `0.144.0` canonical patch. Stock Codex continues to support Off-mode
+recovery and non-native Qwendex CLI functions but is not an equivalent enforced
+Manager runtime. Candidate version `0.6.0-rc.1` is prepared without tagging or
+publishing.
+
 ## Managed Agent Hook Config
 
 Decision: Qwendex generates managed hook wiring through
