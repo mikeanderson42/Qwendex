@@ -229,6 +229,27 @@ def require_pass(payload: Mapping[str, Any], label: str) -> None:
         raise InstallAcceptanceError(f"{label} did not return a passing status")
 
 
+def manifest_is_canonically_validated(
+    manifest: Mapping[str, Any],
+    generation_id: str,
+) -> bool:
+    return bool(
+        generation_id
+        and manifest.get("generation_id") == generation_id
+        and manifest.get("status") == "validated"
+        and manifest.get("result") == "pass"
+    )
+
+
+def legacy_dependency_install_command(source: Path) -> list[str]:
+    return [
+        str(source / "scripts" / "qwendex_install_deps"),
+        "--install",
+        "--no-system",
+        "--json",
+    ]
+
+
 def selected_manifest(source: Path) -> dict[str, Any]:
     runtime_root = source / ".qwendex-dev" / "runtime"
     selection = read_json(runtime_root / "current.json")
@@ -265,9 +286,7 @@ def selected_manifest(source: Path) -> dict[str, Any]:
         or current.get("generation_id") != generation_id
         or current.get("valid") is not True
         or current.get("status") != "validated"
-        or manifest.get("generation_id") != generation_id
-        or manifest.get("status") != "validated"
-        or manifest.get("result") != "pass"
+        or not manifest_is_canonically_validated(manifest, generation_id)
     ):
         raise InstallAcceptanceError("isolated install has no validated selected runtime generation")
     return manifest
@@ -703,10 +722,10 @@ def run_acceptance(run_id: str, output_root: Path) -> dict[str, Any]:
         upgrade_base = isolated_environment(upgrade_source, upgrade_home, stock_codex)
         for label, command, public, timeout in (
             (
-                "upgrade_old_dependency_check",
-                [str(upgrade_source / "scripts" / "qwendex_install_deps"), "--check", "--json"],
-                "v0.5.7 scripts/qwendex_install_deps --check --json",
-                300,
+                "upgrade_old_dependency_install",
+                legacy_dependency_install_command(upgrade_source),
+                "v0.5.7 scripts/qwendex_install_deps --install --no-system --json",
+                900,
             ),
             (
                 "upgrade_old_sync",
@@ -725,7 +744,7 @@ def run_acceptance(run_id: str, output_root: Path) -> dict[str, Any]:
                 timeout=timeout,
             )
             commands.append(record)
-            if label == "upgrade_old_dependency_check":
+            if label == "upgrade_old_dependency_install":
                 require_pass(payload, label)
         old_environment = generated_environment(upgrade_source, upgrade_base)
         old_mode_record, old_mode = command_record(
@@ -1026,7 +1045,10 @@ def run_acceptance(run_id: str, output_root: Path) -> dict[str, Any]:
             "candidate_commit_checked_out": git_commit("HEAD", cwd=fresh_source) == candidate_commit,
             "dependencies_installed": True,
             "pinned_codex_built_from_source": fresh_build_receipt.is_file(),
-            "runtime_generation_validated": bool(fresh_manifest.get("validated")),
+            "runtime_generation_validated": manifest_is_canonically_validated(
+                fresh_manifest,
+                fresh_generation,
+            ),
             "managed_hooks_verified": hook_verify.get("status") == "pass",
             "dry_preflight_ready": (
                 ((fresh_dry.get("manager_preflight") or {}).get("data") or {}).get("stop_status")

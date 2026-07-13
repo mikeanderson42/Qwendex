@@ -42,6 +42,9 @@ artifact through an ambiguous latest pointer. Fresh and upgraded runtime
 selection is accepted only when the sync-installed shell recovery validator
 reports the selected generation integrity-valid with `status: validated`;
 the acceptance harness does not infer validity from a separate manifest flag.
+The isolated v0.5.7 baseline first runs that release's user-scoped dependency
+installer with system writes disabled, then proves its preflight before the
+candidate checkout, migration, and rollback checks.
 
 Development worktree gates:
 

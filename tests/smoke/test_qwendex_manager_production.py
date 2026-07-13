@@ -192,6 +192,7 @@ def test_production_acceptance_dispatches_executable_profiles_and_install_contra
         "fresh_offline_acceptance",
         "fresh_install_non_ultra_live_manager",
         "upgrade_v0_5_7",
+        "upgrade_old_dependency_install",
         "upgrade_historical_evidence_classification",
         "rollback_shell_recovery",
         "rollback_injected_activation_failure",
@@ -260,6 +261,10 @@ def test_install_acceptance_uses_canonical_runtime_validation_without_legacy_fla
         "--json",
     ]
     assert "validated" not in manifest
+    assert install.manifest_is_canonically_validated(manifest, generation_id)
+    assert not install.manifest_is_canonically_validated(
+        {**manifest, "result": "fail"}, generation_id
+    )
 
     def invalid_run(command, **kwargs):
         return subprocess.CompletedProcess(
@@ -272,6 +277,22 @@ def test_install_acceptance_uses_canonical_runtime_validation_without_legacy_fla
     monkeypatch.setattr(install.subprocess, "run", invalid_run)
     with pytest.raises(install.InstallAcceptanceError, match="no validated selected runtime"):
         install.selected_manifest(tmp_path)
+
+
+def test_upgrade_fixture_bootstraps_legacy_user_dependencies_without_system_writes(tmp_path):
+    install_path = ROOT / "scripts" / "qwendex_manager_install_acceptance.py"
+    spec = importlib.util.spec_from_file_location("qwendex_manager_install_upgrade_test", install_path)
+    assert spec is not None and spec.loader is not None
+    install = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(install)
+
+    source = tmp_path / "legacy-source"
+    assert install.legacy_dependency_install_command(source) == [
+        str(source / "scripts" / "qwendex_install_deps"),
+        "--install",
+        "--no-system",
+        "--json",
+    ]
 
 
 def test_manager_acceptance_artifact_contract_requires_all_provenance_fields():

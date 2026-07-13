@@ -763,3 +763,16 @@ harness predicate falsely reported that no selected generation existed after a
 successful fresh build. Reusing the same standard-library validator as runtime
 status and rollback keeps install evidence aligned with the activation trust
 boundary and prevents schema drift between product and acceptance code.
+
+## Legacy Upgrade Fixture Bootstrap
+
+Decision: the isolated v0.5.7 upgrade fixture bootstraps that release's pinned
+user dependencies with `qwendex_install_deps --install --no-system --json`
+before its first sync and preflight. The candidate still performs no system
+package writes, and upgrade evidence records the legacy bootstrap command.
+
+Reason: an empty isolated home is not an already installed v0.5.7 environment.
+Checking it before running the old installer falsely blocked on the expected
+absence of the legacy user-scoped Python pins. Running the public installer
+creates the realistic old baseline whose state, preflight, candidate migration,
+and rollback the acceptance gate is intended to validate.
