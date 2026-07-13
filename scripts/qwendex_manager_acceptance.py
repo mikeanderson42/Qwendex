@@ -227,6 +227,17 @@ def relative_command(command: Iterable[str]) -> list[str]:
     return normalized
 
 
+def public_artifact_path(path: str | Path) -> str:
+    resolved = Path(path).resolve()
+    for base in (ROOT, Path.cwd().resolve()):
+        try:
+            relative = resolved.relative_to(base)
+        except ValueError:
+            continue
+        return str(relative) or "."
+    return resolved.name
+
+
 def source_binding() -> dict[str, Any]:
     status_lines = git("status", "--porcelain=v1", "--untracked-files=all").splitlines()
     dirty_paths = sorted(line[3:] for line in status_lines if len(line) > 3)

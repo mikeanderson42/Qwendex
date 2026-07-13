@@ -684,7 +684,10 @@ def main(argv: list[str] | None = None) -> int:
         "command": "manager-soak",
         "status": "pass" if soak.get("result") == "pass" else "blocked",
         "summary": "Manager metadata-only soak passed." if soak.get("result") == "pass" else "Manager metadata-only soak is blocked.",
-        "artifacts": [str(args.output), str(args.performance_output)],
+        "artifacts": [
+            load_acceptance_module().public_artifact_path(args.output),
+            load_acceptance_module().public_artifact_path(args.performance_output),
+        ],
         "next_actions": [] if soak.get("result") == "pass" else ["Repair every failed soak or performance gate."],
         "errors": list(soak.get("errors") or []),
         "data": soak,

@@ -746,7 +746,7 @@ def main(argv: list[str] | None = None) -> int:
         "command": "manager-live",
         "status": "pass" if payload.get("result") == "pass" else "blocked",
         "summary": "Manager live matrix passed." if payload.get("result") == "pass" else "Manager live matrix is blocked.",
-        "artifacts": [str(args.output)],
+        "artifacts": [ACCEPTANCE.public_artifact_path(args.output)],
         "next_actions": [] if payload.get("result") == "pass" else ["Inspect the ignored raw live receipts and repair every failed gate."],
         "errors": list(payload.get("errors") or []),
         "data": payload,

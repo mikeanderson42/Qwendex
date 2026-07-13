@@ -260,6 +260,10 @@ def test_manager_acceptance_sanitizes_embedded_workspace_paths_and_rejects_priva
         "--junitxml=.qwendex-dev/results/pytest.xml",
         "tests/smoke",
     ]
+    assert acceptance.public_artifact_path(ROOT / "docs" / "validation" / "summary.json") == (
+        "docs/validation/summary.json"
+    )
+    assert acceptance.public_artifact_path(tmp_path / "outside" / "summary.json") == "summary.json"
 
     private_artifact = tmp_path / "summary.json"
     private_artifact.write_text('{"working_directory":"/home/alice/private/repo"}\n', encoding="utf-8")

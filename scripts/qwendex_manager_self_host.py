@@ -901,7 +901,7 @@ def main(argv: list[str] | None = None) -> int:
             if payload.get("result") == "pass"
             else "Qwendex self-hosting acceptance is blocked."
         ),
-        "artifacts": [str(args.output_root)],
+        "artifacts": [ACCEPTANCE.public_artifact_path(args.output_root)],
         "next_actions": [] if payload.get("result") == "pass" else ["Repair the source-bound self-host gate."],
         "errors": list(payload.get("errors") or []),
         "data": payload,

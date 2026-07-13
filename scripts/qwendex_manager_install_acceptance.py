@@ -1186,7 +1186,9 @@ def main(argv: list[str] | None = None) -> int:
             if payload.get("result") == "pass"
             else "Manager install, upgrade, rollback, or isolation acceptance is blocked."
         ),
-        "artifacts": [str(args.output_root / "install_acceptance_summary.json")],
+        "artifacts": [
+            ACCEPTANCE.public_artifact_path(args.output_root / "install_acceptance_summary.json")
+        ],
         "next_actions": [] if payload.get("result") == "pass" else ["Inspect ignored install logs and repair the failing gate."],
         "errors": list(payload.get("errors") or []),
         "data": payload,
