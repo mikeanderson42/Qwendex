@@ -7,6 +7,7 @@ import os
 import sqlite3
 import subprocess
 import sys
+import textwrap
 from pathlib import Path
 from typing import Any
 
@@ -132,6 +133,82 @@ def write_full_manifest(tmp_path: Path, repository: Path, commit: str, tree: str
     manifest = tmp_path / "workload.json"
     manifest.write_text(json.dumps(payload), encoding="utf-8")
     return manifest
+
+
+def live_supervisor_budget(lab: Any, **overrides: Any) -> dict[str, Any]:
+    value: dict[str, Any] = {
+        "schema_version": lab.LIVE_SUPERVISOR_BUDGET_SCHEMA_VERSION,
+        "mode": "test",
+        "startup_preflight_seconds": 0.12,
+        "first_model_activity_seconds": 0.12,
+        "inactivity_seconds": 0.12,
+        "hard_wall_seconds": 0.50,
+        "graceful_termination_seconds": 0.10,
+        "forced_cleanup_seconds": 0.10,
+        "pipe_drain_seconds": 0.10,
+        "poll_interval_seconds": 0.01,
+        "derivation": {"kind": "accelerated_smoke_fixture"},
+    }
+    value.update(overrides)
+    return lab._normalise_live_supervisor_budgets(value)
+
+
+def run_live_supervisor_fixture(lab: Any, tmp_path: Path, code: str, budgets: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], Path]:
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    raw_dir = tmp_path / "raw"
+    phase_path = raw_dir / "runtime_phases.log"
+    environment = dict(os.environ)
+    environment["QWENDEX_TEST_PHASES"] = str(phase_path)
+    profile = lab._new_live_runtime_profile(
+        run_id="private-test-run",
+        task_id="private-test-task",
+        variant="baseline",
+        attempt="initial",
+        candidate_id="baseline_raw_tools",
+        repository={"commit": "a" * 40, "tree_digest": "git:" + "b" * 40},
+        manifest_digest="sha256:" + "c" * 64,
+        model_policy={
+            "model_identifier": "test-model",
+            "reasoning_effort": "test",
+            "local_routing_state": "off",
+            "manager_mode": "Manager",
+            "permission_mode": "workspace-write",
+        },
+        budgets=budgets,
+    )
+    source = (
+        SUPERVISOR_PHASE_HELPER + textwrap.dedent(code[len(SUPERVISOR_PHASE_HELPER) :])
+        if code.startswith(SUPERVISOR_PHASE_HELPER)
+        else textwrap.dedent(code)
+    )
+    result = lab._supervise_live_subprocess(
+        [sys.executable, "-c", source],
+        cwd=tmp_path,
+        environment=environment,
+        raw_dir=raw_dir,
+        profile=profile,
+        budgets=budgets,
+    )
+    lab._record_runtime_phase(profile, "runner_complete")
+    lab._finalise_live_runtime_profile(profile)
+    return result, profile, raw_dir
+
+
+SUPERVISOR_PHASE_HELPER = """
+import json
+import os
+from pathlib import Path
+
+def phase(value):
+    with Path(os.environ["QWENDEX_TEST_PHASES"]).open("a", encoding="utf-8") as handle:
+        handle.write(value + "\\n")
+
+def event(event_type, item_type=None, **fields):
+    payload = {"type": event_type}
+    if item_type:
+        payload["item"] = {"type": item_type, **fields}
+    print(json.dumps(payload), flush=True)
+"""
 
 
 def test_raw_search_uses_current_worktree_and_preserves_ignore_boundary(tmp_path: Path) -> None:
@@ -436,6 +513,233 @@ def test_live_workload_schema_and_trace_summary_are_private_metadata_only(tmp_pa
     assert trace["candidate_search_calls"] == 1
     assert trace["validation_tool_calls"] == 1
     assert trace["token_usage"] == {"input_tokens": 11, "output_tokens": 7}
+
+
+def test_live_supervisor_classifies_startup_and_first_model_timeouts(tmp_path: Path) -> None:
+    lab = load_module("qwendex_optimization_lab")
+
+    never_starts, never_profile, _ = run_live_supervisor_fixture(
+        lab,
+        tmp_path / "never-starts",
+        """
+        import time
+        time.sleep(1)
+        """,
+        live_supervisor_budget(lab, startup_preflight_seconds=0.05),
+    )
+    assert never_starts["timed_out"] is True
+    assert never_profile["termination"]["timeout_classification"] == "timeout_before_preflight_complete"
+
+    no_model, no_model_profile, _ = run_live_supervisor_fixture(
+        lab,
+        tmp_path / "no-model",
+        SUPERVISOR_PHASE_HELPER
+        + """
+        import time
+        phase("manager_preflight_start")
+        phase("manager_preflight_end")
+        phase("codex_process_start")
+        event("thread.started")
+        time.sleep(1)
+        """,
+        live_supervisor_budget(lab, startup_preflight_seconds=0.50, first_model_activity_seconds=0.05, inactivity_seconds=0.50),
+    )
+    assert no_model["timed_out"] is True
+    assert no_model_profile["termination"]["timeout_classification"] == "timeout_before_first_model_event"
+    assert no_model_profile["phase_timestamps"]["first_structured_event"] != "not_observed"
+
+
+def test_live_supervisor_handles_progress_and_stalled_lifecycle_phases(tmp_path: Path) -> None:
+    lab = load_module("qwendex_optimization_lab")
+
+    progress, progress_profile, _ = run_live_supervisor_fixture(
+        lab,
+        tmp_path / "progress",
+        SUPERVISOR_PHASE_HELPER
+        + """
+        import time
+        phase("manager_preflight_start")
+        phase("manager_preflight_end")
+        phase("codex_process_start")
+        for _ in range(8):
+            event("item.completed", "agent_message")
+            time.sleep(0.03)
+        """,
+        live_supervisor_budget(lab, hard_wall_seconds=0.45, inactivity_seconds=0.08),
+    )
+    assert progress["timed_out"] is False
+    assert progress["returncode"] == 0
+    assert progress_profile["phase_durations_ms"]["total_runner_ms"] > 100.0
+    assert progress_profile["trusted_progress_event_counts"]["model_or_assistant_event"] == 8
+
+    stalled_tool, stalled_tool_profile, _ = run_live_supervisor_fixture(
+        lab,
+        tmp_path / "stalled-tool",
+        SUPERVISOR_PHASE_HELPER
+        + """
+        import time
+        phase("manager_preflight_start")
+        phase("manager_preflight_end")
+        phase("codex_process_start")
+        event("item.completed", "agent_message")
+        event("item.started", "command_execution", command="rg test")
+        time.sleep(1)
+        """,
+        live_supervisor_budget(lab, inactivity_seconds=0.05, hard_wall_seconds=0.40),
+    )
+    assert stalled_tool["timed_out"] is True
+    assert stalled_tool_profile["termination"]["timeout_classification"] == "timeout_due_to_inactivity"
+    assert stalled_tool_profile["phase_timestamps"]["first_tool_start"] != "not_observed"
+
+    manager_stop, manager_stop_profile, _ = run_live_supervisor_fixture(
+        lab,
+        tmp_path / "manager-stop",
+        SUPERVISOR_PHASE_HELPER
+        + """
+        import time
+        phase("manager_preflight_start")
+        phase("manager_preflight_end")
+        phase("codex_process_start")
+        event("item.completed", "agent_message")
+        event("item.started", "collab_tool_call", tool_name="manager stop")
+        time.sleep(1)
+        """,
+        live_supervisor_budget(lab, inactivity_seconds=0.05, hard_wall_seconds=0.40),
+    )
+    assert manager_stop["timed_out"] is True
+    assert manager_stop_profile["termination"]["timeout_classification"] == "timeout_during_manager_stop"
+
+
+def test_live_supervisor_drains_pipes_and_cleans_process_groups(tmp_path: Path) -> None:
+    lab = load_module("qwendex_optimization_lab")
+
+    pipe_hang, pipe_hang_profile, _ = run_live_supervisor_fixture(
+        lab,
+        tmp_path / "pipe-hang",
+        SUPERVISOR_PHASE_HELPER
+        + """
+        import subprocess
+        import sys
+        phase("manager_preflight_start")
+        phase("manager_preflight_end")
+        phase("codex_process_start")
+        event("item.completed", "agent_message")
+        subprocess.Popen([sys.executable, "-c", "import time; time.sleep(3)"])
+        """,
+        live_supervisor_budget(lab, pipe_drain_seconds=0.05, graceful_termination_seconds=0.05, forced_cleanup_seconds=0.05),
+    )
+    assert pipe_hang["timed_out"] is True
+    assert pipe_hang_profile["termination"]["timeout_classification"] == "timeout_after_child_exit_pipe_drain"
+    assert pipe_hang_profile["termination"]["cleanup_status"] == "pass"
+
+    output, output_profile, output_raw = run_live_supervisor_fixture(
+        lab,
+        tmp_path / "backpressure",
+        SUPERVISOR_PHASE_HELPER
+        + """
+        import sys
+        phase("manager_preflight_start")
+        phase("manager_preflight_end")
+        phase("codex_process_start")
+        event("item.completed", "agent_message")
+        sys.stdout.buffer.write(b"x" * (1024 * 1024))
+        sys.stdout.buffer.flush()
+        sys.stderr.buffer.write(b"y" * (1024 * 1024))
+        sys.stderr.buffer.flush()
+        """,
+        live_supervisor_budget(lab, hard_wall_seconds=1.0),
+    )
+    assert output["timed_out"] is False
+    pipe_state = output_profile["process_diagnostics"]["pipe_state"]["streams"]
+    assert pipe_state["stdout"]["bytes"] >= 1024 * 1024
+    assert pipe_state["stderr"]["bytes"] >= 1024 * 1024
+    assert b"x" * 32 not in json.dumps(output_profile, sort_keys=True).encode("utf-8")
+    assert (output_raw / "events.jsonl").stat().st_size >= 1024 * 1024
+
+    terminated, terminated_profile, _ = run_live_supervisor_fixture(
+        lab,
+        tmp_path / "group-timeout",
+        SUPERVISOR_PHASE_HELPER
+        + """
+        import subprocess
+        import sys
+        import time
+        phase("manager_preflight_start")
+        phase("manager_preflight_end")
+        phase("codex_process_start")
+        for _ in range(4):
+            event("item.completed", "agent_message")
+            time.sleep(0.03)
+        subprocess.Popen([sys.executable, "-c", "import time; time.sleep(3)"])
+        time.sleep(3)
+        """,
+        live_supervisor_budget(lab, hard_wall_seconds=0.16, inactivity_seconds=0.08, graceful_termination_seconds=0.05, forced_cleanup_seconds=0.05),
+    )
+    assert terminated["timed_out"] is True
+    assert terminated_profile["termination"]["cleanup_status"] == "pass"
+    assert terminated_profile["process_diagnostics"]["snapshots"][-1]["non_zombie_process_count"] == 0
+
+
+def test_live_supervisor_policy_equivalence_and_privacy_contract(tmp_path: Path) -> None:
+    lab = load_module("qwendex_optimization_lab")
+    baseline_policy = live_supervisor_budget(lab)
+    candidate_policy = live_supervisor_budget(lab)
+    assert baseline_policy["policy_identity"] == candidate_policy["policy_identity"]
+    assert json.dumps(baseline_policy, sort_keys=True, separators=(",", ":")) == json.dumps(candidate_policy, sort_keys=True, separators=(",", ":"))
+
+    _, profile, _ = run_live_supervisor_fixture(
+        lab,
+        tmp_path / "privacy",
+        SUPERVISOR_PHASE_HELPER
+        + """
+        phase("manager_preflight_start")
+        phase("manager_preflight_end")
+        phase("codex_process_start")
+        event("item.completed", "command_execution", command="QWENDEX_PRIVATE_SENTINEL rg confidential")
+        event("item.completed", "agent_message")
+        """,
+        baseline_policy,
+    )
+    serialized = json.dumps(profile, sort_keys=True)
+    assert "QWENDEX_PRIVATE_SENTINEL" not in serialized
+    assert profile["schema_version"] == "qwendex.live_runtime_profile.v1"
+    assert profile["privacy"]["metadata_only"] is True
+    assert "commands" in lab.live_runtime_profile_contract()["privacy_boundary"]["forbidden_fields"]
+
+    _, wait_profile, _ = run_live_supervisor_fixture(
+        lab,
+        tmp_path / "collaboration-wait",
+        SUPERVISOR_PHASE_HELPER
+        + """
+        phase("manager_preflight_start")
+        phase("manager_preflight_end")
+        phase("codex_process_start")
+        event("item.completed", "agent_message")
+        event("item.started", "collab_tool_call", tool="wait")
+        """,
+        baseline_policy,
+    )
+    assert "collaboration_wait_start" in wait_profile["trusted_progress_event_counts"]
+    assert "collaboration_wait_no_completion" in wait_profile["termination"]["contributing_classifications"]
+
+
+def test_missing_live_final_message_is_not_a_guard_marker(tmp_path: Path) -> None:
+    lab = load_module("qwendex_optimization_lab")
+
+    assert not lab._contains_live_guard_marker(tmp_path)
+    (tmp_path / "last_message.md").write_text("ordinary final text", encoding="utf-8")
+    assert not lab._contains_live_guard_marker(tmp_path)
+    (tmp_path / "last_message.md").write_text("LOCAL_MODEL_TOOL_CALL_TOO_LARGE", encoding="utf-8")
+    assert lab._contains_live_guard_marker(tmp_path)
+
+
+def test_live_manager_cleanup_accepts_idle_standby_and_rejects_residue() -> None:
+    lab = load_module("qwendex_optimization_lab")
+
+    assert lab._live_manager_is_clean({"status": "standby", "agent_count": 0, "stale_count": 0})
+    assert lab._live_manager_is_clean({"status": "pass", "agent_count": 0, "stale_count": 0})
+    assert not lab._live_manager_is_clean({"status": "standby", "agent_count": 1, "stale_count": 0})
+    assert not lab._live_manager_is_clean({"status": "standby", "agent_count": 0, "stale_count": 1})
 
 
 def test_live_candidate_activation_respects_frozen_task_eligibility() -> None:

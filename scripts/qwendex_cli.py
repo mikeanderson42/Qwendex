@@ -6453,6 +6453,7 @@ def command_performance(args: argparse.Namespace, config: dict[str, Any]) -> dic
                     Path(getattr(args, "manifest", "")),
                     candidate_id=str(getattr(args, "candidate", "") or ""),
                     auth_source=Path(getattr(args, "auth_source", "")),
+                    supervisor_policy=Path(getattr(args, "supervisor_policy", "")),
                     output_root=(Path(args.output_root) if str(getattr(args, "output_root", "") or "") else None),
                 )
             except (OSError, ValueError) as exc:
@@ -6466,6 +6467,53 @@ def command_performance(args: argparse.Namespace, config: dict[str, Any]) -> dic
                 command="performance",
                 status=str(payload.get("status") or "fail"),
                 summary=str(payload.get("summary") or "Ran Qwendex held-out live-agent paired evaluation."),
+                data={"lab": payload.get("data", {})},
+            )
+        if lab_action == "calibrate":
+            try:
+                payload = module.live_runtime_calibration(
+                    Path(getattr(args, "manifest", "")),
+                    auth_source=Path(getattr(args, "auth_source", "")),
+                    task_id=str(getattr(args, "task_id", "") or ""),
+                    secondary_task_id=str(getattr(args, "secondary_task_id", "") or ""),
+                    output_root=(Path(args.output_root) if str(getattr(args, "output_root", "") or "") else None),
+                )
+            except (OSError, ValueError) as exc:
+                return stable_envelope(
+                    command="performance",
+                    status="blocked",
+                    summary="Could not calibrate the Qwendex live-runtime supervisor.",
+                    errors=[str(exc)],
+                )
+            return stable_envelope(
+                command="performance",
+                status=str(payload.get("status") or "blocked"),
+                summary=str(payload.get("summary") or "Calibrated the Qwendex live-runtime supervisor."),
+                data={"lab": payload.get("data", {})},
+            )
+        if lab_action == "runtime-closeout":
+            try:
+                validation_path = Path(getattr(args, "validation_summary", "")) if str(getattr(args, "validation_summary", "") or "") else None
+                validation_summary = json.loads(validation_path.read_text(encoding="utf-8")) if validation_path else {"supervisor_tests": "not_observed"}
+                if not isinstance(validation_summary, Mapping):
+                    raise ValueError("validation summary must be a JSON object")
+                payload = module.live_runtime_stability_closeout(
+                    prior_run_dir=Path(getattr(args, "prior_run", "")),
+                    calibration_run_dir=Path(getattr(args, "calibration_run", "")),
+                    validation_summary=validation_summary,
+                    output_root=(Path(args.output_root) if str(getattr(args, "output_root", "") or "") else None),
+                )
+            except (OSError, ValueError) as exc:
+                return stable_envelope(
+                    command="performance",
+                    status="blocked",
+                    summary="Could not write the Qwendex live-runtime stability closeout.",
+                    errors=[str(exc)],
+                )
+            return stable_envelope(
+                command="performance",
+                status=str(payload.get("status") or "blocked"),
+                summary=str(payload.get("summary") or "Wrote the Qwendex live-runtime stability closeout."),
                 data={"lab": payload.get("data", {})},
             )
         if lab_action == "compare":
@@ -12768,8 +12816,22 @@ def command_line() -> argparse.ArgumentParser:
     performance_lab_live_run.add_argument("--manifest", type=Path, required=True)
     performance_lab_live_run.add_argument("--candidate", required=True)
     performance_lab_live_run.add_argument("--auth-source", type=Path, required=True)
+    performance_lab_live_run.add_argument("--supervisor-policy", type=Path, required=True)
     performance_lab_live_run.add_argument("--output-root", default="")
     performance_lab_live_run.add_argument("--json", action="store_true")
+    performance_lab_calibrate = performance_lab_sub.add_parser("calibrate")
+    performance_lab_calibrate.add_argument("--manifest", type=Path, required=True)
+    performance_lab_calibrate.add_argument("--auth-source", type=Path, required=True)
+    performance_lab_calibrate.add_argument("--task-id", required=True)
+    performance_lab_calibrate.add_argument("--secondary-task-id", default="")
+    performance_lab_calibrate.add_argument("--output-root", default="")
+    performance_lab_calibrate.add_argument("--json", action="store_true")
+    performance_lab_runtime_closeout = performance_lab_sub.add_parser("runtime-closeout")
+    performance_lab_runtime_closeout.add_argument("--prior-run", type=Path, required=True)
+    performance_lab_runtime_closeout.add_argument("--calibration-run", type=Path, required=True)
+    performance_lab_runtime_closeout.add_argument("--validation-summary", type=Path, default="")
+    performance_lab_runtime_closeout.add_argument("--output-root", default="")
+    performance_lab_runtime_closeout.add_argument("--json", action="store_true")
     performance_lab_compare = performance_lab_sub.add_parser("compare")
     performance_lab_compare.add_argument("--run-dir", type=Path, required=True)
     performance_lab_compare.add_argument("--json", action="store_true")

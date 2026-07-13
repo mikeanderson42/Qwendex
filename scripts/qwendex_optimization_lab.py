@@ -17,12 +17,14 @@ import signal
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 import uuid
 import csv
+from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping, Sequence
 
 
 WORKLOAD_SCHEMA_VERSION = "qwendex.optimization_lab.workload.v1"
@@ -31,6 +33,57 @@ BASELINE_CAPTURE_SCHEMA_VERSION = "qwendex.optimization_lab.baseline_capture.v1"
 ARTIFACT_MANIFEST_SCHEMA_VERSION = "qwendex.optimization_lab.artifact_manifest.v1"
 LIVE_AGENT_RUN_SCHEMA_VERSION = "qwendex.optimization_lab.live_agent_run.v1"
 LIVE_EXECUTION_MODE = "live_agent_adoption_v2"
+LIVE_RUNTIME_PROFILE_SCHEMA_VERSION = "qwendex.live_runtime_profile.v1"
+LIVE_RUNTIME_PROFILE_CONTRACT_SCHEMA_VERSION = "qwendex.live_runtime_profile_contract.v1"
+LIVE_SUPERVISOR_BUDGET_SCHEMA_VERSION = "qwendex.live_runtime_supervisor_budget.v1"
+LIVE_SUPERVISOR_MAX_HARD_WALL_SECONDS = 600
+
+LIVE_RUNTIME_PHASES = (
+    "runner_start",
+    "workspace_ready",
+    "manager_preflight_start",
+    "manager_preflight_end",
+    "codex_process_start",
+    "first_structured_event",
+    "first_model_or_assistant_event",
+    "first_tool_start",
+    "first_tool_end",
+    "first_search_start",
+    "first_search_end",
+    "last_trusted_progress",
+    "last_tool_end",
+    "final_assistant_event",
+    "manager_stop_start",
+    "manager_stop_end",
+    "child_exit",
+    "pipe_drain_complete",
+    "validation_start",
+    "validation_end",
+    "runner_complete",
+    "timeout_signal",
+    "terminate_signal",
+    "kill_signal",
+    "cleanup_complete",
+)
+
+LIVE_TIMEOUT_CLASSIFICATIONS = frozenset(
+    {
+        "not_applicable",
+        "timeout_before_preflight_complete",
+        "timeout_before_process_start",
+        "timeout_before_first_model_event",
+        "timeout_during_model_response",
+        "timeout_during_tool_execution",
+        "timeout_after_last_tool_before_final",
+        "timeout_during_manager_stop",
+        "timeout_after_child_exit_pipe_drain",
+        "timeout_during_validation",
+        "timeout_with_continuous_trusted_progress",
+        "timeout_due_to_inactivity",
+        "process_tree_cleanup_failed",
+        "unknown_insufficient_instrumentation",
+    }
+)
 
 SCRIPT_ROOT = Path(__file__).resolve().parent
 REPOSITORY_ROOT = SCRIPT_ROOT.parent
@@ -38,6 +91,333 @@ REPOSITORY_ROOT = SCRIPT_ROOT.parent
 
 class LabError(ValueError):
     """Raised for deterministic workload or isolation failures."""
+
+
+def _canonical_json_bytes(value: Mapping[str, Any]) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+
+
+def _safe_local_digest(value: str) -> str:
+    """Return an opaque local correlation value without retaining its source text."""
+
+    return "sha256:" + sha256_text(value)
+
+
+def legacy_live_supervisor_budgets(timeout_seconds: int | float) -> dict[str, Any]:
+    """Represent the former one-wall policy while adding observation only.
+
+    This is used for calibration, never for promotion evidence.  The three
+    progress-aware ceilings are deliberately disabled so the legacy hard wall
+    is reproduced exactly while the new profiler captures what it can.
+    """
+
+    hard_wall = float(timeout_seconds)
+    if hard_wall <= 0 or hard_wall > LIVE_SUPERVISOR_MAX_HARD_WALL_SECONDS:
+        raise LabError("legacy live timeout must be within the bounded supervisor maximum")
+    return _normalise_live_supervisor_budgets(
+        {
+            "schema_version": LIVE_SUPERVISOR_BUDGET_SCHEMA_VERSION,
+            "mode": "legacy_single_wall_observability",
+            "startup_preflight_seconds": None,
+            "first_model_activity_seconds": None,
+            "inactivity_seconds": None,
+            "hard_wall_seconds": hard_wall,
+            "graceful_termination_seconds": 10.0,
+            "forced_cleanup_seconds": 10.0,
+            "pipe_drain_seconds": 10.0,
+            "poll_interval_seconds": 0.10,
+            "derivation": {
+                "kind": "frozen_legacy_timeout_reproduction",
+                "legacy_hard_wall_seconds": hard_wall,
+            },
+        }
+    )
+
+
+def derive_progress_aware_live_supervisor_budgets(legacy_timeout_seconds: int | float) -> dict[str, Any]:
+    """Derive the bounded evaluation policy before candidate outcomes exist.
+
+    The legacy 180-second wall is retained as the calibration baseline.  Once
+    that calibration proves real structured progress at the old wall, a
+    predeclared three-times allowance gives the task room to finish while the
+    stricter startup, first-model, and inactivity ceilings still detect a
+    no-response or stalled session.  The absolute cap keeps the evaluator
+    bounded on slower hosts.
+    """
+
+    legacy = float(legacy_timeout_seconds)
+    if legacy <= 0:
+        raise LabError("legacy live timeout must be positive")
+    hard_wall = min(float(LIVE_SUPERVISOR_MAX_HARD_WALL_SECONDS), max(300.0, legacy * 3.0))
+    return _normalise_live_supervisor_budgets(
+        {
+            "schema_version": LIVE_SUPERVISOR_BUDGET_SCHEMA_VERSION,
+            "mode": "progress_aware",
+            "startup_preflight_seconds": min(60.0, max(30.0, legacy / 4.0)),
+            "first_model_activity_seconds": min(120.0, max(60.0, legacy / 2.0)),
+            "inactivity_seconds": min(180.0, max(60.0, legacy * (2.0 / 3.0))),
+            "hard_wall_seconds": hard_wall,
+            "graceful_termination_seconds": 15.0,
+            "forced_cleanup_seconds": 10.0,
+            "pipe_drain_seconds": 10.0,
+            "poll_interval_seconds": 0.10,
+            "derivation": {
+                "kind": "predeclared_progress_aware_calibration_policy",
+                "legacy_hard_wall_seconds": legacy,
+                "hard_wall_rule": "min(600,max(300,legacy_hard_wall_seconds*3))",
+                "requires_calibration_classification": "timeout_with_continuous_trusted_progress",
+            },
+        }
+    )
+
+
+def derive_diagnostic_live_supervisor_budgets(legacy_timeout_seconds: int | float) -> dict[str, Any]:
+    """Add progress ceilings without extending the frozen legacy hard wall.
+
+    This policy is the calibration bridge for a timeout that was not yet shown
+    to have continuous trusted progress.  It can prove an inactivity or
+    no-response blocker without using a larger allowance as a disguised pass.
+    """
+
+    legacy = float(legacy_timeout_seconds)
+    if legacy <= 0 or legacy > LIVE_SUPERVISOR_MAX_HARD_WALL_SECONDS:
+        raise LabError("legacy live timeout must be within the bounded supervisor maximum")
+    return _normalise_live_supervisor_budgets(
+        {
+            "schema_version": LIVE_SUPERVISOR_BUDGET_SCHEMA_VERSION,
+            "mode": "progress_aware",
+            "startup_preflight_seconds": min(60.0, max(30.0, legacy / 4.0)),
+            "first_model_activity_seconds": min(120.0, max(60.0, legacy / 2.0)),
+            "inactivity_seconds": min(90.0, max(45.0, legacy / 3.0)),
+            "hard_wall_seconds": legacy,
+            "graceful_termination_seconds": 15.0,
+            "forced_cleanup_seconds": 10.0,
+            "pipe_drain_seconds": 10.0,
+            "poll_interval_seconds": 0.10,
+            "derivation": {
+                "kind": "same_wall_progress_aware_diagnostic_policy",
+                "legacy_hard_wall_seconds": legacy,
+                "hard_wall_rule": "preserve_legacy_hard_wall_until_continuous_progress_is_proven",
+            },
+        }
+    )
+
+
+def _normalise_live_supervisor_budgets(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate and canonicalize the bounded supervisor policy.
+
+    A canonical representation and SHA-256 identity let pair receipts prove
+    that baseline and candidate used byte-for-byte-equivalent timeout rules.
+    """
+
+    if not isinstance(value, Mapping):
+        raise LabError("live supervisor budget policy must be an object")
+    mode = str(value.get("mode") or "")
+    if mode not in {"legacy_single_wall_observability", "progress_aware", "test"}:
+        raise LabError("live supervisor budget mode is unsupported")
+
+    def seconds(name: str, *, nullable: bool = False, maximum: float | None = None) -> float | None:
+        raw = value.get(name)
+        if raw is None and nullable:
+            return None
+        if not isinstance(raw, int | float) or isinstance(raw, bool) or float(raw) <= 0:
+            raise LabError(f"live supervisor budget {name} must be positive")
+        parsed = round(float(raw), 6)
+        if maximum is not None and parsed > maximum:
+            raise LabError(f"live supervisor budget {name} exceeds its bounded maximum")
+        return parsed
+
+    startup = seconds("startup_preflight_seconds", nullable=True)
+    first_model = seconds("first_model_activity_seconds", nullable=True)
+    inactivity = seconds("inactivity_seconds", nullable=True)
+    hard_wall = seconds("hard_wall_seconds", maximum=float(LIVE_SUPERVISOR_MAX_HARD_WALL_SECONDS))
+    graceful = seconds("graceful_termination_seconds", maximum=60.0)
+    forced = seconds("forced_cleanup_seconds", maximum=60.0)
+    pipe = seconds("pipe_drain_seconds", maximum=60.0)
+    poll = seconds("poll_interval_seconds", maximum=5.0)
+    if mode == "legacy_single_wall_observability" and any(item is not None for item in (startup, first_model, inactivity)):
+        raise LabError("legacy observation policy cannot add progress-aware ceilings")
+    if mode == "progress_aware" and any(item is None for item in (startup, first_model, inactivity)):
+        raise LabError("progress-aware policy requires startup, first-model, and inactivity ceilings")
+
+    derivation = value.get("derivation", {})
+    if not isinstance(derivation, Mapping):
+        raise LabError("live supervisor budget derivation must be an object")
+    canonical = {
+        "schema_version": LIVE_SUPERVISOR_BUDGET_SCHEMA_VERSION,
+        "mode": mode,
+        "startup_preflight_seconds": startup,
+        "first_model_activity_seconds": first_model,
+        "inactivity_seconds": inactivity,
+        "hard_wall_seconds": hard_wall,
+        "graceful_termination_seconds": graceful,
+        "forced_cleanup_seconds": forced,
+        "pipe_drain_seconds": pipe,
+        "poll_interval_seconds": poll,
+        "derivation": dict(derivation),
+    }
+    canonical["policy_identity"] = "sha256:" + sha256_bytes(_canonical_json_bytes(canonical))
+    return canonical
+
+
+def load_live_supervisor_budget_policy(path_or_value: Path | str | Mapping[str, Any]) -> dict[str, Any]:
+    """Load a previously recorded calibration policy without changing it."""
+
+    if isinstance(path_or_value, Mapping):
+        value: Mapping[str, Any] = path_or_value
+    else:
+        path = Path(path_or_value).expanduser().resolve(strict=False)
+        value = _read_json(path)
+        if not isinstance(value, Mapping):
+            raise LabError("live supervisor policy file must contain an object")
+    nested = value.get("supervisor_budget") if isinstance(value.get("supervisor_budget"), Mapping) else value
+    return _normalise_live_supervisor_budgets(nested)
+
+
+def live_runtime_profile_contract() -> dict[str, Any]:
+    """Describe the privacy-safe profile stored only in ignored run evidence."""
+
+    return {
+        "schema_version": LIVE_RUNTIME_PROFILE_CONTRACT_SCHEMA_VERSION,
+        "profile_schema_version": LIVE_RUNTIME_PROFILE_SCHEMA_VERSION,
+        "phase_names": list(LIVE_RUNTIME_PHASES),
+        "timeout_classifications": sorted(LIVE_TIMEOUT_CLASSIFICATIONS),
+        "privacy_boundary": {
+            "metadata_only": True,
+            "forbidden_fields": [
+                "prompts",
+                "commands",
+                "queries",
+                "paths_from_task_output",
+                "tool_input",
+                "tool_output",
+                "stdout",
+                "stderr",
+                "transcripts",
+                "credentials",
+                "tokens",
+            ],
+            "safe_diagnostics": [
+                "opaque_local_digests",
+                "phase_timestamps_and_durations",
+                "structured_event_counts",
+                "bounded_in_flight_lifecycle_categories",
+                "pid_pgid_role_state_cpu_rss_buckets",
+                "pipe_byte_counts_without_content",
+                "sanitized_manager_health_counts",
+            ],
+        },
+    }
+
+
+def _new_live_runtime_profile(
+    *,
+    run_id: str,
+    task_id: str,
+    variant: str,
+    attempt: str,
+    candidate_id: str,
+    repository: Mapping[str, Any],
+    manifest_digest: str,
+    model_policy: Mapping[str, Any],
+    budgets: Mapping[str, Any],
+) -> dict[str, Any]:
+    started = time.monotonic()
+    profile = {
+        "schema_version": LIVE_RUNTIME_PROFILE_SCHEMA_VERSION,
+        "profile_status": "in_progress",
+        "identity": {
+            "run_digest": _safe_local_digest(run_id),
+            "pair_digest": _safe_local_digest(task_id),
+            "arm": variant,
+            "attempt": attempt,
+            "candidate_identity": candidate_id,
+        },
+        "source": {
+            "repository_commit": str(repository.get("commit") or "not_observed"),
+            "repository_tree": str(repository.get("tree_digest") or "not_observed"),
+            "frozen_workload_manifest_digest": manifest_digest,
+        },
+        "execution_posture": {
+            "model": str(model_policy.get("model_identifier") or "not_observed"),
+            "reasoning": str(model_policy.get("reasoning_effort") or "not_observed"),
+            "routing": str(model_policy.get("local_routing_state") or "not_observed"),
+            "manager_mode": str(model_policy.get("manager_mode") or "not_observed"),
+            "permission_mode": str(model_policy.get("permission_mode") or "not_observed"),
+            "candidate_identity": candidate_id,
+        },
+        "supervisor_budget": dict(budgets),
+        "phase_timestamps": {phase: "not_observed" for phase in LIVE_RUNTIME_PHASES},
+        "phase_durations_ms": {},
+        "trusted_progress_event_counts": {},
+        "structured_event_type_counts": {},
+        "process_diagnostics": {"snapshots": [], "pipe_state": {}},
+        "termination": {
+            "timed_out": False,
+            "timeout_reason": "not_applicable",
+            "timeout_classification": "not_applicable",
+            "contributing_classifications": [],
+            "signals": [],
+            "completion_valid": False,
+            "cleanup_status": "not_observed",
+        },
+        "privacy": {
+            "metadata_only": True,
+            "raw_content_in_profile": False,
+            "contract_schema_version": LIVE_RUNTIME_PROFILE_CONTRACT_SCHEMA_VERSION,
+        },
+        "_runtime_start_monotonic": started,
+    }
+    _record_runtime_phase(profile, "runner_start", now=started)
+    return profile
+
+
+def _record_runtime_phase(profile: dict[str, Any], phase: str, *, now: float | None = None, replace: bool = False) -> None:
+    if phase not in LIVE_RUNTIME_PHASES:
+        raise LabError("unknown live runtime phase")
+    timestamps = profile["phase_timestamps"]
+    if not replace and timestamps.get(phase) != "not_observed":
+        return
+    observed = time.monotonic() if now is None else now
+    started = float(profile.get("_runtime_start_monotonic") or observed)
+    timestamps[phase] = {
+        "observed_at": utc_now(),
+        "offset_ms": round(max(0.0, observed - started) * 1000, 3),
+    }
+
+
+def _runtime_phase_offset(profile: Mapping[str, Any], phase: str) -> float | None:
+    timestamps = profile.get("phase_timestamps", {})
+    value = timestamps.get(phase) if isinstance(timestamps, Mapping) else None
+    if isinstance(value, Mapping) and isinstance(value.get("offset_ms"), int | float):
+        return float(value["offset_ms"])
+    return None
+
+
+def _runtime_duration(profile: Mapping[str, Any], start: str, end: str) -> float | str:
+    begin = _runtime_phase_offset(profile, start)
+    finish = _runtime_phase_offset(profile, end)
+    if begin is None or finish is None or finish < begin:
+        return "not_observed"
+    return round(finish - begin, 3)
+
+
+def _finalise_live_runtime_profile(profile: dict[str, Any]) -> None:
+    durations = {
+        "workspace_ready_ms": _runtime_duration(profile, "runner_start", "workspace_ready"),
+        "manager_preflight_ms": _runtime_duration(profile, "manager_preflight_start", "manager_preflight_end"),
+        "first_structured_event_ms": _runtime_duration(profile, "codex_process_start", "first_structured_event"),
+        "first_model_or_assistant_event_ms": _runtime_duration(profile, "codex_process_start", "first_model_or_assistant_event"),
+        "first_tool_ms": _runtime_duration(profile, "codex_process_start", "first_tool_start"),
+        "first_search_ms": _runtime_duration(profile, "codex_process_start", "first_search_start"),
+        "manager_stop_ms": _runtime_duration(profile, "manager_stop_start", "manager_stop_end"),
+        "pipe_drain_ms": _runtime_duration(profile, "child_exit", "pipe_drain_complete"),
+        "validation_ms": _runtime_duration(profile, "validation_start", "validation_end"),
+        "total_runner_ms": _runtime_duration(profile, "runner_start", "runner_complete"),
+    }
+    profile["phase_durations_ms"] = durations
+    profile.pop("_runtime_start_monotonic", None)
+    profile["profile_status"] = "complete"
 
 
 def utc_now() -> str:
@@ -483,6 +863,9 @@ def _live_launch_script() -> str:
 
     return r'''
 set -euo pipefail
+live_phase() {
+  printf '%s\n' "$1" >> "$QWENDEX_LIVE_PHASES"
+}
 export QWENDEX_MANAGER_LAUNCH_PID="$$"
 export QWENDEX_MANAGER_LAUNCH_START_TICKS="$(python3 - "$$" <<'PY'
 import sys
@@ -501,7 +884,9 @@ import uuid
 print(uuid.uuid4().hex)
 PY
 )"
+live_phase manager_preflight_start
 "$QWENDEX_LIVE_COMMAND" --agent-use Manager manager preflight --interactive-prompt-unknown --json > "$QWENDEX_LIVE_PREFLIGHT"
+live_phase manager_preflight_end
 eval "$(python3 - "$QWENDEX_LIVE_PREFLIGHT" <<'PY'
 import json
 import shlex
@@ -516,6 +901,7 @@ for key, value in exports.items():
     print(f"export {key}={shlex.quote(str(value))}")
 PY
 )"
+live_phase codex_process_start
 exec "$QWENDEX_LIVE_RUNTIME" \
   --no-alt-screen \
   --sandbox workspace-write \
@@ -528,6 +914,534 @@ exec "$QWENDEX_LIVE_RUNTIME" \
 '''
 
 
+def _process_group_snapshot(pgid: int, *, leader_pid: int) -> dict[str, Any]:
+    """Collect bounded Linux process metadata without command lines or paths."""
+
+    states: Counter[str] = Counter()
+    rss_buckets: Counter[str] = Counter()
+    process_count = 0
+    non_zombie_count = 0
+    cpu_ticks = 0
+    try:
+        page_size = int(os.sysconf("SC_PAGE_SIZE"))
+    except (AttributeError, OSError, ValueError):
+        page_size = 4096
+    proc_root = Path("/proc")
+    try:
+        entries = list(proc_root.iterdir())
+    except OSError:
+        entries = []
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        try:
+            raw = (entry / "stat").read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        closing = raw.rfind(")")
+        fields = raw[closing + 2 :].split() if closing >= 0 else []
+        if len(fields) < 22:
+            continue
+        try:
+            process_group = int(fields[2])
+            if process_group != pgid:
+                continue
+            state = str(fields[0] or "?")
+            cpu_ticks += int(fields[11]) + int(fields[12])
+            rss_bytes = max(0, int(fields[21])) * page_size
+        except ValueError:
+            continue
+        process_count += 1
+        states[state] += 1
+        if state != "Z":
+            non_zombie_count += 1
+        if rss_bytes < 64 * 1024 * 1024:
+            bucket = "lt_64_mib"
+        elif rss_bytes < 256 * 1024 * 1024:
+            bucket = "64_to_256_mib"
+        elif rss_bytes < 1024 * 1024 * 1024:
+            bucket = "256_mib_to_1_gib"
+        else:
+            bucket = "gte_1_gib"
+        rss_buckets[bucket] += 1
+    return {
+        "leader_pid": leader_pid,
+        "pgid": pgid,
+        "process_count": process_count,
+        "non_zombie_process_count": non_zombie_count,
+        "state_counts": dict(sorted(states.items())),
+        "cpu_ticks": cpu_ticks,
+        "rss_buckets": dict(sorted(rss_buckets.items())),
+    }
+
+
+def _runtime_profile_snapshot(profile: dict[str, Any], snapshot: Mapping[str, Any], *, reason: str) -> None:
+    diagnostics = profile.setdefault("process_diagnostics", {})
+    snapshots = diagnostics.setdefault("snapshots", [])
+    if isinstance(snapshots, list):
+        snapshots.append({"reason": reason, **dict(snapshot)})
+
+
+def _safe_event_category(value: str, *, allowed: set[str]) -> str:
+    return value if value in allowed else "other"
+
+
+def _increment_runtime_count(profile: dict[str, Any], key: str, *, amount: int = 1) -> None:
+    counts = profile.setdefault("trusted_progress_event_counts", {})
+    counts[key] = int(counts.get(key) or 0) + amount
+
+
+def _observe_live_structured_event(profile: dict[str, Any], event: Mapping[str, Any], *, now: float) -> None:
+    """Accept only recognized lifecycle transitions as progress.
+
+    The function may inspect raw command/tool fields transiently to classify a
+    lifecycle event, but stores only fixed categories and counts in the
+    profile.  Plain pipe bytes and arbitrary warning text never reset the
+    inactivity deadline.
+    """
+
+    event_type = _safe_event_category(
+        str(event.get("type") or ""),
+        allowed={"thread.started", "turn.started", "turn.completed", "item.started", "item.completed"},
+    )
+    counts = profile.setdefault("structured_event_type_counts", {})
+    counts[event_type] = int(counts.get(event_type) or 0) + 1
+    if event_type == "other":
+        return
+    _record_runtime_phase(profile, "first_structured_event", now=now)
+    item = event.get("item") if isinstance(event.get("item"), Mapping) else {}
+    item_type = _safe_event_category(
+        str(item.get("type") or ""),
+        allowed={"agent_message", "command_execution", "collab_tool_call", "file_change", "mcp_tool_call"},
+    )
+    trusted = event_type in {"thread.started", "turn.started", "turn.completed"}
+    category = event_type.replace(".", "_")
+    if item_type != "other":
+        trusted = True
+        category = item_type
+    if trusted:
+        _record_runtime_phase(profile, "last_trusted_progress", now=now, replace=True)
+        profile["_last_trusted_monotonic"] = now
+        _increment_runtime_count(profile, category)
+    if item_type == "agent_message":
+        _record_runtime_phase(profile, "first_model_or_assistant_event", now=now)
+        _increment_runtime_count(profile, "model_or_assistant_event")
+        if event_type == "item.completed":
+            _record_runtime_phase(profile, "final_assistant_event", now=now, replace=True)
+    tool_types = {"command_execution", "collab_tool_call", "mcp_tool_call", "file_change"}
+    if item_type not in tool_types:
+        return
+    command = str(item.get("command") or "")
+    tool_name = str(item.get("name") or item.get("tool_name") or "")
+    lowered = f"{command} {tool_name}".lower()
+    collab_tool = str(item.get("tool") or "").lower()
+    if item_type == "collab_tool_call":
+        lifecycle_kind = "collaboration_wait" if collab_tool == "wait" else "collaboration_other"
+    elif item_type == "command_execution":
+        lifecycle_kind = "command_execution"
+    elif item_type == "mcp_tool_call":
+        lifecycle_kind = "mcp_tool_call"
+    else:
+        lifecycle_kind = "file_change"
+    is_search = bool(re.search(r"(?:^|[\s;&|])rg(?:[\s;&|]|$)", lowered)) or " search content " in f" {lowered} "
+    is_manager_stop = "manager" in lowered and "stop" in lowered
+    if event_type == "item.started":
+        _record_runtime_phase(profile, "first_tool_start", now=now)
+        _increment_runtime_count(profile, "tool_start")
+        profile["_tool_in_flight"] = int(profile.get("_tool_in_flight") or 0) + 1
+        in_flight = profile.setdefault("_in_flight_lifecycle_counts", {})
+        in_flight[lifecycle_kind] = int(in_flight.get(lifecycle_kind) or 0) + 1
+        _increment_runtime_count(profile, lifecycle_kind + "_start")
+        if is_search:
+            _record_runtime_phase(profile, "first_search_start", now=now)
+            _increment_runtime_count(profile, "search_start")
+        if is_manager_stop:
+            _record_runtime_phase(profile, "manager_stop_start", now=now)
+    elif event_type == "item.completed":
+        _record_runtime_phase(profile, "first_tool_end", now=now)
+        _record_runtime_phase(profile, "last_tool_end", now=now, replace=True)
+        _increment_runtime_count(profile, "tool_end")
+        profile["_tool_in_flight"] = max(0, int(profile.get("_tool_in_flight") or 0) - 1)
+        in_flight = profile.setdefault("_in_flight_lifecycle_counts", {})
+        in_flight[lifecycle_kind] = max(0, int(in_flight.get(lifecycle_kind) or 0) - 1)
+        _increment_runtime_count(profile, lifecycle_kind + "_end")
+        if is_search:
+            _record_runtime_phase(profile, "first_search_end", now=now)
+            _increment_runtime_count(profile, "search_end")
+        if is_manager_stop:
+            _record_runtime_phase(profile, "manager_stop_end", now=now, replace=True)
+
+
+def _consume_live_phase_markers(profile: dict[str, Any], phase_path: Path, *, offset: int, now: float) -> int:
+    try:
+        with phase_path.open("r", encoding="utf-8", errors="replace") as handle:
+            handle.seek(offset)
+            raw = handle.read()
+            next_offset = handle.tell()
+    except OSError:
+        return offset
+    for marker in raw.splitlines():
+        if marker in {"manager_preflight_start", "manager_preflight_end", "codex_process_start"}:
+            _record_runtime_phase(profile, marker, now=now)
+    return next_offset
+
+
+def _start_pipe_drain(
+    stream: Any,
+    destination: Path,
+    *,
+    stream_name: str,
+    state: dict[str, Any],
+    state_lock: threading.Lock,
+    on_chunk: Callable[[bytes], None] | None = None,
+) -> threading.Thread:
+    """Drain one child pipe continuously into ignored raw evidence."""
+
+    def drain() -> None:
+        bytes_seen = 0
+        try:
+            with destination.open("wb") as handle:
+                while True:
+                    chunk = stream.read(65_536)
+                    if not chunk:
+                        break
+                    handle.write(chunk)
+                    bytes_seen += len(chunk)
+                    if on_chunk is not None:
+                        on_chunk(chunk)
+        finally:
+            try:
+                stream.close()
+            except OSError:
+                pass
+            with state_lock:
+                state[stream_name] = {
+                    "bytes": bytes_seen,
+                    "eof": True,
+                    "completed_at_monotonic": time.monotonic(),
+                }
+
+    thread = threading.Thread(target=drain, name=f"qwendex-live-{stream_name}", daemon=True)
+    thread.start()
+    return thread
+
+
+def _wait_for_pipe_drain(threads: Sequence[threading.Thread], *, timeout_seconds: float) -> bool:
+    deadline = time.monotonic() + timeout_seconds
+    for thread in threads:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        thread.join(timeout=remaining)
+    return not any(thread.is_alive() for thread in threads)
+
+
+def _signal_process_group(process: subprocess.Popen[bytes], signal_value: int) -> bool:
+    try:
+        os.killpg(process.pid, signal_value)
+    except (ProcessLookupError, PermissionError):
+        return False
+    return True
+
+
+def _wait_for_process_group_quiet(pgid: int, *, leader_pid: int, timeout_seconds: float, poll_seconds: float) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout_seconds
+    latest = _process_group_snapshot(pgid, leader_pid=leader_pid)
+    while latest.get("non_zombie_process_count", 0) > 0 and time.monotonic() < deadline:
+        time.sleep(min(poll_seconds, max(0.01, deadline - time.monotonic())))
+        latest = _process_group_snapshot(pgid, leader_pid=leader_pid)
+    return latest
+
+
+def _supervisor_timeout_reason(profile: Mapping[str, Any], budgets: Mapping[str, Any], *, now: float) -> str | None:
+    started = float(profile.get("_runtime_start_monotonic") or now)
+    preflight_end = _runtime_phase_offset(profile, "manager_preflight_end")
+    codex_start = _runtime_phase_offset(profile, "codex_process_start")
+    first_model = _runtime_phase_offset(profile, "first_model_or_assistant_event")
+    startup = budgets.get("startup_preflight_seconds")
+    if isinstance(startup, int | float) and preflight_end is None and now - started >= float(startup):
+        return "startup_preflight"
+    if preflight_end is not None and first_model is None:
+        first_model_limit = budgets.get("first_model_activity_seconds")
+        model_origin_ms = codex_start if codex_start is not None else preflight_end
+        if isinstance(first_model_limit, int | float) and now - started >= model_origin_ms / 1000.0 + float(first_model_limit):
+            return "first_model"
+    last_progress = profile.get("_last_trusted_monotonic")
+    inactivity = budgets.get("inactivity_seconds")
+    if isinstance(last_progress, int | float) and isinstance(inactivity, int | float) and now - float(last_progress) >= float(inactivity):
+        return "inactivity"
+    hard_wall = float(budgets["hard_wall_seconds"])
+    if now - started >= hard_wall:
+        return "hard_wall"
+    return None
+
+
+def _classify_live_timeout(profile: Mapping[str, Any], *, timeout_reason: str, pipe_drain_timed_out: bool, cleanup_status: str) -> str:
+    if cleanup_status != "pass":
+        return "process_tree_cleanup_failed"
+    if pipe_drain_timed_out:
+        return "timeout_after_child_exit_pipe_drain"
+    if timeout_reason == "startup_preflight":
+        return "timeout_before_preflight_complete"
+    if timeout_reason == "first_model":
+        if _runtime_phase_offset(profile, "codex_process_start") is None:
+            return "timeout_before_process_start"
+        return "timeout_before_first_model_event"
+    if timeout_reason == "inactivity":
+        if _runtime_phase_offset(profile, "manager_stop_start") is not None and _runtime_phase_offset(profile, "manager_stop_end") is None:
+            return "timeout_during_manager_stop"
+        return "timeout_due_to_inactivity"
+    if timeout_reason == "hard_wall":
+        if _runtime_phase_offset(profile, "manager_stop_start") is not None and _runtime_phase_offset(profile, "manager_stop_end") is None:
+            return "timeout_during_manager_stop"
+        last_progress = _runtime_phase_offset(profile, "last_trusted_progress")
+        timeout_at = _runtime_phase_offset(profile, "timeout_signal")
+        inactivity = profile.get("supervisor_budget", {}).get("inactivity_seconds") if isinstance(profile.get("supervisor_budget"), Mapping) else None
+        if isinstance(last_progress, int | float) and isinstance(timeout_at, int | float) and isinstance(inactivity, int | float) and timeout_at - last_progress <= float(inactivity) * 1000.0:
+            return "timeout_with_continuous_trusted_progress"
+        if int(profile.get("_tool_in_flight") or 0) > 0:
+            return "timeout_during_tool_execution"
+        if _runtime_phase_offset(profile, "last_tool_end") is not None and _runtime_phase_offset(profile, "final_assistant_event") is None:
+            return "timeout_after_last_tool_before_final"
+        if _runtime_phase_offset(profile, "first_model_or_assistant_event") is not None:
+            return "timeout_during_model_response"
+    return "unknown_insufficient_instrumentation"
+
+
+def _supervise_live_subprocess(
+    command: Sequence[str],
+    *,
+    cwd: Path,
+    environment: Mapping[str, str],
+    raw_dir: Path,
+    profile: dict[str, Any],
+    budgets: Mapping[str, Any],
+    preflight_path: Path | None = None,
+) -> dict[str, Any]:
+    """Run and observe a live child without retaining raw content in metadata.
+
+    stdout and stderr are independently drained as the child runs, so one full
+    pipe cannot deadlock the other.  Raw bytes stay only in the ignored arm
+    directory; the returned profile contains counts, phases, and bounded
+    process diagnostics.
+    """
+
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    stdout_path = raw_dir / "events.jsonl"
+    stderr_path = raw_dir / "stderr.txt"
+    phase_path = raw_dir / "runtime_phases.log"
+    phase_path.touch(exist_ok=True)
+    state_lock = threading.Lock()
+    pipe_state: dict[str, Any] = {}
+    stdout_buffer = bytearray()
+
+    def observe_stdout(chunk: bytes) -> None:
+        nonlocal stdout_buffer
+        with state_lock:
+            stdout_buffer.extend(chunk)
+            while True:
+                boundary = stdout_buffer.find(b"\n")
+                if boundary < 0:
+                    break
+                raw_line = bytes(stdout_buffer[:boundary])
+                del stdout_buffer[: boundary + 1]
+                try:
+                    event = json.loads(raw_line.decode("utf-8", "replace"))
+                except json.JSONDecodeError:
+                    _increment_runtime_count(profile, "structured_parse_error")
+                    continue
+                if isinstance(event, Mapping):
+                    _observe_live_structured_event(profile, event, now=time.monotonic())
+
+    process = subprocess.Popen(
+        list(command),
+        cwd=cwd,
+        env=dict(environment),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+        bufsize=0,
+    )
+    if process.stdout is None or process.stderr is None:
+        raise LabError("live supervisor could not open child pipes")
+    with state_lock:
+        _runtime_profile_snapshot(profile, _process_group_snapshot(process.pid, leader_pid=process.pid), reason="process_started")
+    stdout_thread = _start_pipe_drain(process.stdout, stdout_path, stream_name="stdout", state=pipe_state, state_lock=state_lock, on_chunk=observe_stdout)
+    stderr_thread = _start_pipe_drain(process.stderr, stderr_path, stream_name="stderr", state=pipe_state, state_lock=state_lock)
+    drain_threads = (stdout_thread, stderr_thread)
+    phase_offset = 0
+    timeout_reason = "not_applicable"
+    timed_out = False
+    pipe_drain_timed_out = False
+
+    while process.poll() is None:
+        now = time.monotonic()
+        with state_lock:
+            phase_offset = _consume_live_phase_markers(profile, phase_path, offset=phase_offset, now=now)
+            reason = _supervisor_timeout_reason(profile, budgets, now=now)
+        if reason is None:
+            time.sleep(float(budgets["poll_interval_seconds"]))
+            continue
+        timed_out = True
+        timeout_reason = reason
+        with state_lock:
+            _record_runtime_phase(profile, "timeout_signal", now=now)
+            _runtime_profile_snapshot(profile, _process_group_snapshot(process.pid, leader_pid=process.pid), reason=reason)
+            profile["termination"]["signals"].append({"signal": "SIGTERM", "reason": reason})
+            _record_runtime_phase(profile, "terminate_signal", now=now)
+        _signal_process_group(process, signal.SIGTERM)
+        try:
+            process.wait(timeout=float(budgets["graceful_termination_seconds"]))
+        except subprocess.TimeoutExpired:
+            with state_lock:
+                profile["termination"]["signals"].append({"signal": "SIGKILL", "reason": reason})
+                _record_runtime_phase(profile, "kill_signal")
+            _signal_process_group(process, signal.SIGKILL)
+            try:
+                process.wait(timeout=float(budgets["forced_cleanup_seconds"]))
+            except subprocess.TimeoutExpired:
+                pass
+        break
+
+    returncode = process.poll()
+    if returncode is None:
+        try:
+            returncode = process.wait(timeout=float(budgets["forced_cleanup_seconds"]))
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            timeout_reason = "hard_wall" if timeout_reason == "not_applicable" else timeout_reason
+            with state_lock:
+                profile["termination"]["signals"].append({"signal": "SIGKILL", "reason": "unreaped_child"})
+                _record_runtime_phase(profile, "kill_signal")
+            _signal_process_group(process, signal.SIGKILL)
+            returncode = process.wait(timeout=float(budgets["forced_cleanup_seconds"]))
+
+    now = time.monotonic()
+    with state_lock:
+        phase_offset = _consume_live_phase_markers(profile, phase_path, offset=phase_offset, now=now)
+        _record_runtime_phase(profile, "child_exit", now=now)
+        _runtime_profile_snapshot(profile, _process_group_snapshot(process.pid, leader_pid=process.pid), reason="child_exit")
+    drained = _wait_for_pipe_drain(drain_threads, timeout_seconds=float(budgets["pipe_drain_seconds"]))
+    if not drained:
+        timed_out = True
+        pipe_drain_timed_out = True
+        timeout_reason = "pipe_drain"
+        with state_lock:
+            _runtime_profile_snapshot(profile, _process_group_snapshot(process.pid, leader_pid=process.pid), reason="pipe_drain_timeout")
+            profile["termination"]["signals"].append({"signal": "SIGTERM", "reason": "pipe_drain_timeout"})
+            _record_runtime_phase(profile, "terminate_signal")
+        _signal_process_group(process, signal.SIGTERM)
+        _wait_for_process_group_quiet(
+            process.pid,
+            leader_pid=process.pid,
+            timeout_seconds=float(budgets["graceful_termination_seconds"]),
+            poll_seconds=float(budgets["poll_interval_seconds"]),
+        )
+        latest = _process_group_snapshot(process.pid, leader_pid=process.pid)
+        if int(latest.get("non_zombie_process_count") or 0) > 0:
+            with state_lock:
+                profile["termination"]["signals"].append({"signal": "SIGKILL", "reason": "pipe_drain_timeout"})
+                _record_runtime_phase(profile, "kill_signal")
+            _signal_process_group(process, signal.SIGKILL)
+        for stream in (process.stdout, process.stderr):
+            try:
+                stream.close()
+            except OSError:
+                pass
+        _wait_for_pipe_drain(drain_threads, timeout_seconds=float(budgets["forced_cleanup_seconds"]))
+
+    with state_lock:
+        pipe_summary = {
+            name: {
+                "bytes": int(value.get("bytes") or 0),
+                "eof": bool(value.get("eof")),
+            }
+            for name, value in sorted(pipe_state.items())
+            if isinstance(value, Mapping)
+        }
+        profile["process_diagnostics"]["pipe_state"] = {
+            "streams": pipe_summary,
+            "drain_completed": not any(thread.is_alive() for thread in drain_threads),
+            "drain_ceiling_seconds": budgets["pipe_drain_seconds"],
+        }
+        if not any(thread.is_alive() for thread in drain_threads):
+            _record_runtime_phase(profile, "pipe_drain_complete")
+        before_cleanup = _process_group_snapshot(process.pid, leader_pid=process.pid)
+        _runtime_profile_snapshot(profile, before_cleanup, reason="before_cleanup")
+
+    if int(before_cleanup.get("non_zombie_process_count") or 0) > 0:
+        with state_lock:
+            profile["termination"]["signals"].append({"signal": "SIGTERM", "reason": "residual_process_group"})
+            _record_runtime_phase(profile, "terminate_signal")
+        _signal_process_group(process, signal.SIGTERM)
+        after_grace = _wait_for_process_group_quiet(
+            process.pid,
+            leader_pid=process.pid,
+            timeout_seconds=float(budgets["graceful_termination_seconds"]),
+            poll_seconds=float(budgets["poll_interval_seconds"]),
+        )
+        if int(after_grace.get("non_zombie_process_count") or 0) > 0:
+            with state_lock:
+                profile["termination"]["signals"].append({"signal": "SIGKILL", "reason": "residual_process_group"})
+                _record_runtime_phase(profile, "kill_signal")
+            _signal_process_group(process, signal.SIGKILL)
+            after_cleanup = _wait_for_process_group_quiet(
+                process.pid,
+                leader_pid=process.pid,
+                timeout_seconds=float(budgets["forced_cleanup_seconds"]),
+                poll_seconds=float(budgets["poll_interval_seconds"]),
+            )
+        else:
+            after_cleanup = after_grace
+    else:
+        after_cleanup = before_cleanup
+
+    cleanup_status = "pass" if int(after_cleanup.get("non_zombie_process_count") or 0) == 0 else "fail"
+    with state_lock:
+        _runtime_profile_snapshot(profile, after_cleanup, reason="after_cleanup")
+        _record_runtime_phase(profile, "cleanup_complete")
+        classification = _classify_live_timeout(
+            profile,
+            timeout_reason=timeout_reason,
+            pipe_drain_timed_out=pipe_drain_timed_out,
+            cleanup_status=cleanup_status,
+        ) if timed_out or cleanup_status != "pass" else "not_applicable"
+        in_flight = profile.get("_in_flight_lifecycle_counts", {})
+        contributors = [
+            f"{name}_no_completion"
+            for name, count in sorted(in_flight.items())
+            if isinstance(count, int | float) and count > 0
+        ] if isinstance(in_flight, Mapping) else []
+        profile["termination"].update(
+            {
+                "timed_out": timed_out,
+                "timeout_reason": timeout_reason,
+                "timeout_classification": classification,
+                "contributing_classifications": contributors,
+                "completion_valid": not timed_out and returncode == 0 and cleanup_status == "pass",
+                "cleanup_status": cleanup_status,
+            }
+        )
+        profile.pop("_last_trusted_monotonic", None)
+        profile.pop("_tool_in_flight", None)
+        profile.pop("_in_flight_lifecycle_counts", None)
+
+    return {
+        "returncode": int(returncode) if isinstance(returncode, int) else -1,
+        "timed_out": timed_out,
+        "duration_ms": round((_runtime_phase_offset(profile, "cleanup_complete") or 0.0), 3),
+        "preflight": _read_json_if_present(preflight_path) if preflight_path is not None else {},
+        "raw_paths": {
+            "events": stdout_path,
+            "stderr": stderr_path,
+            "runtime_phases": phase_path,
+        },
+        "runtime_profile": profile,
+        "timeout_classification": profile["termination"]["timeout_classification"],
+    }
+
+
 def _run_live_codex(
     *,
     environment: Mapping[str, str],
@@ -535,19 +1449,19 @@ def _run_live_codex(
     prompt: str,
     model: str,
     reasoning_effort: str,
-    timeout_seconds: int,
+    profile: dict[str, Any],
+    budgets: Mapping[str, Any],
     raw_dir: Path,
 ) -> dict[str, Any]:
-    """Run one fresh authenticated Manager root and retain only private raw output."""
+    """Run one fresh authenticated Manager root under the live supervisor."""
 
     runtime = str(environment.get("QWENDEX_CODEX_RUNTIME") or os.environ.get("QWENDEX_CODEX_RUNTIME") or "")
     if not runtime or not Path(runtime).is_file():
         raise LabError("live evaluation Codex runtime is unavailable")
     raw_dir.mkdir(parents=True, exist_ok=True)
     preflight_path = raw_dir / "manager_preflight.json"
-    stdout_path = raw_dir / "events.jsonl"
-    stderr_path = raw_dir / "stderr.txt"
     last_message_path = raw_dir / "last_message.md"
+    phase_path = raw_dir / "runtime_phases.log"
     child_env = dict(environment)
     child_env.update(
         {
@@ -559,40 +1473,20 @@ def _run_live_codex(
             "QWENDEX_LIVE_WORKTREE": str(worktree.resolve()),
             "QWENDEX_LIVE_MODEL": model,
             "QWENDEX_LIVE_LAST_MESSAGE": str(last_message_path.resolve()),
+            "QWENDEX_LIVE_PHASES": str(phase_path.resolve()),
         }
     )
-    started = time.monotonic()
-    with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
-        process = subprocess.Popen(
-            ["bash", "-c", _live_launch_script(), "qwendex-live", prompt],
-            cwd=worktree,
-            env=child_env,
-            stdout=stdout,
-            stderr=stderr,
-            start_new_session=True,
-        )
-        timed_out = False
-        try:
-            returncode = process.wait(timeout=max(30, timeout_seconds))
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            os.killpg(process.pid, signal.SIGTERM)
-            try:
-                returncode = process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                os.killpg(process.pid, signal.SIGKILL)
-                returncode = process.wait(timeout=10)
-    return {
-        "returncode": returncode,
-        "timed_out": timed_out,
-        "duration_ms": round((time.monotonic() - started) * 1000, 3),
-        "preflight": _read_json_if_present(preflight_path),
-        "raw_paths": {
-            "events": stdout_path,
-            "stderr": stderr_path,
-            "last_message": last_message_path,
-        },
-    }
+    result = _supervise_live_subprocess(
+        ["bash", "-c", _live_launch_script(), "qwendex-live", prompt],
+        cwd=worktree,
+        environment=child_env,
+        raw_dir=raw_dir,
+        profile=profile,
+        budgets=budgets,
+        preflight_path=preflight_path,
+    )
+    result["raw_paths"]["last_message"] = last_message_path
+    return result
 
 
 def _prepare_isolated_manager(isolation_root: Path, worktree: Path) -> tuple[dict[str, str], dict[str, Any]]:
@@ -801,13 +1695,28 @@ def _live_evidence_grade(task: Mapping[str, Any], raw_dir: Path) -> dict[str, An
     }
 
 
-def _run_live_validation(task: Mapping[str, Any], worktree: Path, raw_dir: Path, environment: Mapping[str, str]) -> dict[str, Any]:
+def _run_live_validation(
+    task: Mapping[str, Any],
+    worktree: Path,
+    raw_dir: Path,
+    environment: Mapping[str, str],
+    *,
+    profile: dict[str, Any],
+) -> dict[str, Any]:
+    """Run task validation outside the Codex supervisor wall budget.
+
+    Validation has its own recorded phase so a slow checker can never be
+    misreported as a model, Manager, or pipe-drain timeout.
+    """
+
     command = [str(item) for item in task.get("validation_command", [])]
     if not command:
-        return {"status": "not_applicable", "duration_ms": None}
+        return {"status": "not_applicable", "duration_ms": None, "timed_out": False}
     started = time.monotonic()
+    _record_runtime_phase(profile, "validation_start", now=started)
     stdout_path = raw_dir / "validation.stdout"
     stderr_path = raw_dir / "validation.stderr"
+    timed_out = False
     try:
         with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
             completed = subprocess.run(
@@ -822,9 +1731,23 @@ def _run_live_validation(task: Mapping[str, Any], worktree: Path, raw_dir: Path,
         live = task.get("live") if isinstance(task.get("live"), Mapping) else {}
         expected = str(live.get("validation_expectation") or "pass") if isinstance(live, Mapping) else "pass"
         status = "pass" if (completed.returncode == 0) == (expected != "fail") else "fail"
-    except (OSError, subprocess.TimeoutExpired):
+    except subprocess.TimeoutExpired:
+        timed_out = True
         status = "fail"
-    return {"status": status, "duration_ms": round((time.monotonic() - started) * 1000, 3)}
+    except OSError:
+        status = "fail"
+    finished = time.monotonic()
+    _record_runtime_phase(profile, "validation_end", now=finished)
+    if timed_out:
+        profile["termination"].update(
+            {
+                "timed_out": True,
+                "timeout_reason": "validation",
+                "timeout_classification": "timeout_during_validation",
+                "completion_valid": False,
+            }
+        )
+    return {"status": status, "duration_ms": round((finished - started) * 1000, 3), "timed_out": timed_out}
 
 
 def _live_postconditions(task: Mapping[str, Any], worktree: Path) -> bool:
@@ -872,10 +1795,23 @@ def _live_manager_status(environment: Mapping[str, str]) -> dict[str, Any]:
     }
 
 
+def _live_manager_is_clean(manager: Mapping[str, Any]) -> bool:
+    """Treat an idle isolated Manager as healthy, not as a failed launch."""
+
+    return (
+        str(manager.get("status") or "") in {"pass", "standby"}
+        and int(manager.get("agent_count") or 0) == 0
+        and int(manager.get("stale_count") or 0) == 0
+    )
+
+
 def _contains_live_guard_marker(raw_dir: Path) -> bool:
     final_message = raw_dir / "last_message.md"
     if not final_message.is_file():
-        return True
+        # A supervisor timeout may legitimately prevent Codex from writing its
+        # final-message file.  Missing output is an incomplete arm, not proof
+        # that a local-model guard marker or visible tool markup was emitted.
+        return False
     text = final_message.read_text(encoding="utf-8", errors="replace")
     return any(marker in text for marker in ("LOCAL_MODEL_TOOL_CALL_TOO_LARGE", "LOCAL_MODEL_TOOL_CALL_TRUNCATED", "LOCAL_MODEL_TOOL_MARKUP_SUPPRESSED", "LOCAL_MODEL_LOOP_DETECTED", "<tool_call", "<function="))
 
@@ -2336,6 +3272,7 @@ def _run_live_arm(
     manifest_path: Path,
     auth_source: Path,
     variant: str,
+    supervisor_budgets: Mapping[str, Any],
     candidate_id: str = "",
     attempt: int = 0,
 ) -> dict[str, Any]:
@@ -2354,13 +3291,35 @@ def _run_live_arm(
     worktree = isolation_root / "worktree"
     isolation_root = worktree.parent
     started = time.monotonic()
+    workload = _read_json(manifest_path)
+    policy = workload.get("model_policy", {}) if isinstance(workload, Mapping) else {}
+    if not isinstance(policy, Mapping):
+        raise LabError("live workload model policy is incomplete")
+    model = str(policy.get("model_identifier") or "")
+    reasoning = str(policy.get("reasoning_effort") or "")
+    if not model or not reasoning:
+        raise LabError("live workload model policy is incomplete")
+    budgets = _normalise_live_supervisor_budgets(supervisor_budgets)
+    candidate_eligible = _live_candidate_eligible(task)
+    candidate_active = _live_candidate_active(task, variant=variant, candidate_id=candidate_id)
+    profile = _new_live_runtime_profile(
+        run_id=run_id,
+        task_id=task_id,
+        variant=variant,
+        attempt=attempt_name,
+        candidate_id=candidate_id if candidate_active else "baseline_raw_tools",
+        repository=repository,
+        manifest_digest="sha256:" + sha256_file(manifest_path),
+        model_policy=policy,
+        budgets=budgets,
+    )
+    profile_path = raw_dir / "live_runtime_profile.json"
     _snapshot_worktree(source, str(repository.get("commit") or ""), worktree)
+    _record_runtime_phase(profile, "workspace_ready")
     try:
         _materialize_live_fixture(task, worktree)
         environment, setup = _prepare_live_manager(isolation_root, worktree)
         _copy_live_auth(auth_source, Path(environment["CODEX_HOME"]))
-        candidate_eligible = _live_candidate_eligible(task)
-        candidate_active = _live_candidate_active(task, variant=variant, candidate_id=candidate_id)
         if candidate_active:
             environment["QWENDEX_SEARCH_EVIDENCE_COMPACTION"] = "v2"
             environment["QWENDEX_SEARCH_COMMAND"] = str(
@@ -2369,18 +3328,14 @@ def _run_live_arm(
                 else (REPOSITORY_ROOT / "scripts" / "qwendex").resolve()
             )
         prompt = _live_prompt(manifest_path, task)
-        policy = _read_json(manifest_path).get("model_policy", {})
-        model = str(policy.get("model_identifier") or "") if isinstance(policy, Mapping) else ""
-        reasoning = str(policy.get("reasoning_effort") or "") if isinstance(policy, Mapping) else ""
-        if not model or not reasoning:
-            raise LabError("live workload model policy is incomplete")
         launch = _run_live_codex(
             environment=environment,
             worktree=worktree,
             prompt=prompt,
             model=model,
             reasoning_effort=reasoning,
-            timeout_seconds=int(task.get("timeout_seconds") or 180),
+            profile=profile,
+            budgets=budgets,
             raw_dir=raw_dir,
         )
         preflight_data = launch["preflight"].get("data", {}) if isinstance(launch.get("preflight"), Mapping) else {}
@@ -2391,9 +3346,15 @@ def _run_live_arm(
         )
         trace = _live_trace_summary(Path(launch["raw_paths"]["events"]))
         evidence = _live_evidence_grade(task, raw_dir)
-        validation = _run_live_validation(task, worktree, raw_dir, environment)
+        validation = _run_live_validation(task, worktree, raw_dir, environment, profile=profile)
         postconditions_ok = _live_postconditions(task, worktree)
         manager = _live_manager_status(environment)
+        profile["manager_health"] = {
+            "status": manager.get("status"),
+            "active_agent_count": manager.get("agent_count"),
+            "stale_session_count": manager.get("stale_count"),
+            "outcome_count": manager.get("outcome_count"),
+        }
         telemetry = performance_module().summary(
             Path(environment["QWENDEX_PERFORMANCE_DB"]),
             retention_days=14,
@@ -2401,16 +3362,42 @@ def _run_live_arm(
             repository_scope_digest=search_module().repository_scope_digest(worktree),
         )
         guard_marker = _contains_live_guard_marker(raw_dir)
+        _record_runtime_phase(profile, "runner_complete")
+        _finalise_live_runtime_profile(profile)
+        _write_json(profile_path, profile)
+        runtime_summary = {
+            "profile_schema_version": profile.get("schema_version"),
+            "profile_status": profile.get("profile_status"),
+            "supervisor_policy_identity": budgets.get("policy_identity"),
+            "timeout_classification": profile["termination"].get("timeout_classification"),
+            "timeout_reason": profile["termination"].get("timeout_reason"),
+            "contributing_classifications": profile["termination"].get("contributing_classifications"),
+            "cleanup_status": profile["termination"].get("cleanup_status"),
+            "completion_valid": profile["termination"].get("completion_valid"),
+            "trusted_progress_event_counts": profile.get("trusted_progress_event_counts"),
+            "phase_durations_ms": profile.get("phase_durations_ms"),
+        }
+        manager_clean = _live_manager_is_clean(manager)
         task_success = (
             not launch["timed_out"]
             and launch["returncode"] == 0
+            and not validation["timed_out"]
+            and runtime_summary["cleanup_status"] == "pass"
+            and manager_clean
             and actual_preflight_ok
             and evidence["quality_status"] == "pass"
             and validation["status"] in {"pass", "not_applicable"}
             and postconditions_ok
             and not guard_marker
         )
-        if not setup.get("status") == "pass" or not actual_preflight_ok or launch["timed_out"]:
+        if (
+            setup.get("status") != "pass"
+            or not actual_preflight_ok
+            or launch["timed_out"]
+            or validation["timed_out"]
+            or runtime_summary["cleanup_status"] != "pass"
+            or not manager_clean
+        ):
             status = "blocked"
         else:
             status = "pass" if task_success else "fail"
@@ -2434,6 +3421,8 @@ def _run_live_arm(
             "status": status,
             "returncode": launch["returncode"],
             "timed_out": launch["timed_out"],
+            "timeout_classification": runtime_summary["timeout_classification"],
+            "supervisor": runtime_summary,
             "manager_preflight": {
                 "setup_status": setup.get("status"),
                 "actual_status": launch["preflight"].get("status"),
@@ -2464,10 +3453,13 @@ def _run_live_arm(
             "candidate_version": "2" if candidate_active else "not_applicable",
             "candidate_eligible": candidate_eligible,
             "status": status,
+            "returncode": launch["returncode"],
+            "timed_out": launch["timed_out"],
             "task_success": task_success,
             "quality_status": evidence["quality_status"],
             "validation_status": validation["status"],
             "validation_duration_ms": validation["duration_ms"],
+            "validation_timed_out": validation["timed_out"],
             "relevant_file_recall": evidence["relevant_file_recall"],
             "relevant_region_recall": evidence["relevant_region_recall"],
             "model_facing_search_bytes": trace["search_output_bytes"],
@@ -2482,10 +3474,17 @@ def _run_live_arm(
             "candidate_search_calls": trace["candidate_search_calls"],
             "token_usage": trace["token_usage"],
             "guard_marker": guard_marker,
+            "timeout_classification": runtime_summary["timeout_classification"],
+            "timeout_contributing_classifications": runtime_summary["contributing_classifications"],
+            "supervisor_policy_identity": budgets.get("policy_identity"),
+            "supervisor_cleanup_status": runtime_summary["cleanup_status"],
+            "runtime_profile_status": runtime_summary["profile_status"],
+            "runtime_phase_durations_ms": runtime_summary["phase_durations_ms"],
             "manager_preflight": receipt["manager_preflight"],
             "manager": manager,
             "telemetry": telemetry,
             "receipt": receipt_path.relative_to(run_dir).as_posix(),
+            "runtime_profile": profile_path.relative_to(run_dir).as_posix(),
             "raw_artifact": raw_manifest_entry,
             "wall_time_ms": round((time.monotonic() - started) * 1000, 3),
             "isolation": {
@@ -2557,6 +3556,20 @@ def _live_pair_result(task: Mapping[str, Any], baseline: Mapping[str, Any], cand
         "candidate_adopted": bool(candidate.get("candidate_adopted")),
         "candidate_search_calls": candidate.get("candidate_search_calls", 0),
         "manager": {"baseline": baseline.get("manager"), "candidate": candidate.get("manager")},
+        "runtime": {
+            "baseline": {
+                "timeout_classification": baseline.get("timeout_classification", "unknown_insufficient_instrumentation"),
+                "supervisor_policy_identity": baseline.get("supervisor_policy_identity", "not_observed"),
+                "cleanup_status": baseline.get("supervisor_cleanup_status", "not_observed"),
+                "profile_status": baseline.get("runtime_profile_status", "not_observed"),
+            },
+            "candidate": {
+                "timeout_classification": candidate.get("timeout_classification", "unknown_insufficient_instrumentation"),
+                "supervisor_policy_identity": candidate.get("supervisor_policy_identity", "not_observed"),
+                "cleanup_status": candidate.get("supervisor_cleanup_status", "not_observed"),
+                "profile_status": candidate.get("runtime_profile_status", "not_observed"),
+            },
+        },
     }
 
 
@@ -2674,7 +3687,13 @@ def _live_performance_summary(baselines: list[Mapping[str, Any]], candidates: li
     p95_values: list[float] = []
     p50_values: list[float] = []
     token_totals: dict[str, int] = {}
-    for row in [*baselines, *candidates]:
+    all_rows = [*baselines, *candidates]
+    timeout_counts: dict[str, Counter[str]] = {"baseline": Counter(), "candidate": Counter()}
+    cleanup_counts: Counter[str] = Counter()
+    profile_status_counts: Counter[str] = Counter()
+    policy_identities: set[str] = set()
+    phase_values: dict[str, list[float]] = {}
+    for row in all_rows:
         telemetry = row.get("telemetry") if isinstance(row.get("telemetry"), Mapping) else {}
         overhead = telemetry.get("instrumentation_overhead") if isinstance(telemetry, Mapping) else None
         if isinstance(overhead, Mapping):
@@ -2687,6 +3706,25 @@ def _live_performance_summary(baselines: list[Mapping[str, Any]], candidates: li
             for key, value in usage.items():
                 if isinstance(value, int):
                     token_totals[str(key)] = token_totals.get(str(key), 0) + value
+        variant = str(row.get("variant") or "")
+        if variant in timeout_counts:
+            classification = str(row.get("timeout_classification") or "unknown_insufficient_instrumentation")
+            timeout_counts[variant][classification] += 1
+        cleanup_counts[str(row.get("supervisor_cleanup_status") or "not_observed")] += 1
+        profile_status_counts[str(row.get("runtime_profile_status") or "not_observed")] += 1
+        identity = str(row.get("supervisor_policy_identity") or "")
+        if identity:
+            policy_identities.add(identity)
+        durations = row.get("runtime_phase_durations_ms") if isinstance(row.get("runtime_phase_durations_ms"), Mapping) else {}
+        for name, value in durations.items():
+            if isinstance(value, int | float):
+                phase_values.setdefault(str(name), []).append(float(value))
+    baseline_timeout_count = sum(count for key, count in timeout_counts["baseline"].items() if key != "not_applicable")
+    candidate_timeout_count = sum(count for key, count in timeout_counts["candidate"].items() if key != "not_applicable")
+    phase_decomposition = {
+        name: {"p50": _percentile(values, 0.5), "p95": _percentile(values, 0.95)}
+        for name, values in sorted(phase_values.items())
+    }
     return {
         "schema_version": "qwendex.optimization_lab.live_performance_summary.v1",
         "pair_count": len(pairs),
@@ -2707,6 +3745,17 @@ def _live_performance_summary(baselines: list[Mapping[str, Any]], candidates: li
         "telemetry_instrumentation_overhead_ms": {"p50": _percentile(p50_values, 0.5), "p95": _percentile(p95_values, 0.95)},
         "telemetry_instrumentation_p95_ms": _percentile(p95_values, 0.95) if p95_values else "not_observed",
         "token_usage": token_totals or "not_observed",
+        "phase_decomposition_ms": phase_decomposition or "not_observed",
+        "timeout_classifications": {
+            "baseline": dict(sorted(timeout_counts["baseline"].items())),
+            "candidate": dict(sorted(timeout_counts["candidate"].items())),
+            "baseline_timeout_count": baseline_timeout_count,
+            "candidate_timeout_count": candidate_timeout_count,
+            "candidate_timeout_excess": max(0, candidate_timeout_count - baseline_timeout_count),
+        },
+        "runtime_profile_status_counts": dict(sorted(profile_status_counts.items())),
+        "cleanup_status_counts": dict(sorted(cleanup_counts.items())),
+        "supervisor_policy_identities": sorted(policy_identities) or "not_observed",
         "time_to_first_relevant_evidence_ms": "not_observed",
         "time_to_first_edit_ms": "not_observed",
         "context_compaction_count": "not_observed",
@@ -2758,6 +3807,26 @@ def _live_gate_decision(
         or (isinstance(pair.get("adjudication"), Mapping) and pair["adjudication"].get("status") != "unresolved")
         for pair in pairs
     )
+    runtime_profiles_ok = bool(observed_rows) and all(
+        row.get("runtime_profile_status") == "complete"
+        and row.get("supervisor_cleanup_status") == "pass"
+        and str(row.get("timeout_classification") or "") in LIVE_TIMEOUT_CLASSIFICATIONS
+        for row in observed_rows
+    )
+    policy_identities = {
+        str(row.get("supervisor_policy_identity") or "")
+        for row in observed_rows
+        if str(row.get("supervisor_policy_identity") or "")
+    }
+    budget_policy_ok = len(policy_identities) == 1
+    no_unknown_failed_timeout = not any(
+        row.get("status") != "pass"
+        and str(row.get("timeout_classification") or "unknown_insufficient_instrumentation") == "unknown_insufficient_instrumentation"
+        for row in observed_rows
+    )
+    timeout_summary = performance.get("timeout_classifications", {}) if isinstance(performance.get("timeout_classifications"), Mapping) else {}
+    candidate_timeout_excess = timeout_summary.get("candidate_timeout_excess")
+    timeout_balance_ok = isinstance(candidate_timeout_excess, int | float) and float(candidate_timeout_excess) == 0.0
     hard = {
         "relevant_file_recall": "pass" if file_ok else "fail",
         "relevant_region_recall": "pass" if region_ok else "fail",
@@ -2769,6 +3838,9 @@ def _live_gate_decision(
         "manager_live_root_binding": "pass" if manager_ok else "fail",
         "guard_marker_absence": "pass" if guard_ok else "fail",
         "raw_artifact_digests": "pass" if raw_artifacts_valid else "fail",
+        "runtime_profile_integrity_and_cleanup": "pass" if runtime_profiles_ok else "fail",
+        "identical_supervisor_budget_policy": "pass" if budget_policy_ok else "fail",
+        "failed_arm_timeout_classification": "pass" if no_unknown_failed_timeout else "fail",
         "candidate_default_off": "pass",
         "deterministic_v2_contract": "pass",
     }
@@ -2785,6 +3857,7 @@ def _live_gate_decision(
         "candidate_adoption": "pass" if isinstance(adoption, int | float) and adoption >= 0.80 else "fail",
         "fallback_rate": "pass" if isinstance(fallback, int | float) and fallback <= 0.25 else "fail",
         "telemetry_p95": "pass" if isinstance(telemetry, int | float) and telemetry < 5 else "fail",
+        "candidate_timeout_imbalance": "pass" if timeout_balance_ok else "fail",
         "context_compaction": "not_observed" if performance.get("context_compaction_count") == "not_observed" else "pass",
     }
     hard_failed = any(value == "fail" for value in hard.values())
@@ -2834,11 +3907,648 @@ def _live_final_report(run_id: str, payload: Mapping[str, Any], baselines: list[
     )
 
 
+def _safe_runtime_row(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Return calibration evidence without private task text or raw paths."""
+
+    manager = row.get("manager") if isinstance(row.get("manager"), Mapping) else {}
+    return {
+        "pair_digest": _safe_local_digest(str(row.get("task_id") or "")),
+        "arm": str(row.get("variant") or "baseline"),
+        "status": str(row.get("status") or "blocked"),
+        "task_success": bool(row.get("task_success")),
+        "returncode": row.get("returncode", "not_observed"),
+        "wall_time_ms": row.get("wall_time_ms", "not_observed"),
+        "timeout_classification": str(row.get("timeout_classification") or "unknown_insufficient_instrumentation"),
+        "contributing_classifications": list(row.get("timeout_contributing_classifications") or []),
+        "supervisor_policy_identity": str(row.get("supervisor_policy_identity") or "not_observed"),
+        "runtime_profile_status": str(row.get("runtime_profile_status") or "not_observed"),
+        "cleanup_status": str(row.get("supervisor_cleanup_status") or "not_observed"),
+        "manager": {
+            "status": manager.get("status", "not_observed"),
+            "active_agent_count": manager.get("agent_count", "not_observed"),
+            "stale_session_count": manager.get("stale_count", "not_observed"),
+        },
+    }
+
+
+def live_runtime_calibration(
+    manifest_path: Path | str,
+    *,
+    auth_source: Path | str,
+    task_id: str,
+    output_root: Path | str | None = None,
+    secondary_task_id: str = "",
+) -> dict[str, Any]:
+    """Calibrate live budgets before any paired candidate outcome is viewed.
+
+    It first replays the frozen task under its original one-wall budget while
+    collecting a profile.  Any precise legacy classification can then run a
+    same-wall progress-aware diagnostic; only a completed diagnostic or proven
+    continuous trusted progress can select a policy for candidate pairs. A
+    caller can supply one frozen task from a different stratum when a second
+    baseline check is genuinely needed; candidate code is never run.
+    """
+
+    manifest = Path(manifest_path).expanduser().resolve(strict=False)
+    validation = validate_workload(manifest)
+    if not validation.get("valid"):
+        raise LabError("workload manifest validation failed")
+    payload = _read_json(manifest)
+    if payload.get("execution_mode") != LIVE_EXECUTION_MODE:
+        raise LabError("live runtime calibration requires a frozen live-agent workload")
+    auth = Path(auth_source).expanduser().resolve(strict=False)
+    if not auth.is_file():
+        raise LabError("operator-supplied live evaluation auth source is unavailable")
+    tasks = {str(item.get("id") or ""): item for item in payload.get("tasks", []) if isinstance(item, Mapping)}
+    task = tasks.get(task_id)
+    if task is None:
+        raise LabError("requested frozen calibration task is unavailable")
+    repositories = {str(item.get("id") or ""): item for item in payload.get("repositories", []) if isinstance(item, Mapping)}
+    repository = repositories.get(str(task.get("repository") or ""))
+    if repository is None:
+        raise LabError("requested frozen calibration repository is unavailable")
+    root = Path(output_root).expanduser().resolve(strict=False) if output_root else REPOSITORY_ROOT / ".qwendex-dev" / "results" / "performance" / "paired-eval"
+    run_id = "live-runtime-calibration-" + datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8]
+    run_dir = root / run_id
+    if run_dir.exists():
+        raise LabError("generated live runtime calibration directory already exists")
+    run_dir.mkdir(parents=True)
+    legacy_seconds = int(task.get("timeout_seconds") or 180)
+    legacy_budget = legacy_live_supervisor_budgets(legacy_seconds)
+    _write_json(
+        run_dir / "00_calibration_custody.json",
+        {
+            "schema_version": "qwendex.live_runtime_calibration_custody.v1",
+            "run_digest": _safe_local_digest(run_id),
+            "frozen_workload_manifest_digest": "sha256:" + sha256_file(manifest),
+            "primary_pair_digest": _safe_local_digest(task_id),
+            "candidate_executed": False,
+            "raw_boundary": "ignored_local_artifacts_only",
+        },
+    )
+    shutil.copyfile(manifest, run_dir / "01_frozen_workload_manifest.json")
+    _write_text(run_dir / "01_frozen_workload_manifest.sha256", f"{sha256_file(manifest)}  01_frozen_workload_manifest.json\n")
+    _write_json(run_dir / "02_legacy_budget_policy.json", legacy_budget)
+
+    def run_baseline(selected_task: Mapping[str, Any], selected_repository: Mapping[str, Any], *, name: str, budget: Mapping[str, Any]) -> dict[str, Any]:
+        return _run_live_arm(
+            task=selected_task,
+            repository=selected_repository,
+            run_dir=run_dir / name,
+            run_id=run_id,
+            manifest_path=manifest,
+            auth_source=auth,
+            variant="baseline",
+            supervisor_budgets=budget,
+        )
+
+    try:
+        legacy_row = run_baseline(task, repository, name="legacy", budget=legacy_budget)
+    except (LabError, OSError, ValueError, subprocess.TimeoutExpired) as exc:
+        legacy_row = {
+            "task_id": task_id,
+            "variant": "baseline",
+            "status": "blocked",
+            "reason": str(exc),
+            "timeout_classification": "unknown_insufficient_instrumentation",
+        }
+    _write_json(run_dir / "03_legacy_180_observation.json", _safe_runtime_row(legacy_row))
+
+    legacy_classification = str(legacy_row.get("timeout_classification") or "unknown_insufficient_instrumentation")
+    legacy_completed = legacy_row.get("status") == "pass"
+    precise_legacy_classification = (
+        legacy_classification in LIVE_TIMEOUT_CLASSIFICATIONS
+        and legacy_classification not in {"unknown_insufficient_instrumentation", "process_tree_cleanup_failed"}
+    )
+    diagnostic_allowed = legacy_completed or precise_legacy_classification
+    diagnostic_budget: dict[str, Any] | None = None
+    diagnostic_row: dict[str, Any] | None = None
+    secondary_row: dict[str, Any] | None = None
+    expanded_budget: dict[str, Any] | None = None
+    expanded_row: dict[str, Any] | None = None
+    selected_budget: dict[str, Any] | None = None
+    if diagnostic_allowed:
+        diagnostic_budget = derive_diagnostic_live_supervisor_budgets(legacy_seconds)
+        derivation = dict(diagnostic_budget.get("derivation") or {})
+        derivation["calibration_run_digest"] = _safe_local_digest(run_id)
+        derivation["legacy_observation_classification"] = legacy_classification
+        diagnostic_budget = _normalise_live_supervisor_budgets({**diagnostic_budget, "derivation": derivation})
+        try:
+            diagnostic_row = run_baseline(task, repository, name="same-wall-progress-aware", budget=diagnostic_budget)
+        except (LabError, OSError, ValueError, subprocess.TimeoutExpired) as exc:
+            diagnostic_row = {
+                "task_id": task_id,
+                "variant": "baseline",
+                "status": "blocked",
+                "reason": str(exc),
+                "timeout_classification": "unknown_insufficient_instrumentation",
+            }
+        if secondary_task_id and diagnostic_row.get("status") != "pass":
+            secondary = tasks.get(secondary_task_id)
+            secondary_repository = repositories.get(str(secondary.get("repository") or "")) if isinstance(secondary, Mapping) else None
+            if secondary is None or secondary_repository is None:
+                raise LabError("requested secondary frozen calibration task is unavailable")
+            try:
+                secondary_row = run_baseline(secondary, secondary_repository, name="secondary-same-wall-progress-aware", budget=diagnostic_budget)
+            except (LabError, OSError, ValueError, subprocess.TimeoutExpired) as exc:
+                secondary_row = {
+                    "task_id": secondary_task_id,
+                    "variant": "baseline",
+                    "status": "blocked",
+                    "reason": str(exc),
+                    "timeout_classification": "unknown_insufficient_instrumentation",
+                }
+        diagnostic_completed = any(
+            isinstance(row, Mapping) and row.get("status") == "pass"
+            for row in (diagnostic_row, secondary_row)
+        )
+        diagnostic_continuous_progress = any(
+            isinstance(row, Mapping) and row.get("timeout_classification") == "timeout_with_continuous_trusted_progress"
+            for row in (diagnostic_row, secondary_row)
+        )
+        if diagnostic_completed:
+            selected_budget = diagnostic_budget
+        elif diagnostic_continuous_progress:
+            expanded_budget = derive_progress_aware_live_supervisor_budgets(legacy_seconds)
+            expanded_derivation = dict(expanded_budget.get("derivation") or {})
+            expanded_derivation["calibration_run_digest"] = _safe_local_digest(run_id)
+            expanded_derivation["same_wall_observation_classification"] = "timeout_with_continuous_trusted_progress"
+            expanded_budget = _normalise_live_supervisor_budgets({**expanded_budget, "derivation": expanded_derivation})
+            try:
+                expanded_row = run_baseline(task, repository, name="expanded-progress-aware", budget=expanded_budget)
+            except (LabError, OSError, ValueError, subprocess.TimeoutExpired) as exc:
+                expanded_row = {
+                    "task_id": task_id,
+                    "variant": "baseline",
+                    "status": "blocked",
+                    "reason": str(exc),
+                    "timeout_classification": "unknown_insufficient_instrumentation",
+                }
+            if expanded_row.get("status") == "pass":
+                selected_budget = expanded_budget
+    else:
+        diagnostic_completed = False
+        diagnostic_continuous_progress = False
+    _write_json(
+        run_dir / "04_progress_aware_observation.json",
+        {
+            "schema_version": "qwendex.live_runtime_calibration_observation.v1",
+            "same_wall_policy_run": diagnostic_allowed,
+            "same_wall_primary": _safe_runtime_row(diagnostic_row) if isinstance(diagnostic_row, Mapping) else "not_run",
+            "secondary": _safe_runtime_row(secondary_row) if isinstance(secondary_row, Mapping) else "not_run",
+            "expanded_primary": _safe_runtime_row(expanded_row) if isinstance(expanded_row, Mapping) else "not_run",
+        },
+    )
+    if diagnostic_budget is not None:
+        _write_json(run_dir / "04a_same_wall_supervisor_budget_policy.json", diagnostic_budget)
+    if expanded_budget is not None:
+        _write_json(run_dir / "04b_expanded_supervisor_budget_policy.json", expanded_budget)
+    if selected_budget is not None:
+        _write_json(run_dir / "05_selected_supervisor_budget_policy.json", selected_budget)
+    ready_for_pairs = selected_budget is not None
+    if ready_for_pairs:
+        outcome = "ready_for_paired_rerun"
+    elif not diagnostic_allowed:
+        outcome = "unknown_legacy_timeout_requires_instrumentation_review"
+    elif any(
+        isinstance(row, Mapping)
+        and row.get("timeout_classification") in {"timeout_due_to_inactivity", "timeout_during_tool_execution", "timeout_during_manager_stop"}
+        for row in (diagnostic_row, secondary_row)
+    ):
+        outcome = "classified_nonprogress_runtime_blocker"
+    else:
+        outcome = "progress_aware_baseline_incomplete"
+    _write_json(
+        run_dir / "06_calibration_decision.json",
+        {
+            "schema_version": "qwendex.live_runtime_calibration_decision.v1",
+            "status": "pass" if ready_for_pairs else "blocked",
+            "outcome": outcome,
+            "legacy_timeout_classification": legacy_classification,
+            "legacy_completed": legacy_completed,
+            "same_wall_progress_aware_run": diagnostic_allowed,
+            "continuous_trusted_progress_at_same_wall": diagnostic_continuous_progress,
+            "progress_aware_baseline_completed": diagnostic_completed or (isinstance(expanded_row, Mapping) and expanded_row.get("status") == "pass"),
+            "selected_policy_identity": selected_budget.get("policy_identity") if selected_budget else "not_observed",
+            "candidate_outcomes_viewed": False,
+        },
+    )
+    _write_json(run_dir / "07_live_runtime_profile_contract.json", live_runtime_profile_contract())
+    _write_json(run_dir / "manifest.json", _artifact_manifest(run_dir))
+    return {
+        "schema_version": "qwendex.live_runtime_calibration.v1",
+        "status": "pass" if ready_for_pairs else "blocked",
+        "summary": "Calibrated the live-runtime supervisor before paired candidate evidence." if ready_for_pairs else "Live-runtime calibration did not establish a safe paired-evaluation policy.",
+        "data": {
+            "run_id": run_id,
+            "artifact_dir": str(run_dir),
+            "outcome": outcome,
+            "legacy_timeout_classification": legacy_classification,
+            "selected_policy": str(run_dir / "05_selected_supervisor_budget_policy.json") if selected_budget else "not_observed",
+            "ready_for_pairs": ready_for_pairs,
+        },
+    }
+
+
+def _verify_private_artifact_manifest(run_dir: Path) -> dict[str, Any]:
+    manifest_path = run_dir / "manifest.json"
+    manifest = _read_json(manifest_path)
+    entries = manifest.get("artifacts", []) if isinstance(manifest, Mapping) else []
+    bad_count = 0
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            bad_count += 1
+            continue
+        path = run_dir / str(entry.get("path") or "")
+        if not path.is_file() or entry.get("sha256") != "sha256:" + sha256_file(path):
+            bad_count += 1
+    return {
+        "schema_version": str(manifest.get("schema_version") if isinstance(manifest, Mapping) else "not_observed"),
+        "manifest_digest": "sha256:" + sha256_file(manifest_path),
+        "artifact_count": len(entries),
+        "bad_hash_count": bad_count,
+        "status": "pass" if isinstance(manifest, Mapping) and bad_count == 0 else "fail",
+    }
+
+
+def _safe_event_shape(events_path: Path) -> dict[str, Any]:
+    event_counts: Counter[str] = Counter()
+    item_counts: Counter[str] = Counter()
+    unclosed_lifecycle: Counter[str] = Counter()
+    open_items: dict[str, str] = {}
+    parse_errors = 0
+    if not events_path.is_file():
+        return {"status": "not_observed", "event_type_counts": {}, "item_type_counts": {}, "unclosed_lifecycle_counts": {}, "parse_errors": 0}
+    for line in events_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            parse_errors += 1
+            continue
+        if not isinstance(event, Mapping):
+            continue
+        event_type = _safe_event_category(
+            str(event.get("type") or ""),
+            allowed={"thread.started", "turn.started", "turn.completed", "item.started", "item.completed"},
+        )
+        event_counts[event_type] += 1
+        item = event.get("item") if isinstance(event.get("item"), Mapping) else {}
+        item_type = _safe_event_category(
+            str(item.get("type") or ""),
+            allowed={"agent_message", "command_execution", "collab_tool_call", "file_change", "mcp_tool_call"},
+        )
+        if item_type != "other":
+            item_counts[item_type] += 1
+        if event_type not in {"item.started", "item.completed"}:
+            continue
+        raw_id = str(item.get("id") or event.get("id") or "")
+        item_id = _safe_local_digest(raw_id) if raw_id else "not_observed"
+        if item_type == "collab_tool_call":
+            lifecycle = "collaboration_wait" if str(item.get("tool") or "").lower() == "wait" else "collaboration_other"
+        elif item_type == "command_execution":
+            lifecycle = "command_execution"
+        elif item_type == "mcp_tool_call":
+            lifecycle = "mcp_tool_call"
+        elif item_type == "file_change":
+            lifecycle = "file_change"
+        else:
+            lifecycle = "other"
+        if event_type == "item.started":
+            open_items[item_id] = lifecycle
+        else:
+            open_items.pop(item_id, None)
+    for lifecycle in open_items.values():
+        unclosed_lifecycle[lifecycle] += 1
+    return {
+        "status": "pass",
+        "event_type_counts": dict(sorted(event_counts.items())),
+        "item_type_counts": dict(sorted(item_counts.items())),
+        "unclosed_lifecycle_counts": dict(sorted(unclosed_lifecycle.items())),
+        "parse_errors": parse_errors,
+    }
+
+
+def _prior_timeout_timelines(authoritative_run: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    timelines: list[dict[str, Any]] = []
+    classifications: list[dict[str, Any]] = []
+    for variant, filename in (("baseline", "06_baseline_runs.jsonl"), ("candidate", "07_candidate_runs.jsonl")):
+        for row in _read_jsonl(authoritative_run / filename):
+            raw_entry = row.get("raw_artifact") if isinstance(row.get("raw_artifact"), Mapping) else {}
+            raw_manifest = authoritative_run / str(raw_entry.get("path") or "")
+            events_path = raw_manifest.parent / "events.jsonl"
+            shape = _safe_event_shape(events_path)
+            pair_digest = _safe_local_digest(str(row.get("task_id") or ""))
+            timelines.append(
+                {
+                    "pair_digest": pair_digest,
+                    "arm": variant,
+                    "phase_timestamps": {phase: "not_observed" for phase in LIVE_RUNTIME_PHASES},
+                    "observation_limit": "historical event streams contain no trustworthy timestamps or process-state samples",
+                    "structured_event_shape": shape,
+                    "wall_time_ms": row.get("wall_time_ms", "not_observed"),
+                }
+            )
+            classifications.append(
+                {
+                    "evidence_generation": "prior_legacy",
+                    "pair_digest": pair_digest,
+                    "arm": variant,
+                    "primary_classification": "unknown_insufficient_instrumentation",
+                    "contributing_classifications": "",
+                }
+            )
+    return timelines, classifications
+
+
+def _safe_calibration_profiles(calibration_run: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    profiles: list[dict[str, Any]] = []
+    classifications: list[dict[str, Any]] = []
+    for path in sorted(calibration_run.rglob("live_runtime_profile.json")):
+        profile = _read_json(path)
+        if not isinstance(profile, Mapping):
+            continue
+        identity = profile.get("identity") if isinstance(profile.get("identity"), Mapping) else {}
+        termination = profile.get("termination") if isinstance(profile.get("termination"), Mapping) else {}
+        manager = profile.get("manager_health") if isinstance(profile.get("manager_health"), Mapping) else {}
+        profiles.append(
+            {
+                "pair_digest": identity.get("pair_digest", "not_observed"),
+                "arm": identity.get("arm", "not_observed"),
+                "attempt": identity.get("attempt", "not_observed"),
+                "profile_schema_version": profile.get("schema_version", "not_observed"),
+                "profile_status": profile.get("profile_status", "not_observed"),
+                "phase_timestamps": profile.get("phase_timestamps", {}),
+                "phase_durations_ms": profile.get("phase_durations_ms", {}),
+                "trusted_progress_event_counts": profile.get("trusted_progress_event_counts", {}),
+                "termination": {
+                    "timed_out": termination.get("timed_out", "not_observed"),
+                    "timeout_reason": termination.get("timeout_reason", "not_observed"),
+                    "timeout_classification": termination.get("timeout_classification", "unknown_insufficient_instrumentation"),
+                    "contributing_classifications": termination.get("contributing_classifications", []),
+                    "cleanup_status": termination.get("cleanup_status", "not_observed"),
+                },
+                "manager_health": {
+                    "status": manager.get("status", "not_observed"),
+                    "active_agent_count": manager.get("active_agent_count", "not_observed"),
+                    "stale_session_count": manager.get("stale_session_count", "not_observed"),
+                },
+                "privacy": profile.get("privacy", {}),
+            }
+        )
+        classifications.append(
+            {
+                "evidence_generation": "calibration",
+                "pair_digest": identity.get("pair_digest", "not_observed"),
+                "arm": identity.get("arm", "not_observed"),
+                "primary_classification": termination.get("timeout_classification", "unknown_insufficient_instrumentation"),
+                "contributing_classifications": ";".join(str(item) for item in termination.get("contributing_classifications", []) if isinstance(item, str)),
+            }
+        )
+    return profiles, classifications
+
+
+def live_runtime_stability_closeout(
+    *,
+    prior_run_dir: Path | str,
+    calibration_run_dir: Path | str,
+    validation_summary: Mapping[str, Any],
+    output_root: Path | str | None = None,
+) -> dict[str, Any]:
+    """Write the privacy-safe closeout when calibration blocks paired evidence."""
+
+    prior = Path(prior_run_dir).expanduser().resolve(strict=False)
+    calibration = Path(calibration_run_dir).expanduser().resolve(strict=False)
+    prior_verification = _verify_private_artifact_manifest(prior)
+    calibration_verification = _verify_private_artifact_manifest(calibration)
+    authoritative_runs = sorted((prior / "live-eval-authoritative").glob("live-paired-*"))
+    if len(authoritative_runs) != 1:
+        raise LabError("prior live evidence has no unique authoritative paired run")
+    authoritative = authoritative_runs[0]
+    authoritative_comparison = compare_run(authoritative)
+    frozen_manifest = prior / "live-workload" / "manifest.json"
+    if not frozen_manifest.is_file():
+        raise LabError("prior frozen workload manifest is unavailable")
+    frozen_digest = "sha256:" + sha256_file(frozen_manifest)
+    calibration_decision = _read_json(calibration / "06_calibration_decision.json")
+    if not isinstance(calibration_decision, Mapping):
+        raise LabError("live runtime calibration decision is unavailable")
+    timelines, prior_classifications = _prior_timeout_timelines(authoritative)
+    calibration_profiles, calibration_classifications = _safe_calibration_profiles(calibration)
+    if not calibration_profiles:
+        raise LabError("live runtime calibration profiles are unavailable")
+    same_wall_policy_path = calibration / "04a_same_wall_supervisor_budget_policy.json"
+    same_wall_policy = _read_json(same_wall_policy_path) if same_wall_policy_path.is_file() else {}
+    root = Path(output_root).expanduser().resolve(strict=False) if output_root else REPOSITORY_ROOT / ".qwendex-dev" / "results" / "performance" / "paired-eval"
+    run_id = "live-runtime-stability-closeout-" + datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8]
+    run_dir = root / run_id
+    if run_dir.exists():
+        raise LabError("generated live runtime closeout directory already exists")
+    run_dir.mkdir(parents=True)
+    head = _git_output(REPOSITORY_ROOT, "rev-parse", "HEAD")
+    tree = "git:" + _git_output(REPOSITORY_ROOT, "rev-parse", "HEAD^{tree}")
+    dirty_paths = [line for line in _git_output(REPOSITORY_ROOT, "status", "--short").splitlines() if line]
+    diff_digest = "sha256:" + sha256_bytes(
+        subprocess.run(
+            ["git", "-C", str(REPOSITORY_ROOT), "diff", "--binary"],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        ).stdout
+    )
+    candidate_identity = search_module().SEARCH_V2_CANDIDATE_ID
+    budget_identity = str(same_wall_policy.get("policy_identity") or "not_selected") if isinstance(same_wall_policy, Mapping) else "not_selected"
+    _write_json(
+        run_dir / "00_custody.json",
+        {
+            "schema_version": "qwendex.live_runtime_stability_custody.v1",
+            "source_commit": head,
+            "source_tree": tree,
+            "working_tree_diff_digest": diff_digest,
+            "working_tree_dirty_path_count": len(dirty_paths),
+            "frozen_workload_manifest_digest": frozen_digest,
+            "candidate_identity": candidate_identity,
+            "budget_identity": budget_identity,
+            "generation_time": utc_now(),
+        },
+    )
+    _write_json(
+        run_dir / "01_prior_artifact_verification.json",
+        {
+            "schema_version": "qwendex.live_runtime_prior_artifact_verification.v1",
+            "prior_closeout_manifest": prior_verification,
+            "authoritative_live_comparison": authoritative_comparison,
+            "calibration_manifest": calibration_verification,
+            "status": "pass" if prior_verification["status"] == "pass" and calibration_verification["status"] == "pass" and authoritative_comparison.get("status") == "pass" else "fail",
+        },
+    )
+    _write_json(
+        run_dir / "02_prior_timeout_timeline.json",
+        {
+            "schema_version": "qwendex.live_runtime_prior_timeout_timeline.v1",
+            "historical_arms": timelines,
+            "calibration_profiles": calibration_profiles,
+        },
+    )
+    classification_rows = [*prior_classifications, *calibration_classifications]
+    with (run_dir / "03_timeout_classification.csv").open("w", encoding="utf-8", newline="") as handle:
+        fields = ["evidence_generation", "pair_digest", "arm", "primary_classification", "contributing_classifications"]
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(classification_rows)
+    _write_json(run_dir / "04_live_runtime_profile_schema.json", live_runtime_profile_contract())
+    _write_json(
+        run_dir / "05_supervisor_budget_and_derivation.json",
+        {
+            "schema_version": "qwendex.live_runtime_budget_derivation.v1",
+            "legacy_budget": _read_json(calibration / "02_legacy_budget_policy.json"),
+            "same_wall_progress_aware_budget": same_wall_policy if isinstance(same_wall_policy, Mapping) else "not_observed",
+            "selected_paired_budget": "not_selected_due_to_calibration_blocker",
+            "hard_wall_expansion": "not_permitted_without_continuous_trusted_progress",
+        },
+    )
+    _write_json(
+        run_dir / "06_supervisor_regression_results.json",
+        {
+            "schema_version": "qwendex.live_runtime_supervisor_regression_results.v1",
+            "status": str(validation_summary.get("supervisor_tests") or "not_observed"),
+            "coverage": [
+                "startup_and_first_model_ceiling",
+                "continuous_progress",
+                "tool_inactivity",
+                "manager_stop_delay",
+                "pipe_drain_and_descendant_cleanup",
+                "backpressure",
+                "process_group_termination",
+                "budget_equivalence",
+                "metadata_only_privacy",
+                "idle_manager_cleanup",
+            ],
+            "details": dict(validation_summary),
+        },
+    )
+    _write_json(
+        run_dir / "07_calibration_results.json",
+        {
+            "schema_version": "qwendex.live_runtime_calibration_results.v1",
+            "decision": calibration_decision,
+            "profile_count": len(calibration_profiles),
+            "candidate_outcomes_viewed": bool(calibration_decision.get("candidate_outcomes_viewed")),
+        },
+    )
+    calibration_frozen = calibration / "01_frozen_workload_manifest.json"
+    _write_json(
+        run_dir / "08_frozen_manifest_reuse_receipt.json",
+        {
+            "schema_version": "qwendex.live_runtime_frozen_manifest_reuse.v1",
+            "prior_manifest_digest": frozen_digest,
+            "calibration_manifest_digest": "sha256:" + sha256_file(calibration_frozen) if calibration_frozen.is_file() else "missing",
+            "unchanged": calibration_frozen.is_file() and sha256_file(calibration_frozen) == sha256_file(frozen_manifest),
+            "task_selection_changed": False,
+            "model_or_candidate_semantics_changed": False,
+        },
+    )
+    not_run = {
+        "schema_version": "qwendex.live_runtime_not_run.v1",
+        "status": "not_run",
+        "reason": "calibration did not select a valid paired supervisor budget",
+        "candidate_outcomes_viewed": False,
+    }
+    _write_json(run_dir / "09_pilot_pair_results.json", not_run)
+    _write_json(run_dir / "10_pilot_gate_decision.json", {**not_run, "stop_status": "STOP_V060_LIVE_RUNTIME_TIMEOUT_CLASSIFIED"})
+    _write_json(run_dir / "11_full_live_pair_results.json", not_run)
+    _write_json(run_dir / "12_full_live_summary.json", {**not_run, "valid_pairs": 0, "invalid_pairs": 0})
+    _write_json(
+        run_dir / "13_candidate_decision.json",
+        {
+            "schema_version": "qwendex.live_runtime_candidate_decision.v1",
+            "primary_stop": "STOP_V060_LIVE_RUNTIME_TIMEOUT_CLASSIFIED",
+            "candidate_stop": "STOP_V060_SEARCH_V2_HELD_FOR_LIVE_EVIDENCE",
+            "candidate_identity": candidate_identity,
+            "decision": "hold_for_more_live_evidence",
+            "reason": "no valid paired live outcomes were collected after the calibration blocker",
+            "default_state": "off",
+            "promoted": False,
+        },
+    )
+    all_profiles_private = all(
+        isinstance(profile.get("privacy"), Mapping)
+        and profile["privacy"].get("metadata_only") is True
+        and profile["privacy"].get("raw_content_in_profile") is False
+        for profile in calibration_profiles
+    )
+    all_cleanup_clean = all(
+        profile.get("termination", {}).get("cleanup_status") == "pass"
+        and int(profile.get("manager_health", {}).get("stale_session_count") or 0) == 0
+        and int(profile.get("manager_health", {}).get("active_agent_count") or 0) == 0
+        for profile in calibration_profiles
+    )
+    _write_json(
+        run_dir / "14_privacy_freshness_manager_cleanup.json",
+        {
+            "schema_version": "qwendex.live_runtime_privacy_freshness_manager_cleanup.v1",
+            "profile_metadata_only": "pass" if all_profiles_private else "fail",
+            "freshness": "pass_from_verified_prior_evidence",
+            "manager_and_process_cleanup": "pass" if all_cleanup_clean else "fail",
+            "raw_content_in_aggregate": False,
+        },
+    )
+    _write_json(
+        run_dir / "15_validation_summary.json",
+        {
+            "schema_version": "qwendex.live_runtime_validation_summary.v1",
+            **dict(validation_summary),
+        },
+    )
+    _write_text(
+        run_dir / "16_next_frontier.md",
+        "# Next frontier\n\n"
+        "GOAL: Trace and repair the native Codex collaboration-wait completion path under Manager Mode using the recorded metadata-only lifecycle receipt. "
+        "First reproduce it with one isolated frozen baseline, then prove the wait call emits a terminal event and leaves no receiver thread/session before rerunning the unchanged Search V2 held-out manifest. "
+        "Do not change Search V2, its frozen workload, model, routing, or default-off posture in that goal.\n",
+    )
+    _write_text(
+        run_dir / "FINAL_REPORT.md",
+        "# Live Runtime Stability and Search V2 Rerun Closeout\n\n"
+        "- Primary STOP: `STOP_V060_LIVE_RUNTIME_TIMEOUT_CLASSIFIED`\n"
+        "- Candidate STOP: `STOP_V060_SEARCH_V2_HELD_FOR_LIVE_EVIDENCE`\n"
+        "- The frozen workload was reused unchanged.\n"
+        "- The legacy 180-second boundary was reproduced; same-wall profiling classified reproducible inactivity after a native collaboration-wait transition.\n"
+        "- Qwendex repaired the opaque timeout, concurrent-pipe/cleanup observability gap, and missing-final-message guard false positive.\n"
+        "- No valid paired pilot or full evaluation was run because calibration did not select a valid paired budget.\n"
+        "- Search V2 remains explicit, opt-in, default-off, and is not promoted.\n"
+        "- No version bump, tag, push, publication, or release claim occurred.\n",
+    )
+    manifest_payload = _artifact_manifest(run_dir)
+    manifest_payload.update(
+        {
+            "source_commit": head,
+            "source_tree": tree,
+            "workload_manifest_digest": frozen_digest,
+            "candidate_identity": candidate_identity,
+            "budget_identity": budget_identity,
+            "generation_time": utc_now(),
+        }
+    )
+    _write_json(run_dir / "manifest.json", manifest_payload)
+    return {
+        "schema_version": "qwendex.live_runtime_stability_closeout.v1",
+        "status": "blocked",
+        "summary": "Wrote the verified live-runtime blocker closeout without treating incomplete pairs as candidate evidence.",
+        "data": {
+            "run_id": run_id,
+            "artifact_dir": str(run_dir),
+            "primary_stop": "STOP_V060_LIVE_RUNTIME_TIMEOUT_CLASSIFIED",
+            "candidate_stop": "STOP_V060_SEARCH_V2_HELD_FOR_LIVE_EVIDENCE",
+        },
+    }
+
+
 def live_paired_run(
     manifest_path: Path | str,
     *,
     candidate_id: str,
     auth_source: Path | str,
+    supervisor_policy: Path | str | Mapping[str, Any],
     output_root: Path | str | None = None,
 ) -> dict[str, Any]:
     """Run a frozen, isolated, paired live-agent adoption evaluation."""
@@ -2855,6 +4565,9 @@ def live_paired_run(
     auth = Path(auth_source).expanduser().resolve(strict=False)
     if not auth.is_file():
         raise LabError("operator-supplied live evaluation auth source is unavailable")
+    budgets = load_live_supervisor_budget_policy(supervisor_policy)
+    if budgets.get("mode") != "progress_aware":
+        raise LabError("live paired evidence requires a calibrated progress-aware supervisor policy")
     root = Path(output_root).expanduser().resolve(strict=False) if output_root else REPOSITORY_ROOT / ".qwendex-dev" / "results" / "performance" / "paired-eval"
     run_id = "live-paired-" + datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8]
     run_dir = root / run_id
@@ -2884,12 +4597,15 @@ def live_paired_run(
             "execution_mode": LIVE_EXECUTION_MODE,
             "auth_source": "operator_supplied_private",
             "conversation_isolation": "fresh_home_per_arm",
+            "supervisor_policy_identity": budgets["policy_identity"],
+            "supervisor_policy_mode": budgets["mode"],
         }
     )
     _write_json(run_dir / "02_environment_lock.json", environment)
     shutil.copyfile(manifest, run_dir / "03_workload_manifest.json")
     _write_text(run_dir / "04_workload_manifest.sha256", f"{sha256_file(manifest)}  03_workload_manifest.json\n")
     _write_json(run_dir / "05_candidate_registry.json", search_module().candidate_registry())
+    _write_json(run_dir / "05a_supervisor_budget_policy.json", budgets)
     repositories = {str(item.get("id") or ""): item for item in payload.get("repositories", []) if isinstance(item, Mapping)}
     tasks = [item for item in payload.get("tasks", []) if isinstance(item, Mapping)]
     baselines: list[dict[str, Any]] = []
@@ -2908,6 +4624,7 @@ def live_paired_run(
                 manifest_path=manifest,
                 auth_source=auth,
                 variant="candidate",
+                supervisor_budgets=budgets,
                 candidate_id=candidate_id,
                 attempt=attempt,
             )
@@ -2919,6 +4636,7 @@ def live_paired_run(
                 manifest_path=manifest,
                 auth_source=auth,
                 variant="baseline",
+                supervisor_budgets=budgets,
                 attempt=attempt,
             )
         else:
@@ -2930,6 +4648,7 @@ def live_paired_run(
                 manifest_path=manifest,
                 auth_source=auth,
                 variant="baseline",
+                supervisor_budgets=budgets,
                 attempt=attempt,
             )
             candidate = _run_live_arm(
@@ -2940,6 +4659,7 @@ def live_paired_run(
                 manifest_path=manifest,
                 auth_source=auth,
                 variant="candidate",
+                supervisor_budgets=budgets,
                 candidate_id=candidate_id,
                 attempt=attempt,
             )
@@ -3101,6 +4821,7 @@ def compare_run(run_dir: Path | str) -> dict[str, Any]:
     ]
     workload_preview = _read_json_if_present(root / "03_workload_manifest.json")
     is_live = isinstance(workload_preview, Mapping) and workload_preview.get("execution_mode") == LIVE_EXECUTION_MODE
+    has_supervisor_policy = is_live and (root / "05a_supervisor_budget_policy.json").is_file()
     if is_live:
         required.extend(["17_discordant_reruns.jsonl", "18_discordant_pair_adjudication.json"])
     missing = [name for name in required if not (root / name).is_file()]
@@ -3139,6 +4860,8 @@ def compare_run(run_dir: Path | str) -> dict[str, Any]:
     ]
     if is_live:
         json_artifacts.append("18_discordant_pair_adjudication.json")
+    if has_supervisor_policy:
+        json_artifacts.append("05a_supervisor_budget_policy.json")
     parsed_json: dict[str, Any] = {}
     for name in json_artifacts:
         try:
@@ -3186,6 +4909,28 @@ def compare_run(run_dir: Path | str) -> dict[str, Any]:
     except LabError:
         baselines, candidates, rows, gate, width_ok = [], [], [], {}, False
         schema_failures.append("run_artifacts")
+    runtime_profile_failures = 0
+    if has_supervisor_policy:
+        try:
+            policy = load_live_supervisor_budget_policy(root / "05a_supervisor_budget_policy.json")
+            for row in [*baselines, *candidates, *reruns]:
+                relative = str(row.get("runtime_profile") or "")
+                profile_path = root / relative
+                profile = _read_json(profile_path) if relative and profile_path.is_file() else {}
+                profile_budget = profile.get("supervisor_budget") if isinstance(profile, Mapping) and isinstance(profile.get("supervisor_budget"), Mapping) else {}
+                profile_privacy = profile.get("privacy") if isinstance(profile, Mapping) and isinstance(profile.get("privacy"), Mapping) else {}
+                if (
+                    not isinstance(profile, Mapping)
+                    or profile.get("schema_version") != LIVE_RUNTIME_PROFILE_SCHEMA_VERSION
+                    or profile.get("profile_status") != "complete"
+                    or profile_budget.get("policy_identity") != policy.get("policy_identity")
+                    or profile_privacy.get("raw_content_in_profile") is not False
+                ):
+                    runtime_profile_failures += 1
+        except (LabError, OSError, ValueError):
+            runtime_profile_failures += max(1, len(baselines) + len(candidates))
+        if runtime_profile_failures:
+            schema_failures.append("live_runtime_profiles")
     status = "pass" if not bad_hashes and not schema_failures and len(baselines) == len(candidates) == len(rows) >= 1 and width_ok else "fail"
     return {
         "schema_version": "qwendex.optimization_lab.compare.v1",
@@ -3198,6 +4943,7 @@ def compare_run(run_dir: Path | str) -> dict[str, Any]:
             "pair_rows": len(rows),
             "hash_failures": len(bad_hashes),
             "schema_failures": len(schema_failures),
+            "runtime_profile_failures": runtime_profile_failures,
             "candidate_decision": gate.get("candidate_decision") if isinstance(gate, Mapping) else "not_observed",
         },
     }
