@@ -11,6 +11,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 import xml.etree.ElementTree as ET
@@ -413,13 +414,16 @@ def offline_profile(run_id: str, results_root: Path) -> dict[str, Any]:
         f"--junitxml={junit}",
         *OFFLINE_TESTS,
     ]
-    pytest_record = run_recorded(
-        pytest_command,
-        environment=isolated_pytest_environment(environment),
-        stdout_path=run_root / "pytest.stdout.log",
-        stderr_path=run_root / "pytest.stderr.log",
-        timeout=900,
-    )
+    with tempfile.TemporaryDirectory(prefix="qwendex-manager-offline-pytest-") as pytest_temp:
+        pytest_environment = isolated_pytest_environment(environment)
+        pytest_environment["TMPDIR"] = pytest_temp
+        pytest_record = run_recorded(
+            pytest_command,
+            environment=pytest_environment,
+            stdout_path=run_root / "pytest.stdout.log",
+            stderr_path=run_root / "pytest.stderr.log",
+            timeout=900,
+        )
     test_results = parse_junit(junit) if junit.is_file() else {
         "tests_collected": 0,
         "tests_passed": 0,
