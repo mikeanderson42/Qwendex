@@ -55,6 +55,9 @@
   "sandbox": {
     "mode": "workspace-write"
   },
+  "qdex": {
+    "permission_mode": "workspace-write"
+  },
   "receipts": {
     "dir": "results/qwendex",
     "ledger": "~/.local/state/qwendex/qwendex.sqlite"

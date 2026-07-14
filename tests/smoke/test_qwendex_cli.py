@@ -1461,6 +1461,91 @@ def test_qwendex_dev_env_second_same_root_sync_skips_its_codex_wrapper(tmp_path)
     assert dry_run["command"][0] == str(checkout / ".qwendex-dev" / "bin" / "qwendex-codex-runtime")
 
 
+def test_qdex_permission_mode_precedence_is_safe_and_yolo_is_explicit(tmp_path):
+    fake_home, checkout, _, env = same_root_dev_env_fixture(tmp_path)
+    dev_env = checkout / "scripts" / "qwendex_dev_env"
+    synced = subprocess.run(
+        [str(dev_env), "sync"],
+        cwd=checkout,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=60,
+    )
+    assert synced.returncode == 0, synced.stderr or synced.stdout
+    qdex = fake_home / ".local" / "bin" / "qdex"
+    base_env = {
+        **env,
+        "QWENDEX_QDEX_DRY_RUN": "1",
+        "QWENDEX_MANAGER_ALLOW_UNHOOKED": "1",
+    }
+
+    def dry_run(*args, extra_env=None):
+        return subprocess.run(
+            [str(qdex), "--repo", str(checkout), "--json", *args],
+            cwd=checkout,
+            env={**base_env, **(extra_env or {})},
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=60,
+        )
+
+    published = dry_run()
+    assert published.returncode == 0, published.stderr or published.stdout
+    published_payload = json.loads(published.stdout)
+    assert published_payload["qdex_permission_mode"] == "workspace-write"
+    assert published_payload["qdex_permission_source"] == "published-config"
+    assert "--dangerously-bypass-approvals-and-sandbox" not in published_payload["command"]
+    assert published_payload["command"].count("--sandbox") == 1
+
+    operator_config = fake_home / ".config" / "qwendex" / "qdex.json"
+    operator_config.parent.mkdir(parents=True)
+    operator_config.write_text('{"permission_mode": "yolo"}\n', encoding="utf-8")
+    operator = dry_run()
+    assert operator.returncode == 0, operator.stderr or operator.stdout
+    operator_payload = json.loads(operator.stdout)
+    assert operator_payload["qdex_permission_mode"] == "yolo"
+    assert operator_payload["qdex_permission_source"] == "operator-config"
+    assert operator_payload["command"].count("--dangerously-bypass-approvals-and-sandbox") == 1
+
+    environment = dry_run(extra_env={"QWENDEX_QDEX_PERMISSION_MODE": "workspace-write"})
+    assert environment.returncode == 0, environment.stderr or environment.stdout
+    environment_payload = json.loads(environment.stdout)
+    assert environment_payload["qdex_permission_mode"] == "workspace-write"
+    assert environment_payload["qdex_permission_source"] == "environment"
+    assert "--dangerously-bypass-approvals-and-sandbox" not in environment_payload["command"]
+
+    cli = dry_run(
+        "--qdex-permission-mode",
+        "yolo",
+        "exec",
+        "--",
+        "--literal-native-value",
+        extra_env={"QWENDEX_QDEX_PERMISSION_MODE": "workspace-write"},
+    )
+    assert cli.returncode == 0, cli.stderr or cli.stdout
+    cli_payload = json.loads(cli.stdout)
+    assert cli_payload["qdex_permission_mode"] == "yolo"
+    assert cli_payload["qdex_permission_source"] == "cli"
+    assert cli_payload["command"].count("--dangerously-bypass-approvals-and-sandbox") == 1
+    assert cli_payload["command"][-2:] == ["--", "--literal-native-value"]
+
+    invalid_env = dry_run(extra_env={"QWENDEX_QDEX_PERMISSION_MODE": "unsafe"})
+    assert invalid_env.returncode == 2
+    assert "invalid permission_mode from environment" in invalid_env.stderr
+
+    operator_config.write_text('{"permission_mode": "unsafe"}\n', encoding="utf-8")
+    invalid_operator = dry_run()
+    assert invalid_operator.returncode == 2
+    assert "invalid permission_mode from operator-config" in invalid_operator.stderr
+
+    invalid_cli = dry_run("--qdex-permission-mode", "unsafe")
+    assert invalid_cli.returncode == 2
+    assert "requires yolo or workspace-write" in invalid_cli.stderr
+
+
 def test_qwendex_upgrade_ignores_stale_main_codex_and_installed_qdex_opens_other_repo(tmp_path):
     fake_home, checkout, fake_codex, env = same_root_dev_env_fixture(tmp_path)
     args_file = tmp_path / "installed-qdex-args.txt"
@@ -1913,6 +1998,8 @@ Path(os.environ["QWENDEX_FAKE_CODEX_ARGS"]).write_text(json.dumps({
     "effective_agent_use": os.environ.get("QWENDEX_EFFECTIVE_AGENT_USE", ""),
     "agent_policy_hash": os.environ.get("QWENDEX_AGENT_POLICY_HASH", ""),
     "agent_policy_source": os.environ.get("QWENDEX_AGENT_POLICY_SOURCE", ""),
+    "qdex_permission_mode": os.environ.get("QWENDEX_QDEX_PERMISSION_MODE", ""),
+    "qdex_permission_source": os.environ.get("QWENDEX_QDEX_PERMISSION_SOURCE", ""),
     "run_id": os.environ.get("QWENDEX_RUN_ID", ""),
 }), encoding="utf-8")
 """,
@@ -2011,7 +2098,13 @@ Path(os.environ["QWENDEX_FAKE_CODEX_ARGS"]).write_text(json.dumps({
     assert json.loads(legacy_preserve_flag_dry_run.stdout)["codex_home"] == str(dev_root / ".qwendex-dev" / "codex_home")
     assert default_home_payload["internal_runtime"] == str(dev_root / ".qwendex-dev" / "bin" / "qwendex-codex-runtime")
     assert default_home_payload["selected_target"] == default_home_payload["internal_runtime"]
-    assert default_home_payload["permission_mode"] == "yolo"
+    assert default_home_payload["permission_mode"] == "workspace-write"
+    assert default_home_payload["qdex_permission_mode"] == "workspace-write"
+    assert default_home_payload["qdex_permission_source"] == "published-config"
+    assert "--dangerously-bypass-approvals-and-sandbox" not in default_home_payload["command"]
+    assert "--sandbox" in default_home_payload["command"]
+    assert default_home_payload["manager_preflight"]["data"]["qdex_permission_mode"] == "workspace-write"
+    assert default_home_payload["manager_preflight"]["data"]["qdex_permission_source"] == "published-config"
 
     blocked = subprocess.run(
         [str(qdex), "--repo", str(ROOT)],
@@ -2063,7 +2156,9 @@ Path(os.environ["QWENDEX_FAKE_CODEX_ARGS"]).write_text(json.dumps({
     assert launched.returncode == 0, launched.stderr or launched.stdout
     call = json.loads(args_file.read_text(encoding="utf-8"))
     assert_qdex_v2_policy_prefix(call["args"], expected_native_threads=5)
-    assert "--dangerously-bypass-approvals-and-sandbox" in call["args"]
+    assert "--dangerously-bypass-approvals-and-sandbox" not in call["args"]
+    assert call["args"].count("--sandbox") == 1
+    assert call["args"][call["args"].index("--sandbox") + 1] == "workspace-write"
     assert "--dangerously-bypass-hook-trust" in call["args"]
     assert f'projects={{"{ROOT}"={{trust_level="trusted"}}}}' in call["args"]
     assert call["args"][call["args"].index("-C") + 1] == str(ROOT)
@@ -2084,6 +2179,8 @@ Path(os.environ["QWENDEX_FAKE_CODEX_ARGS"]).write_text(json.dumps({
     assert call["effective_agent_use"] == "Manager"
     assert call["agent_policy_hash"] == call["manager_policy_hash"]
     assert call["agent_policy_source"] == "manager-mode"
+    assert call["qdex_permission_mode"] == "workspace-write"
+    assert call["qdex_permission_source"] == "published-config"
     assert re.fullmatch(r"[0-9a-f]{32}", call["run_id"])
 
     compatible_env = {
@@ -2294,11 +2391,15 @@ def test_qwendex_codex_status_tracks_manager_state_and_writes_surface_file(tmp_p
     assert status["data"]["mode"] == "manager"
     assert status["data"]["agent_use"] == "Manager"
     assert status["data"]["agent_policy_source"] == "manager-mode"
+    assert status["data"]["qdex_permission_mode"] == "workspace-write"
+    assert status["data"]["qdex_permission_source"] == "published-config"
     assert plain.stdout.strip() == "{Qwendex} Agent Manager: [Manager Mode] | Kaveman: [N] | Local: [Ready] (Alt+M/K/L)"
     written = json.loads(status_file.read_text(encoding="utf-8"))
     assert written["text"] == "{Qwendex} Agent Manager: [Manager Mode] | Kaveman: [N] | Local: [Ready] (Alt+M/K/L)"
     assert written["agent_use"] == "Manager"
     assert written["agent_policy_source"] == "manager-mode"
+    assert written["qdex_permission_mode"] == "workspace-write"
+    assert written["qdex_permission_source"] == "published-config"
     assert written["kaveman_enabled"] is False
     assert written["local_usable"] is True
 

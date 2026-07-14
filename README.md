@@ -158,6 +158,13 @@ isolated home, internal runtime, and Manager preflight. Native options such as
 `exec --json`, `-C`/`--cd`, `--add-dir`, and arguments after `--` pass through
 unchanged; the older `--repo` form remains a compatibility alias.
 
+Qdex defaults to `workspace-write` permission mode from the published Qwendex
+config. An explicit `--qdex-permission-mode`,
+`QWENDEX_QDEX_PERMISSION_MODE`, or ignored operator-local Qdex config may
+select `yolo`; invalid explicit values stop before Codex starts. See
+[Configuration](public/qwendex/configuration.md#qdex-launch-permission) for
+the exact precedence and local-config boundary.
+
 Qwendex separates health output into advisory and strict modes for `check` and
 `doctor`. Advisory mode is for daily operator visibility:
 it can report Manager Mode warnings and repair hints without blocking the whole

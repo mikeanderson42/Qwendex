@@ -3,7 +3,7 @@
   "$id": "https://qwendex.local/schema/qwendex.config.v1.json",
   "title": "Qwendex Config",
   "type": "object",
-  "required": ["schema_version", "version", "default_seat", "routing", "context", "guard", "sandbox", "receipts", "state", "eval", "learning", "orchestration", "seats"],
+  "required": ["schema_version", "version", "default_seat", "routing", "context", "guard", "sandbox", "qdex", "receipts", "state", "eval", "learning", "orchestration", "seats"],
   "additionalProperties": false,
   "properties": {
     "schema_version": {"const": "qwendex.config.v1"},
@@ -65,6 +65,14 @@
       "additionalProperties": false,
       "properties": {
         "mode": {"enum": ["workspace-write", "read-only"]}
+      }
+    },
+    "qdex": {
+      "type": "object",
+      "required": ["permission_mode"],
+      "additionalProperties": false,
+      "properties": {
+        "permission_mode": {"enum": ["workspace-write", "yolo"]}
       }
     },
     "receipts": {

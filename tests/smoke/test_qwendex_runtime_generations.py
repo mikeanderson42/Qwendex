@@ -184,6 +184,30 @@ def test_runtime_generations_are_immutable_atomic_and_recoverable(tmp_path, monk
     assert not (runtime_root / "generations" / third_id).exists()
 
 
+def test_runtime_generation_excludes_operator_qdex_permission_config(tmp_path, monkeypatch):
+    source = tmp_path / "candidate"
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    copy_candidate_source(source)
+    codex, host = write_pinned_codex_fixture(source)
+    runtime_root = source / ".qwendex-dev" / "runtime"
+    operator_config = home / ".config" / "qwendex" / "qdex.json"
+    operator_config.parent.mkdir(parents=True)
+    operator_config.write_text('{"permission_mode": "yolo"}\n', encoding="utf-8")
+
+    first = build_candidate(source, runtime_root, codex, host)
+    entries = {item["path"] for item in first["tree_manifest"]}
+    assert ".config/qwendex/qdex.json" not in entries
+    assert not any(path.endswith("/qdex.json") for path in entries)
+    assert str(operator_config) not in json.dumps(first, sort_keys=True)
+
+    operator_config.write_text('{"permission_mode": "workspace-write"}\n', encoding="utf-8")
+    second = build_candidate(source, runtime_root, codex, host)
+    assert second["generation_id"] == first["generation_id"]
+    assert second["config_digest"] == first["config_digest"]
+
+
 def test_safe_prune_reads_live_decision_and_child_generation_refs(tmp_path):
     state_db = tmp_path / "state.sqlite"
     with sqlite3.connect(state_db) as conn:

@@ -49,13 +49,18 @@ Qwendex `bin/codex` wrapper even if an older generated environment still
 exports that path, then rediscovers the real upstream Codex.
 Ensure `~/.local/bin` is on `PATH`; then run `qdex` from the selected project or
 use Codex's native `qdex -C <project>` form. By default `qdex` supplies
-`--dangerously-bypass-approvals-and-sandbox` (YOLO mode). In Manager Mode it
-also supplies `--dangerously-bypass-hook-trust` only after the required Qwendex
-preflight verifies the managed hook set. That project becomes
+the published `workspace-write` permission posture and does not add
+`--dangerously-bypass-approvals-and-sandbox`. To use Yolo for one launch, pass
+`--qdex-permission-mode yolo`; Qdex adds that native Codex flag exactly once
+without changing caller arguments. An ignored operator-local
+`${XDG_CONFIG_HOME:-$HOME/.config}/qwendex/qdex.json` may select the same mode,
+but is never copied into a runtime generation or release artifact. In Manager
+Mode Qdex also supplies `--dangerously-bypass-hook-trust` only after the
+required Qwendex preflight verifies the managed hook set. That project becomes
 the Qwendex manager target, execution directory, Codex add-dir, local-harness
 trusted root, and MCP trusted root. This repo binding limits those Qwendex/MCP
 scopes and supplies a per-launch Codex trusted-project override for the exact
-canonical target, avoiding an interactive onboarding prompt. YOLO mode is
+canonical target, avoiding an interactive onboarding prompt. Yolo mode is
 deliberately not OS-level filesystem confinement. `qdex` sets the generated
 isolated `CODEX_HOME` only for its child process. Sourcing the environment
 leaves the caller's `CODEX_HOME` and ordinary upstream `codex` unchanged, so
@@ -63,6 +68,12 @@ upstream Codex remains available for recovery; `codex-main` is an explicit
 captured-upstream alias. The release tag pins the Qwendex source. Patched Codex
 footer/hotkey support and enforced Manager identity/lifecycle guarantees remain
 a separately built, version-checked integration.
+
+Qdex resolves permission mode in this order: CLI option, environment,
+operator-local config, published config, then the hard fallback
+`workspace-write`. `qdex --dry-run --json` and preflight/status receipts expose
+`qdex_permission_mode` and `qdex_permission_source`; a Manager launch snapshots
+them, so changing the source during an active session requires a relaunch.
 
 After the pinned Codex build is available, `sync` builds a sealed runtime
 generation, validates its hooks and binary pair, and atomically selects it for
@@ -239,7 +250,7 @@ qwendex-dev status
 ```
 
 From there, bare `qwendex-dev` starts Codex in `~/qwendex-dev` with the current
-Codex yolo-equivalent flag, `--dangerously-bypass-approvals-and-sandbox`.
+development-only Yolo-equivalent flag, `--dangerously-bypass-approvals-and-sandbox`.
 `qwendex-dev open` starts the same Qwendex dev wiring without yolo mode. The
 dev-local `codex` wrapper uses a patched/dev Codex binary when one is configured
 and falls back to the current main Codex install otherwise.

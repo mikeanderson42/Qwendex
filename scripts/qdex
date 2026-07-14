@@ -147,6 +147,70 @@ print(json.dumps(sys.argv[1], ensure_ascii=False))
 PY
 }
 
+resolve_qdex_permission_mode() {
+  local cli_value="$1"
+  local published_config="${QWENDEX_ROOT:-$QWENDEX_DEV_ROOT}/config/qwendex/qwendex.json"
+  local operator_config="${XDG_CONFIG_HOME:-$HOME/.config}/qwendex/qdex.json"
+  python3 - "$cli_value" "$published_config" "$operator_config" <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+
+VALID = {"workspace-write", "yolo"}
+cli_value, published_path, operator_path = sys.argv[1:]
+
+
+def fail(scope, value):
+    print(
+        f"qdex: invalid permission_mode from {scope}: {value!r}; "
+        "expected workspace-write or yolo",
+        file=sys.stderr,
+    )
+    raise SystemExit(2)
+
+
+def read_object(path, scope):
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"qdex: cannot read {scope} permission config: {exc}", file=sys.stderr)
+        raise SystemExit(2) from exc
+    if not isinstance(data, dict):
+        print(f"qdex: {scope} permission config must be a JSON object", file=sys.stderr)
+        raise SystemExit(2)
+    return data
+
+
+def emit(mode, source):
+    if mode not in VALID:
+        fail(source, mode)
+    print(mode)
+    print(source)
+    raise SystemExit(0)
+
+
+if cli_value:
+    emit(cli_value, "cli")
+if "QWENDEX_QDEX_PERMISSION_MODE" in os.environ:
+    emit(os.environ["QWENDEX_QDEX_PERMISSION_MODE"].strip(), "environment")
+if Path(operator_path).exists():
+    operator = read_object(operator_path, "operator")
+    emit(operator.get("permission_mode"), "operator-config")
+if Path(published_path).exists():
+    published = read_object(published_path, "published")
+    qdex = published.get("qdex")
+    if qdex is not None:
+        if not isinstance(qdex, dict):
+            print("qdex: published qdex config must be a JSON object", file=sys.stderr)
+            raise SystemExit(2)
+        if "permission_mode" in qdex:
+            emit(qdex["permission_mode"], "published-config")
+emit("workspace-write", "default")
+PY
+}
+
 if [[ ! -f "$QWENDEX_ENV" ]]; then
   printf 'qdex: missing Qwendex env: %s\n' "$QWENDEX_ENV" >&2
   printf 'qdex: run %s/scripts/qwendex_dev_env sync first.\n' "$QWENDEX_DEV_ROOT" >&2
@@ -231,7 +295,7 @@ codex_args=()
 codex_sets_cwd=0
 qdex_sets_repo=0
 parse_qdex_options=1
-permission_mode="yolo"
+cli_permission_mode=""
 
 if [[ "${QWENDEX_QDEX_DRY_RUN:-0}" == "1" ]]; then
   manager_preflight_dry_run=1
@@ -255,7 +319,7 @@ while [[ $# -gt 0 ]]; do
         printf 'qdex: --qdex-permission-mode requires yolo or workspace-write\n' >&2
         exit 2
       fi
-      permission_mode="$1"
+      cli_permission_mode="$1"
       shift
       ;;
     --manager-preflight-dry-run)
@@ -312,7 +376,16 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+permission_resolution="$(resolve_qdex_permission_mode "$cli_permission_mode")" || exit $?
+mapfile -t permission_fields <<< "$permission_resolution"
+permission_mode="${permission_fields[0]:-}"
+permission_source="${permission_fields[1]:-}"
+if [[ -z "$permission_mode" || -z "$permission_source" ]]; then
+  printf 'qdex: permission-mode resolution returned incomplete data\n' >&2
+  exit 2
+fi
 export QWENDEX_QDEX_PERMISSION_MODE="$permission_mode"
+export QWENDEX_QDEX_PERMISSION_SOURCE="$permission_source"
 
 # Codex V2 derives its built-in proactive multi-agent mode from Ultra
 # reasoning only when no custom multi_agent_mode_hint_text is configured.
@@ -654,6 +727,8 @@ print(json.dumps({
     "codex_home": __import__("os").environ.get("CODEX_HOME", ""),
     "internal_runtime": __import__("os").environ.get("QWENDEX_CODEX_RUNTIME", ""),
     "permission_mode": __import__("os").environ.get("QWENDEX_QDEX_PERMISSION_MODE", "yolo"),
+    "qdex_permission_mode": __import__("os").environ.get("QWENDEX_QDEX_PERMISSION_MODE", "workspace-write"),
+    "qdex_permission_source": __import__("os").environ.get("QWENDEX_QDEX_PERMISSION_SOURCE", "default"),
     "selected_target": command[0] if command else "",
     "command": command,
     "manager_preflight": preflight,
@@ -768,6 +843,8 @@ print(json.dumps({
     "codex_home": __import__("os").environ.get("CODEX_HOME", ""),
     "internal_runtime": __import__("os").environ.get("QWENDEX_CODEX_RUNTIME", ""),
     "permission_mode": __import__("os").environ.get("QWENDEX_QDEX_PERMISSION_MODE", "yolo"),
+    "qdex_permission_mode": __import__("os").environ.get("QWENDEX_QDEX_PERMISSION_MODE", "workspace-write"),
+    "qdex_permission_source": __import__("os").environ.get("QWENDEX_QDEX_PERMISSION_SOURCE", "default"),
     "selected_target": command[0] if command else "",
     "command": command,
     "manager_preflight": {"skipped": True, "reason": "manager preflight is not required by selected or effective mode"},

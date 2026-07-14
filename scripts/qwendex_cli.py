@@ -360,6 +360,8 @@ MANAGED_HOOK_RUNTIME_ENV_KEYS = (
     "QWENDEX_RUNTIME_GENERATION_ID",
     "QWENDEX_RUNTIME_CONTRACT_SHA256",
     "QWENDEX_HOOK_GENERATION",
+    "QWENDEX_QDEX_PERMISSION_MODE",
+    "QWENDEX_QDEX_PERMISSION_SOURCE",
 )
 PERFORMANCE_DB_ENV = "QWENDEX_PERFORMANCE_DB"
 DEFAULT_PERFORMANCE_DB = Path.home() / ".local" / "state" / "qwendex" / "qwendex-performance.sqlite"
@@ -726,6 +728,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "sandbox": {
         "mode": "workspace-write",
     },
+    "qdex": {
+        "permission_mode": "workspace-write",
+    },
     "receipts": {
         "dir": "results/qwendex",
         "ledger": "~/.local/state/qwendex/qwendex.sqlite",
@@ -943,6 +948,33 @@ def env_flag(value: str | None) -> bool | None:
     if normalized in {"0", "false", "no", "off"}:
         return False
     return None
+
+
+def qdex_permission_posture(
+    config: Mapping[str, Any],
+    *,
+    env: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    """Return the launcher-snapshotted Qdex permission posture without paths."""
+    source_env = os.environ if env is None else env
+    launched_mode = str(source_env.get("QWENDEX_QDEX_PERMISSION_MODE") or "").strip()
+    launched_source = str(source_env.get("QWENDEX_QDEX_PERMISSION_SOURCE") or "").strip()
+    valid_modes = {"workspace-write", "yolo"}
+    if launched_mode:
+        return {
+            "mode": launched_mode,
+            "source": launched_source or "launch-environment",
+            "valid": launched_mode in valid_modes,
+        }
+    qdex = config.get("qdex") if isinstance(config.get("qdex"), Mapping) else {}
+    published_mode = str(qdex.get("permission_mode") or "").strip()
+    if published_mode:
+        return {
+            "mode": published_mode,
+            "source": "published-config",
+            "valid": published_mode in valid_modes,
+        }
+    return {"mode": "workspace-write", "source": "default", "valid": True}
 
 
 def normalize_manager_mode(value: Any) -> str:
@@ -1461,7 +1493,7 @@ def validate_qwendex_config(config: Mapping[str, Any]) -> list[str]:
                 f"unknown config key: {path}"
                 for path in unknown_nested_config_keys(value, expected, prefix=key)
             )
-    required = {"schema_version", "version", "default_seat", "routing", "guard", "receipts", "state", "eval", "learning", "seats"}
+    required = {"schema_version", "version", "default_seat", "routing", "guard", "qdex", "receipts", "state", "eval", "learning", "seats"}
     missing = sorted(required - set(config))
     failures.extend(f"missing required key: {key}" for key in missing)
     if config.get("schema_version") != "qwendex.config.v1":
@@ -1496,6 +1528,13 @@ def validate_qwendex_config(config: Mapping[str, Any]) -> list[str]:
         values = routing.get(list_key)
         if not isinstance(values, list) or not all(isinstance(item, str) and item.strip() for item in values):
             failures.append(f"invalid routing.{list_key}: {values}")
+    qdex = config.get("qdex", {})
+    if not isinstance(qdex, Mapping):
+        failures.append("invalid qdex")
+    elif qdex.get("permission_mode") not in {"workspace-write", "yolo"}:
+        failures.append(
+            f"invalid qdex.permission_mode: {qdex.get('permission_mode')}"
+        )
     state_db = config.get("state", {}).get("db")
     if not isinstance(state_db, str) or not state_db:
         failures.append(f"invalid state.db: {state_db}")
@@ -2850,7 +2889,9 @@ def ensure_state_schema(conn: sqlite3.Connection, *, backup_path: Path | None = 
           validation_result TEXT NOT NULL,
           stop_status TEXT NOT NULL,
           receipt_paths_json TEXT NOT NULL,
-          unresolved_risks_json TEXT NOT NULL
+          unresolved_risks_json TEXT NOT NULL,
+          qdex_permission_mode TEXT NOT NULL DEFAULT 'workspace-write',
+          qdex_permission_source TEXT NOT NULL DEFAULT 'default'
         );
         CREATE TABLE IF NOT EXISTS qwendex_state_migrations (
           migration_id TEXT PRIMARY KEY,
@@ -2887,6 +2928,8 @@ def ensure_state_schema(conn: sqlite3.Connection, *, backup_path: Path | None = 
     ensure_table_column(conn, "qwendex_manager_decisions", "patched_binary_sha256", "TEXT NOT NULL DEFAULT ''")
     ensure_table_column(conn, "qwendex_manager_decisions", "codex_patch_sha256", "TEXT NOT NULL DEFAULT ''")
     ensure_table_column(conn, "qwendex_manager_decisions", "config_sha256", "TEXT NOT NULL DEFAULT ''")
+    ensure_table_column(conn, "qwendex_manager_decisions", "qdex_permission_mode", "TEXT NOT NULL DEFAULT 'workspace-write'")
+    ensure_table_column(conn, "qwendex_manager_decisions", "qdex_permission_source", "TEXT NOT NULL DEFAULT 'default'")
     ensure_table_column(conn, "qwendex_manager_decisions", "runtime_state_schema_version", "INTEGER NOT NULL DEFAULT 0")
     ensure_table_column(conn, "qwendex_manager_decisions", "selected_mode", "TEXT NOT NULL DEFAULT ''")
     ensure_table_column(conn, "qwendex_manager_decisions", "effective_turn_mode", "TEXT NOT NULL DEFAULT ''")
@@ -4450,6 +4493,7 @@ def codex_status_file_diagnostics(config: Mapping[str, Any], path: Path | None =
 
 def codex_status_payload(config: Mapping[str, Any], *, write_path: Path | None = None) -> dict[str, Any]:
     status_file_diagnostics = codex_status_file_diagnostics(config, write_path)
+    qdex_permission = qdex_permission_posture(config)
     with connect_state(config) as conn:
         selected_mode = current_manager_mode(config, conn)
         mode = selected_mode
@@ -4509,6 +4553,10 @@ def codex_status_payload(config: Mapping[str, Any], *, write_path: Path | None =
         "local_state": local_status.get("local_state"),
         "hook_status": hook_status,
         "hook_source_count": hook_status["hook_source_count"],
+        "qdex_permission_mode": qdex_permission["mode"],
+        "qdex_permission_source": qdex_permission["source"],
+        "qdex_permission_valid": qdex_permission["valid"],
+        "qdex_permission": qdex_permission,
         "state_db": str(state_db_path(config)),
         "status_file_env": QWENDEX_CODEX_STATUS_FILE_ENV,
         "status_file_diagnostics": status_file_diagnostics,
@@ -6139,6 +6187,7 @@ def command_check(args: argparse.Namespace, config: dict[str, Any]) -> dict[str,
             "surface": surface,
             "manager_health_issues": [*manager_issues, *manager_warnings],
             "manager_health": manager_health,
+            "qdex_permission": qdex_permission_posture(config),
             "default_seat": config["default_seat"],
             "routing": routing_policy(config),
             "manager_estimate": manager_estimate,
@@ -6239,6 +6288,7 @@ def command_doctor(args: argparse.Namespace, config: dict[str, Any]) -> dict[str
                 "default_seat": config["default_seat"],
                 "learning_mode": config["learning"]["mode"],
                 "routing": routing_policy(config),
+                "qdex_permission": qdex_permission_posture(config),
             },
             "manager_estimate": manager_estimate,
             "high_value_add": high_value_add_lines(local_status, release_risk=manager_estimate["release_risk"]),
@@ -11649,7 +11699,8 @@ def persist_manager_decision(conn: sqlite3.Connection, decision: Mapping[str, An
             root_session_id = ?, state_db_identity = ?,
             ledger_db_identity = ?, runtime_identity = ?, runtime_generation = ?,
             hook_generation = ?, runtime_contract_sha256 = ?, patched_binary_sha256 = ?,
-            codex_patch_sha256 = ?, config_sha256 = ?, runtime_state_schema_version = ?, selected_mode = ?,
+            codex_patch_sha256 = ?, config_sha256 = ?, qdex_permission_mode = ?,
+            qdex_permission_source = ?, runtime_state_schema_version = ?, selected_mode = ?,
             effective_turn_mode = ?, task_class = ?, agent_plan_json = ?,
             policy_snapshot_json = ?, desired_global_policy_hash = ?,
             prompt_source = ?, prompt_length = ?, prompt_schema_version = ?,
@@ -11674,6 +11725,8 @@ def persist_manager_decision(conn: sqlite3.Connection, decision: Mapping[str, An
             str(decision.get("patched_binary_sha256") or ""),
             str(decision.get("codex_patch_sha256") or ""),
             str(decision.get("config_sha256") or ""),
+            str(decision.get("qdex_permission_mode") or "workspace-write"),
+            str(decision.get("qdex_permission_source") or "default"),
             int(decision.get("runtime_state_schema_version") or 0),
             str(decision.get("selected_manager_mode") or decision.get("selected_mode") or decision.get("mode") or ""),
             str(decision.get("effective_turn_mode") or decision.get("effective_agent_mode") or ""),
@@ -11704,6 +11757,7 @@ def manager_preflight_payload(
     selected_mode: str = "",
 ) -> dict[str, Any]:
     source_env = os.environ if env is None else env
+    qdex_permission = qdex_permission_posture(config, env=source_env)
     repo_root = canonical_manager_repo_root(repo, env=source_env)
     with connect_state(config) as conn:
         mode = current_manager_mode(config, conn, explicit=selected_mode)
@@ -11813,6 +11867,14 @@ def manager_preflight_payload(
         subagents_allowed = False
         final_status = str((existing_launch or {}).get("final_status") or "blocked")
         ok = False
+    elif not qdex_permission["valid"]:
+        selected_route = "blocked"
+        routing_reason = "Qdex permission mode is invalid; relaunch with workspace-write or yolo."
+        stop_status = "STOP_MANAGER_BLOCKED_QDEX_PERMISSION"
+        direct_work_exception = False
+        subagents_allowed = False
+        final_status = "blocked"
+        ok = False
     elif hook_blocked:
         selected_route = "blocked"
         routing_reason = "Manager Mode requires Qwendex Codex hooks or explicit unhooked override."
@@ -11875,6 +11937,9 @@ def manager_preflight_payload(
         "ledger_db_identity": ledger_db_identity,
         "runtime_identity": runtime_identity,
         **runtime_generation,
+        "qdex_permission_mode": qdex_permission["mode"],
+        "qdex_permission_source": qdex_permission["source"],
+        "qdex_permission": qdex_permission,
         "turn_id": "",
         "agent_task_id": session_id,
         "timestamp": timestamp,
@@ -11963,6 +12028,8 @@ def manager_preflight_payload(
             "QWENDEX_RUNTIME_GENERATION_ID": str(runtime_generation.get("runtime_generation") or ""),
             "QWENDEX_RUNTIME_CONTRACT_SHA256": str(runtime_generation.get("runtime_contract_sha256") or ""),
             "QWENDEX_HOOK_GENERATION": str(runtime_generation.get("hook_generation") or ""),
+            "QWENDEX_QDEX_PERMISSION_MODE": str(qdex_permission["mode"]),
+            "QWENDEX_QDEX_PERMISSION_SOURCE": str(qdex_permission["source"]),
             "QWENDEX_MANAGER_POLICY_HASH": str(agent_policy.get("policy_hash") or ""),
             "QWENDEX_MANAGER_STOP_STATUS": stop_status,
             "QWENDEX_OUTPUT_POLICY": str(agent_policy.get("env", {}).get("QWENDEX_OUTPUT_POLICY") or "standard"),
@@ -12063,6 +12130,7 @@ def manager_health_resolution_reason(reason: str) -> str:
         "qwendex_route_untrusted": "route_untrusted",
         "qwendex_hooks_untrusted": "hook_untrusted",
         "qwendex_policy_mismatch": "policy_mismatch",
+        "qwendex_qdex_permission_mismatch": "qdex_permission_mismatch",
         "qwendex_ledger_mismatch": "decision_not_found",
         "qwendex_session_mismatch": "session_mismatch",
         "qwendex_root_mismatch": "session_mismatch",
@@ -12093,6 +12161,13 @@ def manager_decision_static_mismatch(
     recorded_hook_generation = str(decision.get("hook_generation") or recorded_generation).strip()
     recorded_launch_key = str(decision.get("launch_key") or "").strip()
     recorded_launch_nonce = str(decision.get("launch_nonce") or "").strip()
+    configured_qdex_permission = qdex_permission_posture(config, env=env)
+    has_recorded_qdex_permission = (
+        "qdex_permission_mode" in decision
+        or "qdex_permission_source" in decision
+    )
+    recorded_qdex_mode = str(decision.get("qdex_permission_mode") or "").strip()
+    recorded_qdex_source = str(decision.get("qdex_permission_source") or "").strip()
     details = {
         "state_db_match": bool(expected_state and expected_state == state_identity and (not recorded_state or recorded_state == state_identity)),
         "ledger_db_match": bool(expected_ledger and expected_ledger == ledger_identity and (not recorded_ledger or recorded_ledger == ledger_identity)),
@@ -12107,6 +12182,16 @@ def manager_decision_static_mismatch(
         ),
         "launch_key_match": bool(expected_launch_key and expected_launch_key == recorded_launch_key),
         "launch_nonce_match": bool(expected_launch_nonce and expected_launch_nonce == recorded_launch_nonce),
+        "qdex_permission_match": bool(
+            not has_recorded_qdex_permission
+            or (
+                configured_qdex_permission["valid"]
+                and recorded_qdex_mode
+                and recorded_qdex_source
+                and configured_qdex_permission["mode"] == recorded_qdex_mode
+                and configured_qdex_permission["source"] == recorded_qdex_source
+            )
+        ),
     }
     if not details["state_db_match"]:
         return "state_db_mismatch", details
@@ -12118,6 +12203,8 @@ def manager_decision_static_mismatch(
         return "runtime_mismatch", details
     if not details["launch_key_match"] or not details["launch_nonce_match"]:
         return "missing_launch_identity", details
+    if not details["qdex_permission_match"]:
+        return "qdex_permission_mismatch", details
     return "", details
 
 
@@ -12594,6 +12681,19 @@ def manager_launch_health(
         and recorded_policy != desired_policy_hash
     )
     policy_match = session_policy_valid
+    configured_qdex_permission = qdex_permission_posture(config, env=source_env)
+    recorded_qdex_mode = str(candidate.get("qdex_permission_mode") or "") if candidate else ""
+    recorded_qdex_source = str(candidate.get("qdex_permission_source") or "") if candidate else ""
+    qdex_permission_match = (
+        not require_environment_identity
+        or bool(
+            configured_qdex_permission["valid"]
+            and recorded_qdex_mode
+            and recorded_qdex_source
+            and configured_qdex_permission["mode"] == recorded_qdex_mode
+            and configured_qdex_permission["source"] == recorded_qdex_source
+        )
+    )
 
     launch_ledger = str(candidate.get("launch_ledger_id") or candidate.get("ledger_id") or "") if candidate else ""
     recorded_session = str(candidate.get("session_id") or "") if candidate else ""
@@ -12634,6 +12734,7 @@ def manager_launch_health(
         "route_trusted": route_trusted,
         "hook_trusted": hook_trusted,
         "policy_match": policy_match,
+        "qdex_permission_match": qdex_permission_match,
         "ledger_match": ledger_match,
         "session_match": session_match,
         "root_match": root_match,
@@ -12653,6 +12754,7 @@ def manager_launch_health(
         ("route_trusted", "qwendex_route_untrusted"),
         ("hook_trusted", "qwendex_hooks_untrusted"),
         ("policy_match", "qwendex_policy_mismatch"),
+        ("qdex_permission_match", "qwendex_qdex_permission_mismatch"),
         ("ledger_match", "qwendex_ledger_mismatch"),
         ("session_match", "qwendex_session_mismatch"),
         ("root_match", "qwendex_root_mismatch"),
@@ -12676,6 +12778,9 @@ def manager_launch_health(
         "recovery_command": f"qdex -C {shlex.quote(canonical_repo)}",
         "identity_present": identity_present,
         "policy_match": policy_match,
+        "qdex_permission_match": qdex_permission_match,
+        "qdex_permission_mode": recorded_qdex_mode or "workspace-write",
+        "qdex_permission_source": recorded_qdex_source or "default",
         "session_policy_hash": recorded_policy,
         "desired_global_policy_hash": desired_policy_hash,
         "policy_drift": policy_drift,
@@ -12728,6 +12833,7 @@ def manager_root_ownership_for_event(
             "qwendex_identity_stale": "Manager Mode launcher process is no longer active. Restart this repository through qdex.",
             "qwendex_repo_mismatch": "Manager Mode root write repository does not match the attached qdex preflight decision.",
             "qwendex_policy_mismatch": "Manager Mode root write policy does not match the attached preflight decision.",
+            "qwendex_qdex_permission_mismatch": "Manager Mode root write Qdex permission mode does not match the attached preflight decision.",
             "qwendex_codex_home_mismatch": "Manager Mode root write Codex home does not match the attached preflight decision.",
             "qwendex_hooks_untrusted": "Manager Mode root write requires verified hooks or the recorded launch override.",
         }
@@ -13196,6 +13302,10 @@ def manager_decision_receipt_payload(decision: Mapping[str, Any]) -> dict[str, A
         "codex_patch_sha256": decision.get("codex_patch_sha256") or "",
         "config_sha256": decision.get("config_sha256") or "",
         "runtime_state_schema_version": int(decision.get("runtime_state_schema_version") or 0),
+        "qdex_permission": {
+            "mode": decision.get("qdex_permission_mode") or "workspace-write",
+            "source": decision.get("qdex_permission_source") or "default",
+        },
         "turn_id": decision.get("turn_id") or "",
         "agent_task_id": decision.get("agent_task_id") or decision.get("session_id"),
         "timestamp": decision.get("timestamp_updated"),

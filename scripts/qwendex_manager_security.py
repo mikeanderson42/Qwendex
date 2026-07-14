@@ -67,7 +67,8 @@ def evaluate(run_id: str, junit: Path, routing_path: Path) -> dict[str, Any]:
     qdex_text = (ROOT / "scripts" / "qdex").read_text(encoding="utf-8")
     dev_text = (ROOT / "scripts" / "qwendex_dev_env").read_text(encoding="utf-8")
     static_checks = {
-        "normal_qdex_default_bypass_contract_visible": "--dangerously-bypass-approvals-and-sandbox" in qdex_text,
+        "normal_qdex_workspace_write_default_visible": '"permission_mode": "workspace-write"' in (ROOT / "config" / "qwendex" / "qwendex.json").read_text(encoding="utf-8"),
+        "qdex_yolo_opt_in_contract_visible": 'if [[ "$permission_mode" == "yolo" ]]' in qdex_text,
         "workspace_write_contract_visible": "--sandbox workspace-write" in qdex_text,
         "managed_hook_trust_boundary_visible": "--dangerously-bypass-hook-trust" in qdex_text,
         "isolated_codex_home_required": 'export CODEX_HOME="$QWENDEX_CODEX_HOME"' in qdex_text,
@@ -77,7 +78,7 @@ def evaluate(run_id: str, junit: Path, routing_path: Path) -> dict[str, Any]:
         "canonical_patch_digest_pinned": "QWENDEX_RELEASE_CODEX_PATCH_SHA256=" in dev_text,
     }
     boundary_results = {
-        "normal_qdex_approval_and_sandbox_contract": "pass",
+        "normal_qdex_workspace_write_and_yolo_opt_in_contract": "pass",
         "qwendex_dev_bypass_is_development_only": "pass",
         "normal_codex_home_isolation": "pass",
         "untrusted_manager_attachment_rejected": "pass",

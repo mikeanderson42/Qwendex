@@ -47,10 +47,40 @@ QWENDEX_PREFER_LOCAL_QWEN=1
 QWENDEX_LOCAL_QWEN_PROBE_URL=http://127.0.0.1:1234/v1/models
 QWENDEX_LOCAL_QWEN_MODEL=qwen-local
 QWENDEX_FALLBACK_SEAT=primary
+QWENDEX_QDEX_PERMISSION_MODE=workspace-write
 ```
 
 Do not place credentials in Qwendex config. Use the existing provider-specific
 environment handling outside the public Qwendex config surface.
+
+## Qdex Launch Permission
+
+Published `qwendex.json` and `qwendex.sample.json` both set:
+
+```json
+{
+  "qdex": {
+    "permission_mode": "workspace-write"
+  }
+}
+```
+
+Qdex resolves this one launch setting in a deliberately narrow order:
+
+1. `--qdex-permission-mode workspace-write|yolo`
+2. `QWENDEX_QDEX_PERMISSION_MODE`
+3. `${XDG_CONFIG_HOME:-$HOME/.config}/qwendex/qdex.json`
+4. published `qdex.permission_mode`
+5. hard fallback `workspace-write`
+
+The operator-local file is intentionally ignored and is not an input to
+runtime-generation or release artifacts. For example, a local Yolo opt-in is
+only `{ "permission_mode": "yolo" }`. Invalid explicit CLI, environment, or
+operator-local values fail before Qdex invokes Codex. `yolo` appends
+`--dangerously-bypass-approvals-and-sandbox` exactly once; `workspace-write`
+does not append it. Preflight, dry-run, status, and Manager receipt JSON expose
+`qdex_permission_mode` and `qdex_permission_source`; an active Manager session
+uses its snapshotted values until it is relaunched.
 
 ## LLMStack Config
 
@@ -303,12 +333,13 @@ scripts/qwendex manager close-stale --stale-after-minutes 30 --json
 
 `manager_only` remains a compatibility alias for `manager`.
 
-`manager_deploy_policy` defaults to `auto`: when the selected mode is Manager
-Mode, Qwendex expects at least one active registered agent lane. Routine
-advisory health reports no-lane Manager Mode as `standby`; strict release
-health reports it as blocked. Set `manager_deploy_policy` to `disabled` to opt
-out of that requirement; explicit manual manager lifecycle commands remain
-operator-directed.
+`manager_deploy_policy` defaults to `auto`. A Manager Mode session with no
+attached prompt is healthy `standby`, and an attached trivial/direct turn is
+healthy without a worker lane. An attached complex turn blocks when its
+required lane is missing or unresolved; a stale writer lane also blocks until
+it is integrated or explicitly stopped. Set `manager_deploy_policy` to
+`disabled` to opt out of deployment requirements; explicit manual manager
+lifecycle commands remain operator-directed.
 
 `manager repair --safe` is the public manager-state reconciliation path. The
 safe boundary is to reconcile read-only stale state and harmless empty stale

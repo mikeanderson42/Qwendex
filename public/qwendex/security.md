@@ -103,9 +103,12 @@ non-blocking and cannot attach to or mutate a decision.
 
 The production-hardening claim is deliberately limited to the tested Linux and
 Codex `0.144.0` canonical-patch matrix. Qwendex orchestration policy is not an
-operating-system sandbox: normal Qdex uses its documented approval/sandbox
-contract, while `qwendex-dev` bypass mode is development-only. Stock Codex and
-its normal home remain independent and provide the Off-mode recovery path.
+operating-system sandbox: normal Qdex defaults to `workspace-write`, while
+Yolo is an explicit CLI, environment, or ignored operator-local opt-in that
+adds Codex's bypass flag once. A Manager preflight snapshots the resolved mode
+and source, so an active session cannot silently adopt a later permission
+change. `qwendex-dev` bare-launch bypass mode is development-only. Stock Codex
+and its normal home remain independent and provide the Off-mode recovery path.
 Qwendex shares the operator's authentication file intentionally, but keeps a
 generation-local copy of Codex's volatile `version.json` cache and installation
 identity. Acceptance compares the normal home's stable config, hooks, and

@@ -161,6 +161,7 @@ FORBIDDEN_TRACKED_PATHS = (
     re.compile(
         r"^config/local_llm_stack/(?:local_harness\.env|stack_manager\.local\.json)$"
     ),
+    re.compile(r"(?:^|/)(?:\.config/)?qwendex/qdex\.json$", re.IGNORECASE),
     re.compile(r"^config/local_llm_stack/.*\.private\.json$"),
     re.compile(r"(?:^|/)(?:auth|credentials?)\.json$", re.IGNORECASE),
 )

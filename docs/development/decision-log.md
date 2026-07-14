@@ -654,6 +654,38 @@ The canonical target is also passed as a per-launch trusted project; this trust
 is bounded to the same explicit Qdex repository and prevents an automation
 primer's first Enter from being consumed by Codex onboarding.
 
+## Qdex Permission Resolution And Snapshot
+
+Decision: the public and sample Qwendex config declare
+`qdex.permission_mode: workspace-write`. Qdex resolves permission mode in this
+order: its explicit CLI option, `QWENDEX_QDEX_PERMISSION_MODE`, the ignored
+operator-local Qdex JSON, the published config, then a hard
+`workspace-write` fallback. Only explicit `yolo` adds Codex's approval/sandbox
+bypass flag, and it adds it exactly once. Invalid explicit CLI, environment,
+or operator-local values fail before Codex begins. A Manager preflight records
+the resolved mode and source in its decision and receipt; hook-time identity
+comparison blocks a session if that snapshot changes.
+
+Reason: published source must be safe and reproducible while an operator still
+needs a deliberate local Yolo choice. Treating the operator file as runtime
+input would leak machine policy into generated source or release artifacts;
+treating permission as a mutable environment value after preflight would let an
+active session change authority without a new launch receipt.
+
+## Prompt-Aware Manager Health
+
+Decision: Manager health is based on the attached turn rather than idle worker
+capacity. A Manager Mode session with no attached prompt is healthy `standby`,
+and an attached direct/trivial turn is healthy without a lane. An attached
+complex turn blocks only when its required lanes are missing or unresolved.
+Stale writer sessions block in every health mode until integration or explicit
+operator closure.
+
+Reason: a persistent requirement for an idle worker made an otherwise safe
+Manager control plane report false failures. Conversely, missing required work
+or an abandoned writer is an actual lifecycle risk and must not downgrade to an
+advisory warning merely because a status command is non-release.
+
 ## Upstream Codex, Qdex, And Internal Runtime Trust Boundary
 
 Decision: ordinary `codex` remains the upstream installation and retains the

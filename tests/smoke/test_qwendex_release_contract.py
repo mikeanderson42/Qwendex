@@ -1590,6 +1590,25 @@ def test_release_gate_scans_full_tracked_artifact_for_private_and_runtime_materi
     ]
 
 
+def test_release_gate_rejects_tracked_operator_qdex_permission_config(tmp_path):
+    fixture = release_fixture(tmp_path)
+    repo = Path(fixture["repo"])
+    local_config = repo / ".config" / "qwendex" / "qdex.json"
+    local_config.parent.mkdir(parents=True)
+    local_config.write_text('{"permission_mode": "yolo"}\n', encoding="utf-8")
+    run("git", "add", "-f", ".config/qwendex/qdex.json", cwd=repo)
+    run("git", "commit", "-m", "accidentally track local qdex config", cwd=repo)
+    run("git", "tag", "-fa", "v1.2.3", "-m", "Qwendex v1.2.3", cwd=repo)
+    run("git", "update-ref", "refs/remotes/origin/main", "HEAD", cwd=repo)
+
+    rc, payload = invoke(fixture)
+
+    assert rc == 1
+    assert payload["artifact_contract"]["forbidden_paths"] == [
+        ".config/qwendex/qdex.json"
+    ]
+
+
 def test_release_gate_rejects_incomplete_codex_build_contract(tmp_path):
     fixture = release_fixture(tmp_path)
     codex_build = Path(fixture["meta_root"]) / "codex_build.json"
