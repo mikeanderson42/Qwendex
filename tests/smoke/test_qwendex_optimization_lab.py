@@ -462,7 +462,7 @@ def test_paired_run_isolated_and_compare_validates_artifacts(tmp_path: Path) -> 
     assert gate["candidate_decision"] == "hold_for_more_evidence"
     assert gate["hard_gates"]["manager_policy_and_local_routing"] == "pass"
     assert gate["hard_gates"]["privacy_boundary"] == "pass"
-    assert compared["status"] == "pass"
+    assert compared["status"] == "pass", compared
     assert compared["data"]["schema_failures"] == 0
     assert environment["started_at"]
     assert environment["completed_at"]
