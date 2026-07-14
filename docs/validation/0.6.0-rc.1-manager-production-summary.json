@@ -1,0 +1,261 @@
+{
+  "acceptance": {
+    "fault_injection": {
+      "fault_categories_observed": 24,
+      "fault_categories_required": 24,
+      "invariant_violations": 0,
+      "permutations_executed": 100,
+      "permutations_failed": 0,
+      "result": "pass"
+    },
+    "fresh_install": {
+      "checks": {
+        "candidate_commit_checked_out": true,
+        "dependencies_installed": true,
+        "dry_preflight_ready": true,
+        "managed_hooks_verified": true,
+        "non_ultra_live_manager_passed": true,
+        "normal_codex_decoy_unchanged": true,
+        "offline_acceptance_passed": true,
+        "pinned_codex_built_from_source": true,
+        "runtime_generation_validated": true
+      },
+      "fresh_runtime_generation": "rtg-7dcf017fe72b90a85003",
+      "offline_tests_failed": 0,
+      "offline_tests_passed": 88,
+      "result": "pass",
+      "waived_required_lane_count": 0
+    },
+    "live": {
+      "contracts": {
+        "five_sequential_manager_turns": true,
+        "heavy_edit": true,
+        "medium_read_heavy": true,
+        "three_fresh_non_ultra_manager": true,
+        "two_repository_concurrency": true,
+        "ultra_coexistence": true
+      },
+      "invariants": {
+        "duplicate_equivalent_lanes": 0,
+        "orphaned_active_sessions_after_cleanup": 0,
+        "policy_mutations_of_active_sessions": 0,
+        "prompt_admission_failures": 0,
+        "prompt_known_failures": 0,
+        "unbounded_waits_or_closes": 0,
+        "unresolved_required_lanes_at_finalization": 0,
+        "waived_required_lane_count": 0
+      },
+      "manager_decisions_closed": 13,
+      "required_lanes_completed": 16,
+      "required_lanes_planned": 16,
+      "result": "pass",
+      "tests_failed": 0,
+      "tests_passed": 13
+    },
+    "normal_codex_isolation": {
+      "authentication_copied_only_to_isolated_generation": true,
+      "claim_scope": "tested Linux and Codex 0.144.0 stable-control-file plus full-decoy-home isolation only",
+      "normal_home_unchanged": true,
+      "result": "pass",
+      "stock_codex_version": "codex-cli 0.144.0",
+      "version_cache_policy": "generation-local-copy"
+    },
+    "offline": {
+      "event_permutations_executed": 100,
+      "event_permutations_failed": 0,
+      "performance_failures": 0,
+      "result": "pass",
+      "routing_cases_failed": 0,
+      "routing_cases_passed": 70,
+      "soak_concurrent_sessions": 4,
+      "state_migration_failures": 0,
+      "tests_failed": 0,
+      "tests_passed": 88
+    },
+    "performance": {
+      "managed_hook_p95_ms": 248.047,
+      "manager_status_p95_ms": 218.983,
+      "offline_acceptance_seconds": 115.8,
+      "qdex_dry_preflight_p95_ms": 1043.077,
+      "result": "pass",
+      "sqlite_busy_upper_bound_ms": 2192.244,
+      "terminal_recovery_p95_ms": 232.284
+    },
+    "rollback": {
+      "candidate_failure_receipt_preserved": true,
+      "injected_activation_failure_preserved_known_good": true,
+      "qdex_invoked_for_rollback": false,
+      "recovery_surface": "qwendex-runtime-recovery from shell or stock Codex",
+      "repeated_recovery_idempotent": true,
+      "result": "pass",
+      "shell_recovery_restored_known_good": true,
+      "stock_codex_available": true
+    },
+    "routing": {
+      "critical_authority_passed": 19,
+      "critical_authority_total": 19,
+      "critical_authority_score": 1.0,
+      "exact_or_equivalent_score": 1.0,
+      "mismatches": 0,
+      "result": "pass",
+      "total_cases": 70
+    },
+    "runtime_atomicity": {
+      "active_sessions_pinned": true,
+      "immutable_generations_required": true,
+      "new_sessions_select_current_atomically": true,
+      "result": "pass",
+      "shell_recovery_independent_of_qdex": true,
+      "stock_codex_unchanged": true,
+      "unvalidated_candidates_rejected": true
+    },
+    "security": {
+      "boundary_checks_failed": 0,
+      "boundary_checks_passed": 14,
+      "normal_codex_contamination_count": 0,
+      "result": "pass",
+      "support_ceiling": "Tested Qwendex orchestration and supported patched-Codex boundary only; not an operating-system security boundary."
+    },
+    "self_hosting": {
+      "active_agents_after_recovery": 0,
+      "historical_failure_category": "runtime_mismatch_after_active_runtime_mutated",
+      "historical_failure_reproduced": true,
+      "result": "pass",
+      "root_cause_category": "active_runtime_mutated",
+      "root_cause_confirmed": true,
+      "stale_agents_after_recovery": 0,
+      "zero_cross_generation_hook_calls": true
+    },
+    "soak": {
+      "all_sessions_exercised_all_nine_hook_events": true,
+      "concurrent_sessions": 4,
+      "process_restarts": 4,
+      "raw_event_payloads_recorded": false,
+      "repositories": 2,
+      "result": "pass"
+    },
+    "state_migration": {
+      "busy_timeout_ms": 2000,
+      "current_schema_version": 2,
+      "historical_acceptance_can_satisfy_current_gate": false,
+      "journal_mode": "WAL",
+      "migration_mode": "transactional_with_pre_migration_sqlite_backup",
+      "result": "pass",
+      "supported_upgrade_from": [
+        0,
+        1
+      ]
+    },
+    "upgrade": {
+      "active_old_generation_policy": "mandatory_exit_and_relaunch",
+      "from_commit": "979366d3f6df5d4cb12b0eff028199ec57214ed0",
+      "from_version": "0.5.7",
+      "historical_evidence_not_current": true,
+      "managed_hooks_installed_and_verified": true,
+      "new_session_uses_candidate_generation": true,
+      "result": "pass",
+      "state_schema_after": 2,
+      "state_schema_before": 0,
+      "to_commit": "aacf2f8939144c4a2886efcad3db52767953b528"
+    }
+  },
+  "artifact_digests": {
+    "event_idempotency_summary.json": "c5ba3015de79c591b094fea2db555e0abb33283a8bcff217ee16c9e7dbe7312e",
+    "fault_injection_summary.json": "c9237b492d3fec918ab0d697f87c2db81c848ddf4def69b921ae06ed780416ed",
+    "fresh_install_receipt.json": "61bfab6d69b372aa515e18105cc05a1bc4f0b6761dcc88994c7fc5b12e02c6f8",
+    "manager_accept_live_summary.json": "6a743ca40758c9baa299eb5cc79d7db39ac0129346063d511122e80505582de9",
+    "manager_accept_offline_summary.json": "7717a31f09953bb768fb3f68e0de5a3b2cf4ba78de69cbe875741784fd81a33a",
+    "manager_accept_production_summary.json": "d1a273f6a70566dc44a3c23cc2e9d0bdc8ea6e17b4990709eaa88d4dd5724921",
+    "manager_soak_summary.json": "dd328d6e8abefcd3082645d8c4860ced8df0c868da1ff1f753488f79ff1fe5b9",
+    "normal_codex_isolation_receipt.json": "4f0cc29fbe8481de1fa35703c18810b445f5b6fe804dd8d36b8bb448466bb25f",
+    "performance_budget.json": "f47476f33d690d69b91d26ba8dd76923947a96b46fe535d292c1a87923248e79",
+    "release_candidate_readiness.json": "d9d63e38342699f252f22ec3acfc661fc8f8cd5cc24c5d884ac555887fdab213",
+    "release_validation_summary.json": "402743875a66ac483920229cdad1f3b8f76c13e657a9dae8754d74fc816e284b",
+    "rollback_to_known_good_receipt.json": "d1f1e14dc731a4a776c709b2c74132b1764cffc413c2f11d6682512565c92a0d",
+    "routing_eval_summary.json": "283531ce630bf87bc0acc16aee67951519000dfaffbda9b505a3095e5c26f52c",
+    "runtime_activation_receipt.json": "e8b8f837fef3931f38db6fb97ae36fc029b500f4bf62f42f668031d858d62050",
+    "runtime_generation_contract.json": "d6558e3358fb73f98a1f97c1cc6cbbaefe069a48e5a490a8aba7440265b2c4b5",
+    "runtime_rollback_receipt.json": "13a68bb341cfed2ae368de4d11ec37bb0792e0ef512aa3829118dc48627dde2a",
+    "security_boundary_summary.json": "6ce1a42dfe40b2bc164d998bfe6edbdeb2569a0546040f6e64ae70073f92df83",
+    "self_host_failure_root_cause.json": "59154761e845ef8b1d31508bcb5f78f89f43acb2497faeb9c603f0c96b86d691",
+    "self_host_failure_timeline.json": "315655495d217d260ca9d69e6383e5e5b369160407c9315b3430229c952aaff4",
+    "self_host_reproduction_receipt.json": "dae69f54dedfa2f86668a8d03e2f727cf3c9e104baaf546a4e04ae50ad250d8a",
+    "state_migration_summary.json": "4e3de8719afee2844152f311424b33c2d62ed987129d2389358aa0201ee02c43",
+    "upgrade_from_v0.5.7_receipt.json": "83e1d07582eca005a86ea803558fac9299bf1c40ddbd7ec092dc014dab6db6a2",
+    "validation_summary.json": "53de27385bca163c7c429d65ae714cb0646e4b5bb6d6d9afb9e992be227b7784"
+  },
+  "binary_digest": "c2155e1ef79a4602a1921f10127fa47bc23e1a73a484d1d47e033f839f4aeb08",
+  "candidate_version": "0.6.0-rc.1",
+  "code_mode_host_digest": "a86b7de843daea64378425df9c509bfbadc1c49e89f9106580a42d36784573d3",
+  "codex_source_commit": "767822446c7a594caa19609ca435281a9ec67e0d",
+  "codex_version": "codex-cli 0.144.0",
+  "config_digest": "e9188313ff92da6109e36851a53e59b44802dc4a1bc7fc79631235b32062cf2b",
+  "dirty_state": "clean",
+  "final_status": "STOP_MANAGER_ACCEPT_PRODUCTION_ACCEPTED",
+  "generated_at": "2026-07-14T02:04:41.744986+00:00",
+  "hook_generation": "rtg-16bd5bfae399a188b6bc",
+  "ignored_evidence_root": ".qwendex-dev/results/qwendex/manager-production/manager-production-aacf2f8-final-20260714T0126Z/production",
+  "patch_digest": "4161a55808e18e86724a42fcb2050923b9f5544a9e93f445210b77060d23af5f",
+  "privacy_status": "pass",
+  "release_state": {
+    "candidate_ready": true,
+    "candidate_version": "0.6.0-rc.1",
+    "published": false,
+    "release_validation_generated_at": "2026-07-14T02:13:11.057996+00:00",
+    "tag_created": false
+  },
+  "result": "pass",
+  "run_id": "manager-production-aacf2f8-final-20260714T0126Z",
+  "runtime_contract_digest": "16bd5bfae399a188b6bc0345560315af1d738e8e7b8b3f0b9632ac1a722640f4",
+  "runtime_generation": "rtg-16bd5bfae399a188b6bc",
+  "schema_digest": "cdd22f6f57b292c2535619f0317434769aa4b25d069a27a2fe66d8e2e1f89cc6",
+  "schema_version": "qwendex.manager_production_public_summary.v1",
+  "source_commit": "aacf2f8939144c4a2886efcad3db52767953b528",
+  "source_tree": "a1db91a085e69e86296fd48544ef456021011e22",
+  "state_schema_version": 2,
+  "validation_commands": [
+    {
+      "invocation": "python3 -m py_compile scripts/*.py scripts/local_qwen_bridge/*.py",
+      "result": "pass"
+    },
+    {
+      "invocation": "python3 -m ruff check scripts tests --ignore E501",
+      "result": "pass"
+    },
+    {
+      "invocation": "python3 -m pytest -q -p no:cacheprovider tests/smoke/test_qwendex_cli.py",
+      "result": "pass",
+      "tests_passed": 162
+    },
+    {
+      "invocation": "python3 -m pytest -q -p no:cacheprovider tests/smoke/test_qdex_delegation_policy.py tests/smoke/test_qwendex_manager_production.py",
+      "result": "pass",
+      "tests_passed": 32
+    },
+    {
+      "invocation": "qwendex-dev verify --tier quick",
+      "result": "pass",
+      "tests_passed": 176
+    },
+    {
+      "invocation": "scripts/qwendex manager accept --profile live --run-id manager-live-aacf2f8-20260714T0021Z --results-root .qwendex-dev/results/qwendex --json",
+      "result": "pass",
+      "tests_passed": 13
+    },
+    {
+      "invocation": "scripts/qwendex manager accept --profile production --run-id manager-production-aacf2f8-final-20260714T0126Z --results-root .qwendex-dev/results/qwendex --json",
+      "result": "pass",
+      "components_passed": 4
+    },
+    {
+      "invocation": "qwendex-dev verify --tier full",
+      "result": "pass",
+      "tests_passed": 397
+    },
+    {
+      "invocation": "qwendex-dev verify --tier release --candidate",
+      "result": "candidate-ready",
+      "tests_passed": 397
+    }
+  ]
+}

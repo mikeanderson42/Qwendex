@@ -337,6 +337,7 @@ claims require GPT/Codex review and the appropriate Qwendex verification tier.
 - [Verification](public/qwendex/verification.md)
 - [Troubleshooting](public/qwendex/troubleshooting.md)
 - [Release Notes](public/qwendex/release-notes.md)
+- [0.6.0-rc.1 Manager production evidence](docs/validation/0.6.0-rc.1-manager-production-summary.md)
 
 ## Current Release / Known Limits
 
