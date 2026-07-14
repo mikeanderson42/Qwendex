@@ -216,9 +216,11 @@ scripts/qwendex --agent-use Manager agent policy --json
 scripts/qwendex agent status --json
 ```
 
-`manager_deploy_policy` defaults to `auto`: when the selected mode is Manager
-Mode, Qwendex expects at least one registered active lane. Set the policy to
-`disabled` only when intentionally opting out of that requirement.
+`manager_deploy_policy` defaults to `auto`. An idle Manager Mode session with
+no attached prompt is healthy `standby`; an attached trivial/direct turn is
+also healthy without workers. An attached complex turn blocks only when its
+required lanes are missing or unresolved. Set the policy to `disabled` only
+when intentionally opting out of deployment requirements.
 
 Manager status semantics are:
 
@@ -226,16 +228,14 @@ Manager status semantics are:
   operator-selected lane.
 - `warning`: advisory issues exist, but no writer lane or required deployment
   contract is blocked.
-- `blocked`: strict health was requested and a required Manager Mode lane is
-  missing, or an active writer lane requires integration or an explicit stop.
+- `blocked`: an attached complex turn has missing or unresolved required lanes,
+  or a stale writer lane requires integration or an explicit stop.
 
 Connected public recovery commands are `manager close`, `manager close-stale`,
 `manager repair --safe`, and `manager status`. `manager repair --safe` closes
-stale read-only lanes and harmless empty stale writer lanes; stale writer lanes
-with artifacts, receipt paths, exact files, or non-pending validation remain
-open as advisory warnings in daily health and as blockers in strict health, with
-an explicit `manager close --agent-id ... --reason ... --json` command for
-operator review.
+stale read-only lanes and harmless empty stale writer lanes; a remaining stale
+writer lane is a blocker until an operator integrates it or explicitly closes
+it with `manager close --agent-id ... --reason ... --json`.
 
 Local routing also separates intent from availability. `Local: [Ready]` means
 local subagents may be considered and the configured `qwen-local` alias is

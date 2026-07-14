@@ -3893,25 +3893,97 @@ def manager_deploy_policy(config: Mapping[str, Any]) -> str:
     return raw if raw in MANAGER_DEPLOY_POLICIES else "auto"
 
 
-def manager_deployment_contract(mode: str, policy: str, active_count: int) -> dict[str, Any]:
-    required = normalize_manager_mode(mode) == "manager" and policy == "auto"
-    healthy = not required or active_count > 0
-    status = "ready" if required and healthy else "standby" if required else "ready"
-    return {
+def manager_deployment_contract(
+    mode: str,
+    policy: str,
+    active_count: int,
+    *,
+    session_status: Mapping[str, Any] | None = None,
+    stale_writer_count: int = 0,
+) -> dict[str, Any]:
+    """Describe whether the attached turn, rather than idle capacity, needs lanes."""
+    normalized_mode = normalize_manager_mode(mode)
+    attached = dict(session_status or {})
+    prompt_known = bool(attached.get("prompt_known"))
+    missing_required_lanes = list(attached.get("missing_required_lanes") or [])
+    unresolved_required_lanes = list(attached.get("unresolved_required_lanes") or [])
+    common = {
         "policy": policy,
-        "required": required,
         "active_count": active_count,
-        "healthy": healthy,
-        "status": status,
-        "summary": (
-            "Manager Mode has active agent lanes."
-            if required and healthy
-            else "Manager deployment is disabled by policy."
-            if policy == "disabled"
-            else "Manager deployment is not required for this mode."
-            if not required
-            else "Manager Mode requires at least one active agent lane."
-        ),
+        "attached_prompt": prompt_known,
+        "missing_required_lanes": missing_required_lanes,
+        "unresolved_required_lanes": unresolved_required_lanes,
+    }
+    if policy == "disabled":
+        return {
+            **common,
+            "required": False,
+            "healthy": True,
+            "status": "ready",
+            "summary": "Manager deployment is disabled by policy.",
+        }
+    if normalized_mode != "manager":
+        return {
+            **common,
+            "required": False,
+            "healthy": True,
+            "status": "ready",
+            "summary": "Manager deployment is not required for this mode.",
+        }
+    if stale_writer_count:
+        return {
+            **common,
+            "required": True,
+            "healthy": False,
+            "status": "blocked",
+            "summary": "Stale manager writer sessions require integration or explicit stop.",
+        }
+    if not prompt_known:
+        return {
+            **common,
+            "required": False,
+            "healthy": True,
+            "status": "standby",
+            "summary": "Manager Mode is healthy and standing by for an attached prompt.",
+        }
+    if missing_required_lanes:
+        return {
+            **common,
+            "required": True,
+            "healthy": False,
+            "status": "blocked",
+            "summary": "Manager Mode has an attached complex turn with missing required lanes.",
+        }
+    if unresolved_required_lanes:
+        return {
+            **common,
+            "required": True,
+            "healthy": False,
+            "status": "blocked",
+            "summary": "Manager Mode has unresolved required lanes for the attached turn.",
+        }
+    if str(attached.get("route") or "") == "direct" and attached.get("direct_reason"):
+        return {
+            **common,
+            "required": False,
+            "healthy": True,
+            "status": "ready",
+            "summary": "Manager Mode allows direct work for the attached trivial turn.",
+        }
+    if int(attached.get("required_lane_count") or 0):
+        return {
+            **common,
+            "required": True,
+            "healthy": True,
+            "status": "ready",
+            "summary": "Manager Mode has registered required lanes for the attached turn.",
+        }
+    return {
+        **common,
+        "required": False,
+        "healthy": True,
+        "status": "ready",
+        "summary": "Manager Mode has an attached direct-work turn.",
     }
 
 
@@ -3928,6 +4000,7 @@ def manager_health_summary(
     health_mode: str = "advisory",
     ledger_sessions: list[dict[str, Any]] | None = None,
     repo_root: str = "",
+    session_status: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     summary = summarize_agent_sessions(sessions, stale_after_minutes=stale_after_minutes)
     authoritative_ledger = sessions if ledger_sessions is None else ledger_sessions
@@ -3935,6 +4008,8 @@ def manager_health_summary(
         normalize_manager_mode(mode),
         manager_deploy_policy(config),
         int(summary["active_subagents"]["count"]),
+        session_status=session_status,
+        stale_writer_count=int(summary["stale_writer_sessions"]["count"]),
     )
     issues: list[str] = []
     warnings: list[str] = []
@@ -3950,10 +4025,7 @@ def manager_health_summary(
     if summary["stale_writer_sessions"]["count"]:
         ids = ", ".join(str(session.get("agent_id")) for session in summary["stale_writer_sessions"]["agents"])
         message = f"stale manager writer sessions require integration or explicit stop: {ids}"
-        if normalize_health_mode(health_mode) == "strict":
-            issues.append(message)
-        else:
-            warnings.append(message)
+        issues.append(message)
     if scope_validation_debt["pending_validation_count"]:
         warnings.append(
             f"{scope_validation_debt['pending_validation_count']} manager sessions in this repository scope have pending or missing validation evidence; run scripts/qwendex manager reconcile --pending-validation --json."
@@ -3962,18 +4034,12 @@ def manager_health_summary(
         ledger_warnings.append(
             f"The shared ledger has {validation_debt['pending_validation_count']} total sessions with pending or missing validation evidence across all scopes; this does not change scoped health."
         )
-    if contract["status"] == "standby":
-        message = contract["summary"]
-        if normalize_health_mode(health_mode) == "strict":
-            issues.append(message)
-        else:
-            warnings.append(message)
     if contract["status"] == "blocked":
         issues.append(contract["summary"])
     if issues:
         status = "blocked"
     elif warnings:
-        status = "warning" if summary["stale_writer_sessions"]["count"] else "standby"
+        status = "warning"
     else:
         status = contract["status"]
     return {
@@ -4002,11 +4068,25 @@ def manager_health_summary(
     }
 
 
-def manager_health_issues(config: Mapping[str, Any], sessions: list[dict[str, Any]], *, mode: str, stale_after_minutes: int) -> list[str]:
-    health = manager_health_summary(config, sessions, mode=mode, stale_after_minutes=stale_after_minutes, health_mode="strict")
+def manager_health_issues(
+    config: Mapping[str, Any],
+    sessions: list[dict[str, Any]],
+    *,
+    mode: str,
+    stale_after_minutes: int,
+    session_status: Mapping[str, Any] | None = None,
+) -> list[str]:
+    health = manager_health_summary(
+        config,
+        sessions,
+        mode=mode,
+        stale_after_minutes=stale_after_minutes,
+        health_mode="strict",
+        session_status=session_status,
+    )
     issues = list(health["issues"])
     contract = health["deployment_contract"]
-    if contract["status"] not in {"ready"} and contract["summary"] not in issues:
+    if not contract["healthy"] and contract["summary"] not in issues:
         issues.append(contract["summary"])
     return issues
 
@@ -4266,6 +4346,34 @@ def manager_session_status_payload(
             why_no_agent = f"delegation blocked: {admission_error}"
         elif required_lanes:
             why_no_agent = "required lanes have not been registered"
+    sessions_by_lane: dict[str, list[dict[str, Any]]] = {}
+    for session in sessions:
+        lane = str(session.get("lane") or "")
+        if lane:
+            sessions_by_lane.setdefault(lane, []).append(session)
+    missing_required_lanes = [
+        lane for lane in required_lanes
+        if str(lane.get("lane") or "") not in sessions_by_lane
+    ]
+    unresolved_required_lanes: list[dict[str, Any]] = []
+    for lane in required_lanes:
+        lane_name = str(lane.get("lane") or "")
+        lane_sessions = sessions_by_lane.get(lane_name, [])
+        if not lane_sessions or any(
+            str(item.get("status") or "") not in AGENT_TERMINAL_STATUSES
+            for item in lane_sessions
+        ):
+            continue
+        resolved = any(
+            str(item.get("status") or "") == "waived"
+            or (
+                str(item.get("status") or "") == "completed"
+                and str(item.get("validation_status") or "") == "pass"
+            )
+            for item in lane_sessions
+        )
+        if not resolved:
+            unresolved_required_lanes.append(lane)
     return {
         "schema_version": "qwendex.manager_session_status.v1",
         "session_id": decision.get("session_id"),
@@ -4309,6 +4417,8 @@ def manager_session_status_payload(
         "last_admission_error": admission_error,
         "required_lanes": required_lanes,
         "optional_lanes": optional_lanes,
+        "missing_required_lanes": missing_required_lanes,
+        "unresolved_required_lanes": unresolved_required_lanes,
         "why_no_agent": why_no_agent,
     }
 
@@ -4343,6 +4453,12 @@ def manager_mode_payload(
     authoritative_ledger = operational_sessions if ledger_sessions is None else ledger_sessions
     summary = summarize_agent_sessions(operational_sessions, stale_after_minutes=stale_after_minutes)
     summary["agent_outcomes"] = agent_outcomes_for_sessions(displayed_sessions)
+    session_status = manager_session_status_payload(
+        config,
+        repo_root=repo_root,
+        desired_policy=resolved_agent_policy,
+    )
+    qdex_permission = qdex_permission_posture(config)
     data = {
         "mode": profile["mode"],
         "label": profile["label"],
@@ -4351,6 +4467,10 @@ def manager_mode_payload(
         "agent_policy_hash": resolved_agent_policy["policy_hash"],
         "agent_policy_source": resolved_agent_policy["source"],
         "agent_policy_warnings": list(resolved_agent_policy.get("warnings", [])),
+        "qdex_permission_mode": qdex_permission["mode"],
+        "qdex_permission_source": qdex_permission["source"],
+        "qdex_permission_valid": qdex_permission["valid"],
+        "qdex_permission": qdex_permission,
         "output_policy": resolved_agent_policy.get("output_policy", {}),
         "write_safety": file_lock_summary(config),
         "legacy_mode": legacy_mode,
@@ -4402,6 +4522,8 @@ def manager_mode_payload(
         profile["mode"],
         data["manager_deploy_policy"],
         int(data["active_subagents"]["count"]),
+        session_status=session_status,
+        stale_writer_count=int(data["stale_writer_sessions"]["count"]),
     )
     health = manager_health_summary(
         config,
@@ -4411,25 +4533,14 @@ def manager_mode_payload(
         health_mode=health_mode,
         ledger_sessions=authoritative_ledger,
         repo_root=repo_root,
+        session_status=session_status,
     )
     data["manager_health"] = health
-    if data["stale_writer_sessions"]["count"] and normalize_health_mode(health_mode) == "strict":
-        data["deployment_contract"] = {
-            **data["deployment_contract"],
-            "healthy": False,
-            "status": "blocked",
-            "summary": "Stale manager writer sessions require integration or explicit stop.",
-        }
     data["manager_estimate"] = manager_self_estimate(
         config,
         mode=profile["mode"],
         local_status=local_status,
         stale_pressure="high" if data["stale_sessions"]["count"] else "none",
-    )
-    session_status = manager_session_status_payload(
-        config,
-        repo_root=repo_root,
-        desired_policy=resolved_agent_policy,
     )
     if session_status:
         data["session_status"] = session_status
@@ -6139,6 +6250,11 @@ def command_check(args: argparse.Namespace, config: dict[str, Any]) -> dict[str,
         rows = conn.execute("SELECT * FROM qwendex_agent_sessions ORDER BY updated_at DESC").fetchall()
         ledger_sessions = [session for row in rows if (session := row_to_agent_session(row))]
         sessions = sessions_for_repo(ledger_sessions, repo_root)
+        session_status = manager_session_status_payload(
+            config,
+            repo_root=repo_root,
+            desired_policy=agent_policy,
+        )
         manager_health = manager_health_summary(
             config,
             sessions,
@@ -6147,6 +6263,7 @@ def command_check(args: argparse.Namespace, config: dict[str, Any]) -> dict[str,
             health_mode=health_mode,
             ledger_sessions=ledger_sessions,
             repo_root=repo_root,
+            session_status=session_status,
         )
         manager_issues = list(manager_health["issues"])
         manager_warnings = list(manager_health["warnings"])
@@ -6234,6 +6351,11 @@ def command_doctor(args: argparse.Namespace, config: dict[str, Any]) -> dict[str
         rows = conn.execute("SELECT * FROM qwendex_agent_sessions ORDER BY updated_at DESC").fetchall()
         ledger_sessions = [session for row in rows if (session := row_to_agent_session(row))]
         sessions = sessions_for_repo(ledger_sessions, repo_root)
+        session_status = manager_session_status_payload(
+            config,
+            repo_root=repo_root,
+            desired_policy=agent_policy,
+        )
         manager_health = manager_health_summary(
             config,
             sessions,
@@ -6242,6 +6364,7 @@ def command_doctor(args: argparse.Namespace, config: dict[str, Any]) -> dict[str
             health_mode=health_mode,
             ledger_sessions=ledger_sessions,
             repo_root=repo_root,
+            session_status=session_status,
         )
         manager_issues = list(manager_health["issues"])
         manager_warnings = list(manager_health["warnings"])

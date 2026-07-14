@@ -65,10 +65,11 @@ qwendex-dev verify --tier release
 dev results tree. `full` adds public JSON syntax plus Draft 2020-12 schema and
 version-parity validation, the offline Qwendex eval suite, harness gate, and
 local harness eval receipts. `release` uses strict checks with an isolated
-release state DB and writes the release summary. `live` runs all three live
-acceptance gates below. Set `QWENDEX_RELEASE_REQUIRE_LIVE=1` only when the local
-stack is intentionally running and the release summary should require and bind
-those gates.
+release state DB and writes both the release summary and a run-scoped Codex
+status file under that run's metadata; it never overwrites the shared live
+status file. `live` runs all three live acceptance gates below. Set
+`QWENDEX_RELEASE_REQUIRE_LIVE=1` only when the local stack is intentionally
+running and the release summary should require and bind those gates.
 
 The live gate contracts are:
 

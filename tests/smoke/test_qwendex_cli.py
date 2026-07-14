@@ -372,14 +372,16 @@ def test_qwendex_check_and_doctor_health_mode_handles_stale_writer(tmp_path):
     strict_check_data = parse_json_result(strict_check)
     strict_doctor_data = parse_json_result(strict_doctor)
 
-    assert advisory_check.returncode == 0
-    assert advisory_check_data["status"] == "pass"
+    assert advisory_check.returncode != 0
+    assert advisory_check_data["status"] == "fail"
     assert advisory_check_data["data"]["manager_health_mode"] == "advisory"
     assert "stale manager writer sessions" in " ".join(advisory_check_data["data"]["manager_health_issues"])
-    assert advisory_doctor.returncode == 0
-    assert advisory_doctor_data["status"] == "pass"
+    assert advisory_doctor.returncode != 0
+    assert advisory_doctor_data["status"] == "fail"
     assert advisory_doctor_data["data"]["manager_health_mode"] == "advisory"
     assert "stale manager writer sessions" in " ".join(advisory_doctor_data["data"]["manager_health_issues"])
+    assert "stale manager writer sessions" in " ".join(advisory_check_data["errors"])
+    assert "stale manager writer sessions" in " ".join(advisory_doctor_data["errors"])
     assert strict_check.returncode != 0
     assert strict_check_data["status"] == "fail"
     assert strict_check_data["data"]["manager_health_mode"] == "strict"
@@ -1397,6 +1399,44 @@ def test_qwendex_dev_env_same_root_writes_one_parseable_project_table(tmp_path):
     assert config["model_reasoning_effort"] == "max"
     assert config_text.count(f'[projects."{checkout}"]') == 1
     assert config["projects"] == {str(checkout): {"trust_level": "trusted"}}
+
+
+def test_release_verification_status_write_is_run_scoped(tmp_path):
+    shared_status = tmp_path / "operator-codex-status.json"
+    shared_status.write_text("operator status must remain intact\n", encoding="utf-8")
+    run_meta = tmp_path / "release-run"
+    run_meta.mkdir()
+    state_db = tmp_path / "release-state.sqlite"
+    command = (
+        'source "$1"; '
+        'status_file="$(verification_status_file_for_run release "$2" "$3")"; '
+        'write_verification_codex_status "$status_file" "$2/codex_status_write.json"; '
+        'printf "%s\\n" "$status_file"'
+    )
+    result = subprocess.run(
+        ["bash", "-lc", command, "bash", str(ROOT / "scripts" / "qwendex_dev_env"), str(run_meta), str(shared_status)],
+        cwd=ROOT,
+        env={
+            **isolated_qwendex_runtime_env(),
+            "HOME": str(tmp_path / "home"),
+            "QWENDEX_DEV_ENV_LIBRARY": "1",
+            "QWENDEX_STATE_DB": str(state_db),
+            "QWENDEX_RESULTS_ROOT": str(tmp_path / "results"),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert Path(result.stdout.strip()) == run_meta / "codex_status.json"
+    assert shared_status.read_text(encoding="utf-8") == "operator status must remain intact\n"
+    assert (run_meta / "codex_status.json").is_file()
+    assert (run_meta / "codex_status_write.json").is_file()
+    script = (ROOT / "scripts" / "qwendex_dev_env").read_text(encoding="utf-8")
+    assert 'verification_status_file_for_run "$tier"' in script
+    assert 'write_verification_codex_status "$verification_status_file"' in script
 
 
 def test_qwendex_dev_env_second_same_root_sync_skips_its_codex_wrapper(tmp_path):
@@ -3000,8 +3040,9 @@ def test_qwendex_manager_mode_cycles_status_and_legacy_alias(tmp_path):
     assert legacy["data"]["legacy_mode"] == "manager_only"
     assert legacy["data"]["label"] == "Manager Mode"
     assert legacy["data"]["manager_deploy_policy"] == "auto"
-    assert legacy["data"]["deployment_contract"]["required"] is True
-    assert legacy["data"]["deployment_contract"]["healthy"] is False
+    assert legacy["data"]["deployment_contract"]["required"] is False
+    assert legacy["data"]["deployment_contract"]["healthy"] is True
+    assert legacy["data"]["deployment_contract"]["status"] == "standby"
     assert "shortcut" not in legacy["data"]
     assert "shortcut_command" not in legacy["data"]
     assert legacy["data"]["max_subagents"] == 6
@@ -4779,7 +4820,13 @@ def test_manager_subagent_start_binds_exact_plan_without_pretool_reservation(tmp
     assert session["context_packet"]["registration_source"] == "SubagentStart"
     assert session["context_packet"]["parent_session_id"] == "native-root-session"
 
-    status = json_result("manager", "status", "--json", env=manager_env)["data"]["session_status"]
+    status_result = run_qwendex("manager", "status", "--json", env=manager_env)
+    status_payload = parse_json_result(status_result)
+    assert status_result.returncode != 0
+    assert status_payload["status"] == "blocked"
+    assert status_payload["data"]["deployment_contract"]["status"] == "blocked"
+    assert status_payload["data"]["deployment_contract"]["healthy"] is False
+    status = status_payload["data"]["session_status"]
     assert status["registered_agent_count"] == 1
     assert status["active_agent_count"] == 1
     assert status["reserved_agent_count"] == 0
@@ -4810,9 +4857,11 @@ def test_manager_subagent_start_binds_exact_plan_without_pretool_reservation(tmp
         "hookSpecificOutput"
     ]["additionalContext"]
     assert "Do not perform the task or call tools" in duplicate_context
-    deduplicated_status = json_result(
-        "manager", "status", "--json", env=manager_env
-    )["data"]["session_status"]
+    deduplicated_result = run_qwendex("manager", "status", "--json", env=manager_env)
+    deduplicated_payload = parse_json_result(deduplicated_result)
+    assert deduplicated_result.returncode != 0
+    assert deduplicated_payload["status"] == "blocked"
+    deduplicated_status = deduplicated_payload["data"]["session_status"]
     assert deduplicated_status["registered_agent_count"] == 1
 
 
@@ -4851,9 +4900,12 @@ def test_manager_ultra_source_survives_admission_and_session_status(tmp_path):
         "native_proactive_source"
     ] == "native_ultra"
     assert admitted["data"]["agent_plan"]["native_proactive_source"] == "native_ultra"
-    status = json_result("manager", "status", "--json", env=manager_env)["data"][
-        "session_status"
-    ]
+    status_result = run_qwendex("manager", "status", "--json", env=manager_env)
+    status_payload = parse_json_result(status_result)
+    assert status_result.returncode != 0
+    assert status_payload["status"] == "blocked"
+    assert status_payload["data"]["deployment_contract"]["status"] == "blocked"
+    status = status_payload["data"]["session_status"]
     assert status["native_proactive_source"] == "native_ultra"
 
 
@@ -4967,12 +5019,19 @@ def test_manager_required_lane_stop_gate_and_session_status(tmp_path):
         {"lane": "verification", "profile": "verifier", "write": False},
     ]
 
-    status = json_result("manager", "status", "--json", env=manager_env)["data"]["session_status"]
+    status_result = run_qwendex("manager", "status", "--json", env=manager_env)
+    status_payload = parse_json_result(status_result)
+    assert status_result.returncode != 0
+    assert status_payload["status"] == "blocked"
+    assert status_payload["data"]["deployment_contract"]["status"] == "blocked"
+    assert status_payload["data"]["deployment_contract"]["healthy"] is False
+    status = status_payload["data"]["session_status"]
     assert status["task_class"] == "cross_cutting_edit"
     assert status["route"] == "orchestrated_single_writer"
     assert status["required_lane_count"] == 2
     assert status["registered_agent_count"] == 0
     assert status["why_no_agent"] == "required lanes have not been registered"
+    assert status["missing_required_lanes"] == required_lanes
 
     stop_result = run_qwendex(
         "agent",
@@ -4987,6 +5046,91 @@ def test_manager_required_lane_stop_gate_and_session_status(tmp_path):
     assert stop_result.returncode != 0
     assert stop["data"]["hook_result"]["event"] == "manager.required_lane_missing"
     assert stop["data"]["missing_required_lanes"] == required_lanes
+
+
+def test_manager_preflight_snapshots_qdex_permission_and_rejects_mutation(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    env = with_live_manager_identity({
+        "QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite"),
+        "QWENDEX_RESULTS_ROOT": str(tmp_path / "results"),
+        "CODEX_HOME": str(tmp_path / "codex_home"),
+        "QWENDEX_MANAGER_ALLOW_UNHOOKED": "1",
+        "QWENDEX_MANAGER_TARGET_REPO": str(repo),
+        "QWENDEX_QDEX_PERMISSION_MODE": "workspace-write",
+        "QWENDEX_QDEX_PERMISSION_SOURCE": "published-config",
+    })
+    json_result("manager", "mode", "--set", "manager", "--json", env=env)
+    preflight = json_result(
+        "manager", "preflight", "--interactive-prompt-unknown", "--json", env=env
+    )
+    decision = preflight["data"]
+    assert decision["qdex_permission_mode"] == "workspace-write"
+    assert decision["qdex_permission_source"] == "published-config"
+    assert decision["qdex_permission"] == {
+        "mode": "workspace-write",
+        "source": "published-config",
+        "valid": True,
+    }
+    with sqlite3.connect(env["QWENDEX_STATE_DB"]) as conn:
+        row = conn.execute(
+            "SELECT qdex_permission_mode, qdex_permission_source FROM qwendex_manager_decisions WHERE ledger_id = ?",
+            (decision["ledger_id"],),
+        ).fetchone()
+    assert row == ("workspace-write", "published-config")
+
+    mutated_env = {
+        **env,
+        **decision["exports"],
+        "QWENDEX_QDEX_PERMISSION_MODE": "yolo",
+        "QWENDEX_QDEX_PERMISSION_SOURCE": "environment",
+    }
+    result = run_qwendex(
+        "agent",
+        "hook",
+        "UserPromptSubmit",
+        "--event-json",
+        json.dumps({
+            "session_id": "permission-root",
+            "turn_id": "permission-turn",
+            "cwd": str(repo),
+            "prompt": "Explain status",
+        }),
+        "--json",
+        env=mutated_env,
+    )
+    payload = parse_json_result(result)
+    assert result.returncode != 0
+    assert payload["status"] == "blocked"
+    assert "qdex_permission_mismatch" in json.dumps(payload["data"], sort_keys=True)
+
+
+def test_manager_idle_standby_and_attached_direct_work_are_healthy(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    env = with_live_manager_identity({
+        "QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite"),
+        "QWENDEX_RESULTS_ROOT": str(tmp_path / "results"),
+        "CODEX_HOME": str(tmp_path / "codex_home"),
+        "QWENDEX_MANAGER_ALLOW_UNHOOKED": "1",
+        "QWENDEX_MANAGER_TARGET_REPO": str(repo),
+    })
+    json_result("manager", "mode", "--set", "manager", "--json", env=env)
+    standby = json_result("manager", "status", "--json", env=env)["data"]
+    assert standby["deployment_contract"]["status"] == "standby"
+    assert standby["deployment_contract"]["healthy"] is True
+    assert "standing by for an attached prompt" in standby["deployment_contract"]["summary"]
+
+    preflight = json_result(
+        "manager", "preflight", "--prompt", "Explain status", "--json", env=env
+    )
+    assert preflight["data"]["routing_decision"]["selected_route"] == "direct_single_writer"
+    direct = json_result("manager", "status", "--json", env=env)["data"]
+    assert direct["session_status"]["route"] == "direct"
+    assert direct["session_status"]["direct_reason"]
+    assert direct["deployment_contract"]["status"] == "ready"
+    assert direct["deployment_contract"]["healthy"] is True
+    assert "allows direct work" in direct["deployment_contract"]["summary"]
 
 
 def test_qwendex_agent_metrics_track_ledger_and_artifacts(tmp_path):
@@ -6524,7 +6668,8 @@ def test_qwendex_manager_reconciles_stale_read_only_and_blocks_stale_writers(tmp
 
     status_result = run_qwendex("manager", "status", "--stale-after-minutes", "5", "--json", env=env)
     status = parse_json_result(status_result)
-    assert status_result.returncode == 0
+    assert status_result.returncode != 0
+    assert status["status"] == "blocked"
     assert status["data"]["stale_reconciliation"]["closed_count"] == 0
     assert status["data"]["stale_reconciliation"]["close_requested_count"] == 1
     assert status["data"]["stale_reconciliation"]["close_requested"][0]["agent_id"] == "stale-reader"
@@ -6608,8 +6753,8 @@ def test_qwendex_manager_repair_safe_closes_only_harmless_stale_sessions(tmp_pat
     assert repair["data"]["skipped_writer_count"] == 1
     assert repair["data"]["skipped_writers"][0]["agent_id"] == "nonempty-writer"
     assert "nonempty-writer" in " ".join(repair["errors"])
-    assert status.returncode == 0
-    assert status_data["status"] == "warning"
+    assert status.returncode != 0
+    assert status_data["status"] == "blocked"
     assert status_data["data"]["stale_writer_sessions"]["count"] == 1
     assert status_data["data"]["stale_writer_sessions"]["agents"][0]["agent_id"] == "nonempty-writer"
 

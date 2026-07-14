@@ -386,11 +386,14 @@ acceptance by themselves.
 ## Release Verification State Isolation
 
 Decision: `qwendex-dev verify --tier release` resets and uses
-`.qwendex-dev/state/release_verify_qwendex.sqlite` for strict release checks.
+`.qwendex-dev/state/release_verify_qwendex.sqlite` for strict release checks,
+and writes its Codex status evidence to the release run's metadata directory
+rather than the shared operator status file.
 
 Reason: release readiness should validate the source checkout and packaged
 contracts, not fail because an operator previously toggled Manager Mode in the
-normal dev state without an active lane.
+normal dev state without an active lane. Release verification must also not
+rewrite the live TUI/status surface while producing receipts.
 
 ## Local Qwen Authority
 

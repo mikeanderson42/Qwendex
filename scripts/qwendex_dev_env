@@ -857,7 +857,8 @@ PY
 
 write_dev_status_json() {
   local mode="${1:-status}"
-  python3 - "$DEV_STATUS_JSON" "$mode" "$DEV_ROOT" "$SOURCE_ROOT" "$WORK_ROOT" "$STATE_DB" "$PERFORMANCE_DB" "$LEDGER_DB" "$LOCAL_HARNESS_LEDGER_DB" "$RESULTS_ROOT" "$STATUS_FILE" "$CODEX_SOURCE_DIR" "$DEV_CODEX_DEFAULT" "$DEV_CODE_MODE_HOST_DEFAULT" "$MAIN_CODEX_BIN" <<'PY'
+  local reported_status_file="${2:-$STATUS_FILE}"
+  python3 - "$DEV_STATUS_JSON" "$mode" "$DEV_ROOT" "$SOURCE_ROOT" "$WORK_ROOT" "$STATE_DB" "$PERFORMANCE_DB" "$LEDGER_DB" "$LOCAL_HARNESS_LEDGER_DB" "$RESULTS_ROOT" "$reported_status_file" "$CODEX_SOURCE_DIR" "$DEV_CODEX_DEFAULT" "$DEV_CODE_MODE_HOST_DEFAULT" "$MAIN_CODEX_BIN" <<'PY'
 import json
 import os
 import shutil
@@ -947,6 +948,7 @@ state_isolation = {
     "local_harness_ledger_db_under_work_root": under(paths["local_harness_ledger_db"], paths["work_root"]),
     "results_under_work_root": under(paths["results_root"], paths["work_root"]),
 }
+
 active_codex_home = Path(os.environ.get("QWENDEX_CODEX_HOME") or paths["work_root"] / "codex_home")
 runtime_generation = str(os.environ.get("QWENDEX_RUNTIME_GENERATION_ID") or "")
 runtime_tree = str(os.environ.get("QWENDEX_RUNTIME_TREE") or "")
@@ -1012,6 +1014,23 @@ out.parent.mkdir(parents=True, exist_ok=True)
 out.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 print(f"status-json: {data['status']} - {out}")
 PY
+}
+
+verification_status_file_for_run() {
+  local tier="$1"
+  local run_meta_root="$2"
+  local operator_status_file="$3"
+  if [[ "$tier" == "release" ]]; then
+    printf '%s/codex_status.json\n' "$run_meta_root"
+  else
+    printf '%s\n' "$operator_status_file"
+  fi
+}
+
+write_verification_codex_status() {
+  local status_file="$1"
+  local output_file="$2"
+  scripts/qwendex codex-status --write "$status_file" --json > "$output_file"
 }
 
 cmd_env() {
@@ -1645,7 +1664,7 @@ cmd_open_with_mode() {
   source "$WORK_ROOT/env.sh"
   local qdex_args=(-C "$DEV_ROOT")
   if [[ "$launch_mode" == "yolo" ]]; then
-    :
+    qdex_args=(--qdex-permission-mode yolo "${qdex_args[@]}")
   else
     qdex_args=(--qdex-permission-mode workspace-write "${qdex_args[@]}")
   fi
@@ -1874,16 +1893,20 @@ cmd_verify() {
   # shellcheck disable=SC1090
   source "$WORK_ROOT/env.sh"
   cd "$DEV_ROOT"
+  local operator_status_file="${QWENDEX_CODEX_STATUS_FILE:-$STATUS_FILE}"
+  local verification_status_file
+  verification_status_file="$(verification_status_file_for_run "$tier" "$run_meta_root" "$operator_status_file")"
   local health_mode="advisory"
   if [[ "$tier" == "release" ]]; then
     health_mode="strict"
     local release_state_db="$WORK_ROOT/state/release_verify_qwendex.sqlite"
     rm -f "$release_state_db" "$release_state_db-shm" "$release_state_db-wal"
     export QWENDEX_STATE_DB="$release_state_db"
+    export QWENDEX_CODEX_STATUS_FILE="$verification_status_file"
   fi
   scripts/qwendex check --health-mode "$health_mode" --json > "$run_meta_root/qwendex_check.json"
   scripts/qwendex doctor --health-mode "$health_mode" --json > "$run_meta_root/qwendex_doctor.json"
-  scripts/qwendex codex-status --write "$STATUS_FILE" --json > "$run_meta_root/codex_status_write.json"
+  write_verification_codex_status "$verification_status_file" "$run_meta_root/codex_status_write.json"
   local require_dev_codex=0
   if [[ "$tier" == "release" ]]; then
     require_dev_codex=1
@@ -1964,7 +1987,7 @@ cmd_verify() {
         "$release_source_commit" "$release_source_tree"
     fi
   fi
-  write_dev_status_json "verify-$tier" >/dev/null
+  write_dev_status_json "verify-$tier" "$verification_status_file" >/dev/null
   cp "$DEV_STATUS_JSON" "$run_meta_root/dev_status.json"
   if [[ "$tier" == "release" ]]; then
     bind_release_receipt \
@@ -2172,6 +2195,10 @@ Defaults:
   QWENDEX_DEV_SOURCE_ROOT=$SOURCE_ROOT
 EOF
 }
+
+if [[ "${QWENDEX_DEV_ENV_LIBRARY:-0}" == "1" && "${BASH_SOURCE[0]}" != "$0" ]]; then
+  return 0
+fi
 
 if [[ "$#" -eq 0 ]]; then
   cmd_open_yolo

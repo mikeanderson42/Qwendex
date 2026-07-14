@@ -232,11 +232,12 @@ Manager Mode defaults to `max_subagents: 4`. Operators may configure a lower or
 higher bounded value up to the conservative product ceiling of 8 concurrent
 worker lanes; Codex V2 counts the root separately.
 
-`manager_deploy_policy` defaults to `auto`: when the selected mode is Manager
-Mode, Qwendex expects at least one active registered agent lane. Routine
-advisory health reports no-lane Manager Mode as `standby`; strict release
-health reports it as blocked. Set `manager_deploy_policy` to `disabled` to opt
-out of that requirement; explicit manual manager lifecycle commands remain
+`manager_deploy_policy` defaults to `auto`. An idle Manager Mode session with
+no attached prompt is healthy `standby`, and an attached direct/trivial turn is
+healthy without workers. An attached complex turn blocks when required lanes
+are missing or unresolved; a stale writer lane blocks until integration or an
+explicit stop. Set `manager_deploy_policy` to `disabled` to opt out of
+deployment requirements; explicit manual manager lifecycle commands remain
 operator-directed.
 
 Use `scripts/qwendex manager close --agent-id ... --reason integrated --json`

@@ -60,11 +60,13 @@ When Local is `[Off]`, Qwendex skips local Qwen even if the endpoint is healthy.
 
 ## Agent Deploy Policy
 
-`manager_deploy_policy` defaults to `auto`: when the selected mode is Manager
-Mode, Qwendex expects at least one active registered agent lane. Routine
-advisory health reports no-lane Manager Mode as `standby`; strict release
-health reports it as blocked. Set `manager_deploy_policy` to `disabled` to opt
-out of that requirement; explicit manual manager lifecycle commands remain
+`manager_deploy_policy` defaults to `auto`. With no attached prompt, Manager
+Mode is healthy `standby` rather than waiting on a worker merely because it is
+idle. An attached direct/trivial turn is also healthy without a lane. An
+attached complex turn is blocked only when planned required lanes are missing
+or unresolved; a stale writer lane is blocked until integration or an explicit
+stop. Set `manager_deploy_policy` to `disabled` to opt out of deployment
+requirements; explicit manual manager lifecycle commands remain
 operator-directed.
 
 ## Manager Preflight
@@ -187,8 +189,8 @@ Manager status separates operator intent, advisory health, and blocking state:
   operator-selected lane. This is not a failed health state.
 - `warning`: Qwendex has advisory issues, such as non-blocking guidance or
   local availability drift, but no writer lifecycle problem requires repair.
-- `blocked`: a required Manager Mode deployment contract is unmet, or a stale
-  writer lane requires integration or an explicit stop.
+- `blocked`: an attached complex turn has missing or unresolved required lanes,
+  or a stale writer lane requires integration or an explicit stop.
 
 For an attached turn, `manager status --json` also exposes selected and
 effective mode, task class, route and routing reason, prompt known/source/length
