@@ -1372,6 +1372,7 @@ fi
     env.update(
         {
             "HOME": str(fake_home),
+            "XDG_CONFIG_HOME": str(fake_home / ".config"),
             "PATH": f"{external_bin}:{os.environ['PATH']}",
         }
     )
