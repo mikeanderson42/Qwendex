@@ -1504,6 +1504,10 @@ def test_qwendex_dev_env_second_same_root_sync_skips_its_codex_wrapper(tmp_path)
 
 def test_qdex_permission_mode_precedence_is_safe_and_yolo_is_explicit(tmp_path):
     fake_home, checkout, _, env = same_root_dev_env_fixture(tmp_path)
+    schema = json.loads(
+        (checkout / "config" / "qwendex" / "qwendex.schema.json").read_text(encoding="utf-8")
+    )
+    assert schema["properties"]["qdex"]["properties"]["permission_mode"]["default"] == "workspace-write"
     dev_env = checkout / "scripts" / "qwendex_dev_env"
     synced = subprocess.run(
         [str(dev_env), "sync"],
@@ -7198,6 +7202,7 @@ def test_qwendex_queue_facade_delegates_to_artifact_queue(tmp_path):
 
 def test_qwendex_public_docs_and_naming_audit_pass():
     qwendex = load_qwendex()
+    configuration = (ROOT / "public" / "qwendex" / "configuration.md").read_text(encoding="utf-8")
 
     audit = qwendex.public_docs_audit(ROOT / "public" / "qwendex")
 
@@ -7208,6 +7213,8 @@ def test_qwendex_public_docs_and_naming_audit_pass():
     assert audit["naming_hits"] == []
     assert "security.md" in audit["files"]
     assert "staging-receipt.md" in audit["files"]
+    assert "uses the resolved `workspace-write` permission\nposture" in configuration
+    assert "`qdex` defaults to\n`--dangerously-bypass-approvals-and-sandbox`" not in configuration
 
 
 def test_qwendex_primary_authority_and_local_off_cannot_be_overridden(tmp_path):

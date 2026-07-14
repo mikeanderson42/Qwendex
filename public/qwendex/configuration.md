@@ -231,10 +231,12 @@ Run `qdex` from the desired directory or use Codex's native
 execution working directory, Codex add-dir, local-harness trusted root, and MCP
 trusted root. `qdex` always sets the generated isolated `CODEX_HOME` for its
 child while the caller's environment and ordinary upstream `codex` remain
-unchanged. `qdex` defaults to
+unchanged. By default, `qdex` uses the resolved `workspace-write` permission
+posture. Only an explicit CLI, environment, or operator-local selection of
+`yolo` adds
 `--dangerously-bypass-approvals-and-sandbox`; the repo binding is a
 Qwendex/MCP routing boundary, not OS-level filesystem confinement. Without an
-an explicit native directory option, Qdex inherits `$PWD` even outside git and
+explicit native directory option, Qdex inherits `$PWD` even outside git and
 does not synthesize `-C`. Native Codex `-C`/`--cd` selects both the Codex
 working directory and Qwendex manager scope and is forwarded unchanged. The
 older Qdex-only `--repo` option remains a compatibility alias. Other native

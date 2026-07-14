@@ -72,7 +72,10 @@
       "required": ["permission_mode"],
       "additionalProperties": false,
       "properties": {
-        "permission_mode": {"enum": ["workspace-write", "yolo"]}
+        "permission_mode": {
+          "enum": ["workspace-write", "yolo"],
+          "default": "workspace-write"
+        }
       }
     },
     "receipts": {
