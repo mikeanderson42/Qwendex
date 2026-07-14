@@ -191,7 +191,14 @@
   "codex_version": "codex-cli 0.144.0",
   "config_digest": "e9188313ff92da6109e36851a53e59b44802dc4a1bc7fc79631235b32062cf2b",
   "dirty_state": "clean",
-  "final_status": "STOP_MANAGER_ACCEPT_PRODUCTION_ACCEPTED",
+    "final_status": "STOP_MANAGER_ACCEPT_PRODUCTION_ACCEPTED",
+    "final_release_binding": {
+        "binding_kind": "annotated_tag",
+        "commit_ref": "v0.6.0-rc.1^{commit}",
+        "receipt_contract": "The sealed ignored per-run release receipt resolves these refs and records the exact final commit/tree before publication.",
+        "tag": "v0.6.0-rc.1",
+        "tree_ref": "v0.6.0-rc.1^{tree}"
+    },
   "generated_at": "2026-07-14T02:04:41.744986+00:00",
   "hook_generation": "rtg-16bd5bfae399a188b6bc",
   "ignored_evidence_root": ".qwendex-dev/results/qwendex/manager-production/manager-production-aacf2f8-final-20260714T0126Z/production",

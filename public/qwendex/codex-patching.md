@@ -1,8 +1,8 @@
 # Codex TUI Patching
 
-Qwendex can run without patching Codex, but the native footer, hotkeys, and
-exact Manager V2 identity and root-only management guarantees require the
-supported Codex source patch. The installed Codex npm package ships a stripped
+Qwendex standalone CLI functions, checks, routing, receipts, and Off-mode
+recovery work with stock Codex. Enforced Heavy and Manager guarantees require
+the supported canonical patch. The installed Codex npm package ships a stripped
 native binary, so Qwendex treats the integration as a versioned source patch
 instead of mutating the binary in place.
 

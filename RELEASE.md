@@ -1,7 +1,20 @@
 # v0.6.0-rc.1
 
-Manager production-hardening release candidate. This metadata prepares the
-candidate only; no tag or publication is part of the hardening goal.
+Manager production-hardened prerelease. The annotated `v0.6.0-rc.1` tag and
+GitHub prerelease are created only after the release verification and CI gates
+pass.
+
+- Makes Qdex permission mode schema-validated and public by default:
+  `workspace-write` is the published/sample posture, while Yolo requires an
+  explicit CLI, environment, or ignored operator-local selection and is
+  snapshotted in launch evidence.
+- Keeps release verification's Codex status evidence inside each release run
+  rather than replacing the shared operator status file.
+- Treats idle Manager Mode and attached direct work as healthy while blocking
+  stale writers and attached complex turns with missing or unresolved lanes.
+- States the supported boundary precisely: Qwendex standalone CLI functions,
+  checks, routing, receipts, and Off-mode recovery work with stock Codex.
+  Enforced Heavy and Manager guarantees require the supported canonical patch.
 
 - Adds immutable, side-by-side Qwendex runtime generations with validated
   source/hook/Codex-binary/config contracts, atomic activation for new

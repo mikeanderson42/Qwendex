@@ -14,9 +14,9 @@ git switch --detach <published-release-tag>
 git status --short
 ```
 
-`v0.6.0-rc.1` is candidate metadata in this checkout, not a published tag.
-Use its source commit only for candidate validation until a separate release
-operation publishes the tag.
+The annotated `v0.6.0-rc.1` tag is the publication boundary for this
+prerelease. Untagged source is candidate material until the release operation
+creates and pushes that tag.
 
 Stop if `git status --short` prints unexpected files. Install the
 release-compatible dependencies, create isolated runtime wiring, and load the

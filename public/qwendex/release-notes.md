@@ -4,7 +4,21 @@
 
 ## 0.6.0-rc.1
 
-Candidate metadata only; this checkout is not a published tag.
+The annotated `v0.6.0-rc.1` tag and GitHub prerelease are created after the
+source-bound release gates and CI attestation pass; untagged source remains
+candidate material.
+
+- Made Qdex permission mode a published, schema-validated `workspace-write`
+  default with explicit CLI, environment, and ignored operator-local Yolo
+  overrides. Launch receipts snapshot the resolved mode and source; invalid
+  explicit overrides fail before Codex starts.
+- Made release verification's Codex status evidence run-scoped, so strict
+  release checks cannot overwrite an operator's shared live status file.
+- Made idle Manager Mode healthy standby and attached direct work healthy;
+  missing/unresolved required lanes and stale writers now block consistently.
+- Clarified the product boundary: Qwendex standalone CLI functions, checks,
+  routing, receipts, and Off-mode recovery work with stock Codex. Enforced
+  Heavy and Manager guarantees require the supported canonical patch.
 
 - Added immutable runtime generations that bind Qwendex source, hooks, Codex
   patch and binary pair, config/schema, and state schema. Activation affects

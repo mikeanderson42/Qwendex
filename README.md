@@ -102,8 +102,9 @@ git fetch --tags origin
 git switch --detach <published-release-tag>
 ```
 
-The `v0.6.0-rc.1` name in this checkout is candidate metadata only. It is not
-a published tag until a separate release operation creates and pushes it.
+The annotated `v0.6.0-rc.1` tag is the publication boundary for this
+prerelease; untagged source remains candidate material until the release gates
+create and push that tag.
 
 Qwendex is currently distributed as source; GitHub source archives and the
 matching git tag are the release artifact. It does not install as a Python or
@@ -254,8 +255,9 @@ subprocess env exports, and root/child management tool-surface metadata. See
 
 ## Codex TUI Integration
 
-Qwendex works without patching Codex. The native footer and hotkeys require a
-small source patch against a supported Codex checkout.
+Qwendex standalone CLI functions, checks, routing, receipts, and Off-mode
+recovery work with stock Codex. Enforced Heavy and Manager guarantees require
+the supported canonical patch.
 
 The runtime contract is:
 
@@ -348,10 +350,11 @@ claims require GPT/Codex review and the appropriate Qwendex verification tier.
 
 ## Current Release / Known Limits
 
-This checkout is seeded as `v0.6.0-rc.1`. Its source-bound
-Manager production validation summary is generated only after the offline,
-live, self-hosting, fresh-install, upgrade, rollback, and release tiers pass;
-the candidate is not a published tag until the separate publication goal.
+This checkout is seeded as `v0.6.0-rc.1` and prepares that prerelease. Its
+source-bound Manager production validation summary is generated only after the
+offline, live, self-hosting, fresh-install, upgrade, rollback, and release
+tiers pass. The annotated tag and GitHub prerelease are created only after the
+publication gates pass.
 
 Known limits:
 
