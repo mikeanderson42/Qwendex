@@ -55,6 +55,14 @@ Reason: SQLite may checkpoint after a controlled arm closes. Hashing that
 mutable state makes an otherwise complete evidence set nondeterministic without
 adding a public claim or a stable verification input.
 
+Update: controlled search-evidence environment locks explicitly record Codex as
+`not_required_controlled_runner` when no runtime is installed. Live-agent
+evidence still requires an available, digest-bound Codex runtime.
+
+Reason: controlled pairing exercises deterministic retrieval, isolation, and
+receipt integrity without launching Codex. Requiring a runtime there would make
+the portable CI evidence contract depend on an unrelated host install.
+
 ## Search Evidence Compaction V2 Recall Contract
 
 Decision: retain `search_evidence_compaction_v2` as an explicit, default-off

@@ -2229,6 +2229,8 @@ def _run_baseline_task(
 
 
 def _environment_lock(payload: Mapping[str, Any], manifest_path: Path) -> dict[str, Any]:
+    execution_mode = str(payload.get("execution_mode") or "")
+    runtime_required = execution_mode == LIVE_EXECUTION_MODE
     repositories = []
     for repository in payload.get("repositories", []):
         if isinstance(repository, Mapping):
@@ -2275,6 +2277,14 @@ def _environment_lock(payload: Mapping[str, Any], manifest_path: Path) -> dict[s
                 runtime_version = version_text[0][:240]
         except (OSError, subprocess.TimeoutExpired):
             runtime_version = "unavailable"
+    runtime_available = runtime_version not in {"", "not_observed", "unavailable"} and runtime_digest.startswith("sha256:")
+    runtime_availability = (
+        "available"
+        if runtime_available
+        else "unavailable_required_live_runner"
+        if runtime_required
+        else "not_required_controlled_runner"
+    )
     config = REPOSITORY_ROOT / "config" / "qwendex" / "qwendex.json"
     return {
         "schema_version": "qwendex.optimization_lab.environment_lock.v1",
@@ -2283,7 +2293,12 @@ def _environment_lock(payload: Mapping[str, Any], manifest_path: Path) -> dict[s
         "sources": repositories,
         "qwendex_commit": qwendex_commit,
         "qwendex_tree_digest": "git:" + qwendex_tree if qwendex_tree != "not_observed" else "not_observed",
-        "codex_runtime": {"version": runtime_version, "digest": runtime_digest},
+        "codex_runtime": {
+            "required": runtime_required,
+            "availability": runtime_availability,
+            "version": runtime_version,
+            "digest": runtime_digest,
+        },
         "model_policy": dict(payload.get("model_policy", {})),
         "candidate_mode": "baseline_raw_ripgrep",
         "workload_manifest_digest": "sha256:" + sha256_file(manifest_path),
@@ -5057,13 +5072,31 @@ def compare_run(run_dir: Path | str) -> dict[str, Any]:
         schema_failures.append("manifest.json")
     environment_lock = parsed_json.get("02_environment_lock.json", {})
     runtime_lock = environment_lock.get("codex_runtime", {}) if isinstance(environment_lock, Mapping) else {}
+    runtime_version = str(runtime_lock.get("version") or "") if isinstance(runtime_lock, Mapping) else ""
+    runtime_digest = str(runtime_lock.get("digest") or "") if isinstance(runtime_lock, Mapping) else ""
+    runtime_available = runtime_version not in {"", "not_observed", "unavailable"} and runtime_digest.startswith("sha256:")
+    runtime_contract_valid = (
+        isinstance(runtime_lock, Mapping)
+        and runtime_lock.get("required") is is_live
+        and (
+            (is_live and runtime_lock.get("availability") == "available" and runtime_available)
+            or (
+                not is_live
+                and (
+                    (runtime_lock.get("availability") == "available" and runtime_available)
+                    or (
+                        runtime_lock.get("availability") == "not_required_controlled_runner"
+                        and not runtime_available
+                    )
+                )
+            )
+        )
+    )
     if (
         not isinstance(environment_lock, Mapping)
         or not str(environment_lock.get("started_at") or "")
         or not str(environment_lock.get("completed_at") or "")
-        or not isinstance(runtime_lock, Mapping)
-        or str(runtime_lock.get("version") or "") in {"", "not_observed", "unavailable"}
-        or str(runtime_lock.get("digest") or "") in {"", "not_observed"}
+        or not runtime_contract_valid
     ):
         schema_failures.append("02_environment_lock.json")
     digest_line = (root / "04_workload_manifest.sha256").read_text(encoding="utf-8").strip().split()

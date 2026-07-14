@@ -468,8 +468,8 @@ def test_paired_run_isolated_and_compare_validates_artifacts(tmp_path: Path) -> 
     assert compared["status"] == "pass", compared
     assert environment["started_at"]
     assert environment["completed_at"]
-    assert environment["codex_runtime"]["version"]
-    assert environment["codex_runtime"]["digest"].startswith("sha256:")
+    assert environment["codex_runtime"]["required"] is False
+    assert environment["codex_runtime"]["availability"] in {"available", "not_required_controlled_runner"}
     assert performance["time_to_first_relevant_file_ms"] == "not_observed_controlled_runner"
     assert set(performance["telemetry_instrumentation_overhead_ms"]) == {"p50", "p95"}
 
@@ -488,6 +488,25 @@ def test_v2_paired_run_validates_cursor_coverage_contract(tmp_path: Path) -> Non
     assert gate["hard_gates"]["v2_cursor_coverage_contract"] == "pass"
     assert all(row["candidate_id"] == "search_evidence_compaction_v2" for row in rows)
     assert all(row["retrieval_contract"]["cursor_contract_complete"] for row in rows)
+
+
+def test_controlled_environment_lock_allows_missing_codex_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    lab = load_module("qwendex_optimization_lab")
+    repository, commit, tree = make_repository(tmp_path)
+    manifest = write_full_manifest(tmp_path, repository, commit, tree)
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+
+    monkeypatch.delenv("QWENDEX_CODEX_RUNTIME", raising=False)
+    monkeypatch.delenv("QWENDEX_DEV_CODEX_BIN", raising=False)
+    monkeypatch.setattr(lab.shutil, "which", lambda _name: None)
+    runtime_lock = lab._environment_lock(payload, manifest)["codex_runtime"]
+
+    assert runtime_lock == {
+        "required": False,
+        "availability": "not_required_controlled_runner",
+        "version": "not_observed",
+        "digest": "not_observed",
+    }
 
 
 def test_live_workload_schema_and_trace_summary_are_private_metadata_only(tmp_path: Path) -> None:
@@ -512,6 +531,7 @@ def test_live_workload_schema_and_trace_summary_are_private_metadata_only(tmp_pa
     manifest.write_text(json.dumps(payload), encoding="utf-8")
 
     validated = lab.validate_workload(manifest)
+    runtime_lock = lab._environment_lock(payload, manifest)["codex_runtime"]
     events = tmp_path / "events.jsonl"
     events.write_text(
         "\n".join(
@@ -527,6 +547,7 @@ def test_live_workload_schema_and_trace_summary_are_private_metadata_only(tmp_pa
     trace = lab._live_trace_summary(events)
 
     assert validated["status"] == "pass"
+    assert runtime_lock["required"] is True
     assert trace["candidate_adopted"] is True
     assert trace["candidate_search_calls"] == 1
     assert trace["validation_tool_calls"] == 1
