@@ -67,7 +67,7 @@ Manager routing is per lane. The main Codex session keeps the user's selected
 model and reasoning. Low-risk bounded lanes may use local Qwen; high-risk lanes
 escalate to GPT/Codex authority.
 
-Qwendex `0.6.0-rc.1` installs validated runtime generations side by side. Each
+Qwendex `0.6.0-rc.2` installs validated runtime generations side by side. Each
 Qdex process is pinned to one immutable source/hook/binary/config contract;
 activation affects only new sessions, and shell recovery can restore the prior
 known-good generation without invoking Qdex. Stock Codex supports Qwendex's
@@ -102,7 +102,7 @@ git fetch --tags origin
 git switch --detach <published-release-tag>
 ```
 
-The annotated `v0.6.0-rc.1` tag is the publication boundary for this
+The annotated `v0.6.0-rc.2` tag is the publication boundary for this
 prerelease; untagged source remains candidate material until the release gates
 create and push that tag.
 
@@ -350,7 +350,7 @@ claims require GPT/Codex review and the appropriate Qwendex verification tier.
 
 ## Current Release / Known Limits
 
-This checkout is seeded as `v0.6.0-rc.1` and prepares that prerelease. Its
+This checkout is seeded as `v0.6.0-rc.2` and prepares that corrective prerelease. Its
 source-bound Manager production validation summary is generated only after the
 offline, live, self-hosting, fresh-install, upgrade, rollback, and release
 tiers pass. The annotated tag and GitHub prerelease are created only after the

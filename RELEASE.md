@@ -1,3 +1,20 @@
+# v0.6.0-rc.2
+
+Corrective Agent Manager prerelease. It preserves immutable
+`v0.6.0-rc.1` publication history while correcting the published Qdex
+permission-mode contract.
+
+- Declares `workspace-write` as the JSON Schema default for
+  `qdex.permission_mode` and keeps it as the public/sample configuration
+  default and hard fallback.
+- Corrects public Qdex launch wording: only an explicit CLI, environment, or
+  ignored operator-local selection enables Yolo and adds Codex's bypass flag.
+- Preserves Mike's ignored operator-local Yolo preference without copying it
+  into runtime generations, receipts, or release artifacts.
+- Retains the run-scoped release-status isolation, healthy Manager standby
+  semantics, and stock-Codex versus patched-Manager support boundary from rc.1.
+- Does not rewrite, move, or delete `v0.6.0-rc.1`.
+
 # v0.6.0-rc.1
 
 Manager production-hardened prerelease. The annotated `v0.6.0-rc.1` tag and

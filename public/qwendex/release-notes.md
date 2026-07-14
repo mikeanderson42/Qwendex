@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## 0.6.0-rc.2
+
+`v0.6.0-rc.2` is a corrective prerelease; the published `v0.6.0-rc.1` tag
+remains immutable.
+
+- Corrected the public Qdex permission-mode contract. `workspace-write` is the
+  schema, published-config, and hard-fallback default; only an explicit CLI,
+  environment, or ignored operator-local setting selects Yolo.
+- Corrected the public launch wording and the legacy dry-run fallback so
+  `workspace-write` never silently reports or appends Yolo's bypass flag.
+- Preserved Mike's ignored operator-local Yolo configuration and the existing
+  source/runtime/artifact boundary that keeps it out of public material.
+- Retained rc.1's run-scoped release status, healthy Manager standby/direct-work
+  wording, and the precise stock-Codex versus patched-Manager support boundary.
+
 ## 0.6.0-rc.1
 
 The annotated `v0.6.0-rc.1` tag and GitHub prerelease are created after the

@@ -874,3 +874,16 @@ final-state verification without weakening the verifier gate or duplicating a
 lane. The native no-running-agent check closes the control-flow hole at the
 runtime boundary while retaining the sealed 10/30/60-second Manager wait
 budget.
+
+## Corrective Rc.2 Publication Boundary
+
+Decision: publish `v0.6.0-rc.2` as an immutable successor to the already
+published `v0.6.0-rc.1` tag. Rc.2 corrects the public Qdex permission default
+metadata, wording, and defensive dry-run fallback while retaining the
+workspace-write default, explicit operator-local Yolo opt-in, release-status
+isolation, Manager standby semantics, and stock-Codex support boundary.
+
+Reason: the rc.1 runtime behavior was correct and source-bound release gates
+passed, but post-publication audit found a missing schema default and a
+contradictory configuration-guide sentence. A successor tag preserves public
+history and supplies a complete source artifact without force-moving rc.1.

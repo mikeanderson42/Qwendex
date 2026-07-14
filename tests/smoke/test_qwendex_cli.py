@@ -317,7 +317,7 @@ def test_qwendex_version_and_config_are_in_sync():
     sample_config = json.loads((ROOT / "config" / "qwendex" / "qwendex.sample.json").read_text(encoding="utf-8"))
     version = json_result("version", "--json")
 
-    assert qwendex.VERSION == "0.6.0-rc.1"
+    assert qwendex.VERSION == "0.6.0-rc.2"
     assert version["data"]["version"] == qwendex.VERSION
     assert project_config["version"] == qwendex.VERSION
     assert sample_config["version"] == qwendex.VERSION
@@ -1881,7 +1881,7 @@ def assert_same_root_supports_quoted_path(tmp_path, path_fragment):
 
     assert config["projects"] == {str(checkout): {"trust_level": "trusted"}}
     assert qwendex.returncode == 0, qwendex.stderr or qwendex.stdout
-    assert json.loads(qwendex.stdout)["data"]["version"] == "0.6.0-rc.1"
+    assert json.loads(qwendex.stdout)["data"]["version"] == "0.6.0-rc.2"
     assert qwendex_dev.returncode == 0, qwendex_dev.stderr or qwendex_dev.stdout
     assert sourced_env.returncode == 0, sourced_env.stderr or sourced_env.stdout
     assert sourced_env.stdout.strip() == str(checkout)
