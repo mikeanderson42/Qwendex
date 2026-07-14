@@ -360,6 +360,50 @@ def test_install_acceptance_treats_empty_manager_standby_as_healthy():
             install.require_healthy_manager_status(invalid, "upgraded Manager status")
 
 
+def test_live_invariants_resolve_failed_worker_with_visible_waiver_without_hiding_duplicates():
+    live_path = ROOT / "scripts" / "qwendex_manager_live.py"
+    spec = importlib.util.spec_from_file_location("qwendex_manager_live_invariant_test", live_path)
+    assert spec is not None and spec.loader is not None
+    live = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(live)
+
+    waived_lane = {
+        "repository_alias": "manager-ultra",
+        "task_id": "verify-task",
+        "lane": "verification",
+        "required": True,
+    }
+    state = {
+        "decisions": [],
+        "agents": [
+            {**waived_lane, "agent_id": "verifier", "status": "failed"},
+            {**waived_lane, "agent_id": "waiver-receipt", "status": "waived"},
+        ],
+    }
+    summary = live.invariant_summary(state, [])
+    assert summary["duplicate_equivalent_lanes"] == 0
+    assert summary["unresolved_required_lanes_at_finalization"] == 0
+    assert summary["required_lane_count"] == 1
+    assert summary["required_lane_completed_count"] == 1
+    assert summary["waived_required_lane_count"] == 1
+    assert summary["required_lane_completion_rate"] == 1.0
+
+    state["agents"].extend(
+        [
+            {
+                "repository_alias": "manager-heavy",
+                "task_id": "review-task",
+                "lane": "review",
+                "required": False,
+                "agent_id": agent_id,
+                "status": "completed",
+            }
+            for agent_id in ("reviewer-a", "reviewer-b")
+        ]
+    )
+    assert live.invariant_summary(state, [])["duplicate_equivalent_lanes"] == 1
+
+
 def test_manager_acceptance_pytest_environment_drops_parent_generation_binding():
     acceptance_path = ROOT / "scripts" / "qwendex_manager_acceptance.py"
     spec = importlib.util.spec_from_file_location("qwendex_manager_pytest_environment_test", acceptance_path)

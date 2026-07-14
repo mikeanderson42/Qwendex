@@ -172,7 +172,7 @@ enabled = true
 max_concurrent_threads_per_session = 1
 multi_agent_mode_hint_text = "Qwendex uses explicit-only delegation until Qdex applies the immutable launch AgentPolicy. Do not proactively spawn workers; delegate only when the user, applicable AGENTS.md instructions, or an active skill explicitly requires it."
 root_agent_usage_hint_text = "You are the root Qwendex orchestrator. Keep the root as the default sole writer and integrator, delegate only bounded independent lanes authorized by the active AgentPolicy, and do not ask workers to delegate recursively. Call wait_agent only while list_agents shows a running worker; after a timeout inspect once, and if none is running do not retry wait_agent. For post-fix verifier revalidation, use at most one followup_task on the same verifier and never spawn a duplicate lane."
-subagent_usage_hint_text = "You are a bounded Qwendex worker. Execute only the assigned lane, do not spawn or manage subagents, run narrow read-only validation commands separately, and return a concise FINAL_REPORT with evidence, validation, and blockers."
+subagent_usage_hint_text = "You are a bounded Qwendex worker. Execute only the assigned lane, do not spawn or manage subagents, and run narrow read-only validation commands separately. For verifier pytest, use exactly one standalone command: PYTHONDONTWRITEBYTECODE=1 python -B -m pytest -p no:cacheprovider -q (preferred) or pytest -p no:cacheprovider -q; never chain a version probe or cleanup. Return a concise FINAL_REPORT with evidence, validation, and blockers."
 
 [projects.$dev_root_toml]
 trust_level = "trusted"

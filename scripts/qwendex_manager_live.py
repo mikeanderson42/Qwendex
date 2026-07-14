@@ -376,30 +376,43 @@ def state_summary(state_db: Path, repo_aliases: Mapping[str, str]) -> dict[str, 
 def invariant_summary(state: Mapping[str, Any], sessions: list[dict[str, Any]]) -> dict[str, Any]:
     decisions = list(state.get("decisions") or [])
     agents = list(state.get("agents") or [])
-    groups: dict[tuple[str, str, str], int] = {}
+    groups: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
     for agent in agents:
         key = (str(agent.get("repository_alias")), str(agent.get("task_id")), str(agent.get("lane")))
-        groups[key] = groups.get(key, 0) + 1
-    duplicate_lanes = sum(max(0, count - 1) for count in groups.values())
-    unresolved_required = [
-        agent
-        for agent in agents
-        if agent.get("required") and agent.get("status") not in {"completed", "waived", "closed"}
+        groups.setdefault(key, []).append(agent)
+    duplicate_lanes = sum(
+        max(0, sum(str(agent.get("status") or "") != "waived" for agent in group) - 1)
+        for group in groups.values()
+    )
+    required_groups = [
+        group for group in groups.values() if any(agent.get("required") for agent in group)
+    ]
+    resolved_required_groups = [
+        group
+        for group in required_groups
+        if any(
+            str(agent.get("status") or "") in {"completed", "waived", "closed"}
+            for agent in group
+        )
+    ]
+    waived_required_groups = [
+        group
+        for group in required_groups
+        if any(str(agent.get("status") or "") == "waived" for agent in group)
     ]
     orphaned = [agent for agent in agents if agent.get("status") in {"active", "reserved", "stale"}]
-    required = [agent for agent in agents if agent.get("required")]
-    required_completed = [agent for agent in required if agent.get("status") in {"completed", "waived", "closed"}]
     return {
         "prompt_known_failures": sum(1 for item in decisions if not item.get("prompt_known")),
         "prompt_admission_failures": sum(1 for item in decisions if item.get("admission_error_code")),
         "duplicate_equivalent_lanes": duplicate_lanes,
-        "unresolved_required_lanes_at_finalization": len(unresolved_required),
+        "unresolved_required_lanes_at_finalization": len(required_groups) - len(resolved_required_groups),
         "orphaned_active_sessions_after_cleanup": len(orphaned),
         "unbounded_waits_or_closes": sum(1 for item in sessions if item.get("timed_out")),
         "policy_mutations_of_active_sessions": sum(1 for item in decisions if item.get("policy_drift")),
-        "required_lane_count": len(required),
-        "required_lane_completed_count": len(required_completed),
-        "required_lane_completion_rate": round(len(required_completed) / len(required), 6) if required else 1.0,
+        "required_lane_count": len(required_groups),
+        "required_lane_completed_count": len(resolved_required_groups),
+        "waived_required_lane_count": len(waived_required_groups),
+        "required_lane_completion_rate": round(len(resolved_required_groups) / len(required_groups), 6) if required_groups else 1.0,
         "manager_decision_count": len(decisions),
         "manager_closed_count": sum(1 for item in decisions if item.get("final_status") == "closed"),
     }

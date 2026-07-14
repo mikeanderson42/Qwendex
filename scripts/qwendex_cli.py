@@ -7913,6 +7913,7 @@ def subagent_start_context(
         f"{assignment}{output_sentence} "
         "Do not merely acknowledge or stand by. Do not spawn subagents. "
         "Run read-only validation commands separately in the narrow canonical form allowed by your lane, and classify any blocked diagnostic explicitly. "
+        "For verifier pytest, use exactly one standalone command: PYTHONDONTWRITEBYTECODE=1 python -B -m pytest -p no:cacheprovider -q (preferred) or pytest -p no:cacheprovider -q; never chain a version probe or cleanup. "
         "The final response must contain a line exactly FINAL_REPORT with no colon; if completion is impossible, use a line exactly BLOCKED or FAILED and put evidence on following lines. Required FINAL_REPORT fields: "
         "status, validation_status (PASS or FAIL after classifying any non-blocking diagnostic), agent_id, task_name, summary, files_inspected, files_changed, "
         "commands_run, evidence, artifacts, blockers, remaining_risk, next_recommended_action."
@@ -8930,28 +8931,38 @@ def read_only_sed_command_allowed(tokens: list[str]) -> bool:
 
 
 def read_only_verification_segment_allowed(tokens: list[str]) -> bool:
-    command = tokens[0]
+    validation_tokens = list(tokens)
+    if validation_tokens[0] == "PYTHONDONTWRITEBYTECODE=1":
+        validation_tokens = validation_tokens[1:]
+    if not validation_tokens:
+        return False
+    command = validation_tokens[0]
+    if "/" in command or shell_assignment_name(command):
+        return False
     if command in {"pytest", "py.test"}:
         return not any(
             token == "--cache-clear"
             or token.startswith(("--basetemp=", "--rootdir="))
-            for token in tokens[1:]
+            for token in validation_tokens[1:]
         )
     if token_is_python_command(command):
-        return len(tokens) >= 3 and tokens[1:3] == ["-m", "pytest"] and not any(
+        python_args = validation_tokens[1:]
+        if python_args[:1] == ["-B"]:
+            python_args = python_args[1:]
+        return len(python_args) >= 2 and python_args[:2] == ["-m", "pytest"] and not any(
             token == "--cache-clear"
             or token.startswith(("--basetemp=", "--rootdir="))
-            for token in tokens[3:]
+            for token in python_args[2:]
         )
     return False
 
 
 def read_only_segment_allowed(tokens: list[str], *, allow_validation: bool = False) -> bool:
     command = tokens[0]
-    if "/" in command or shell_assignment_name(command):
-        return False
     if allow_validation and read_only_verification_segment_allowed(tokens):
         return True
+    if "/" in command or shell_assignment_name(command):
+        return False
     if token_is_python_command(command):
         return len(tokens) == 2 and tokens[1] in {"-V", "-VV", "--version"}
     if command == "true":

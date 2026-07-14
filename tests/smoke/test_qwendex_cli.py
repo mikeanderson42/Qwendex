@@ -5999,6 +5999,28 @@ def test_qwendex_read_only_shell_gate_is_fail_closed_and_quote_aware(tmp_path):
         "python3 -m pytest -q",
         allow_validation=True,
     )
+    for command in (
+        "python -B -m pytest -p no:cacheprovider -q",
+        "PYTHONDONTWRITEBYTECODE=1 python -B -m pytest -p no:cacheprovider -q",
+        "PYTHONDONTWRITEBYTECODE=1 pytest -p no:cacheprovider -q",
+    ):
+        assert qwendex.read_only_shell_command_allowed(command, allow_validation=True), command
+        assert qwendex.pre_tool_gate(
+            {},
+            {"tool_name": "exec_command", "profile": "verifier", "command": command},
+            {},
+        ) == {}, command
+    for command in (
+        "PYTHONDONTWRITEBYTECODE=0 python -B -m pytest -q",
+        "FOO=1 python -B -m pytest -q",
+        "PYTHONDONTWRITEBYTECODE=1 FOO=1 python -B -m pytest -q",
+        "PYTHONDONTWRITEBYTECODE=1 /usr/bin/python -B -m pytest -q",
+        "python -E -m pytest -q",
+        "python -B -B -m pytest -q",
+        "python -B -m pytest --cache-clear",
+        "python -B -m pytest --basetemp=generated",
+    ):
+        assert not qwendex.read_only_shell_command_allowed(command, allow_validation=True), command
     assert qwendex.pre_tool_gate(
         {},
         {"tool_name": "exec_command", "profile": "verifier", "command": "pytest -q"},
@@ -6355,6 +6377,8 @@ def test_qwendex_manager_assign_generates_context_packet_and_routing(tmp_path):
     subagent_context = subagent["data"]["hook_result"]["hookSpecificOutput"]["additionalContext"]
     assert "gpt-5.5" not in subagent_context
     assert "reasoning=high" in subagent_context or "reasoning=xhigh" in subagent_context
+    assert "PYTHONDONTWRITEBYTECODE=1 python -B -m pytest" in subagent_context
+    assert "never chain a version probe or cleanup" in subagent_context
 
     status = json_result("manager", "status", "--json", env=env)
     assert status["data"]["active_subagents"]["count"] == 1

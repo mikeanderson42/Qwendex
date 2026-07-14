@@ -228,6 +228,7 @@ def test_qdex_dry_run_wires_agent_policy_into_supported_v2_config(
     assert "default sole writer" in root_hint
     assert "Do not ask workers to delegate recursively" in root_hint
     assert "do not spawn or manage subagents" in subagent_hint
+    assert "PYTHONDONTWRITEBYTECODE=1 python -B -m pytest" in subagent_hint
     assert not any("gpt-" in hint.lower() for hint in (mode_hint, root_hint, subagent_hint))
     caller_args = ["-C", str(repo), "--model", "selected-model", "--search"]
     caller_start = command.index("-C")
@@ -403,6 +404,9 @@ def test_qdex_preserves_native_ultra_proactive_mode_without_weakening_qwendex_po
     assert "Run read-only validation commands separately" in str(
         overrides["features.multi_agent_v2.subagent_usage_hint_text"]
     )
+    assert "never chain a version probe or cleanup" in str(
+        overrides["features.multi_agent_v2.subagent_usage_hint_text"]
+    )
 
 
 def test_qdex_last_reasoning_override_controls_ultra_coexistence(tmp_path: Path) -> None:
@@ -520,6 +524,7 @@ def test_generated_codex_config_has_safe_v2_baseline(tmp_path: Path) -> None:
     assert "do not retry wait_agent" in v2["root_agent_usage_hint_text"]
     assert "followup_task" in v2["root_agent_usage_hint_text"]
     assert "do not spawn or manage subagents" in v2["subagent_usage_hint_text"]
+    assert "PYTHONDONTWRITEBYTECODE=1 python -B -m pytest" in v2["subagent_usage_hint_text"]
     guidance = " ".join(
         v2[key]
         for key in (
