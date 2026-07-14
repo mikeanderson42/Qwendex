@@ -2320,6 +2320,9 @@ def _artifact_manifest(run_dir: Path) -> dict[str, Any]:
         if item.is_file()
         and item.name != "manifest.json"
         and item.name != "auth.json"
+        # SQLite state may checkpoint after an arm closes. The sealed JSON/CSV
+        # receipts are the durable evidence; mutable local databases are not.
+        and item.suffix != ".sqlite"
         and not item.name.endswith(("-shm", "-wal"))
     ):
         entries.append(

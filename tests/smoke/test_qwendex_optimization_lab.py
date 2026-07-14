@@ -447,6 +447,10 @@ def test_paired_run_isolated_and_compare_validates_artifacts(tmp_path: Path) -> 
 
     paired = lab.paired_run(manifest, candidate_id="search_evidence_compaction_v1", output_root=tmp_path / "paired-artifacts")
     artifact_dir = Path(paired["data"]["artifact_dir"])
+    artifact_manifest = json.loads((artifact_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert not any(Path(item["path"]).suffix == ".sqlite" for item in artifact_manifest["artifacts"])
+    mutable_state = next((artifact_dir / "isolation").glob("**/qwendex.sqlite"))
+    mutable_state.write_bytes(mutable_state.read_bytes() + b"\n")
     compared = lab.compare_run(artifact_dir)
     gate = json.loads((artifact_dir / "14_gate_decision.json").read_text(encoding="utf-8"))
     environment = json.loads((artifact_dir / "02_environment_lock.json").read_text(encoding="utf-8"))

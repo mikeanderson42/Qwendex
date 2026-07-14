@@ -47,6 +47,14 @@ cost. Separating the candidate from normal search behavior retains a reversible
 experimental boundary while reproducible gates establish the next measured
 frontier.
 
+Update: sealed paired-evaluation manifests exclude mutable local SQLite state
+and telemetry databases. Their durable JSON/CSV receipts remain covered, while
+the databases stay ignored local implementation detail.
+
+Reason: SQLite may checkpoint after a controlled arm closes. Hashing that
+mutable state makes an otherwise complete evidence set nondeterministic without
+adding a public claim or a stable verification input.
+
 ## Search Evidence Compaction V2 Recall Contract
 
 Decision: retain `search_evidence_compaction_v2` as an explicit, default-off
