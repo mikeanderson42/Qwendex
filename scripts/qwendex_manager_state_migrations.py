@@ -15,7 +15,8 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_TESTS = {
-    "test_state_schema_v2_migration_is_backed_up_transactional_and_idempotent",
+    "test_state_schema_v3_migration_is_backed_up_transactional_and_idempotent",
+    "test_state_schema_v2_upgrade_adds_qdex_permission_columns",
     "test_interrupted_state_migration_rolls_back_and_preserves_recovery_receipts",
     "test_corrupt_state_fails_closed_without_reinitializing_operator_data",
     "test_manager_evidence_distinguishes_current_history_debt_stale_and_quarantine",
@@ -52,7 +53,7 @@ def evaluate(run_id: str, junit: Path) -> dict[str, Any]:
     version_match = re.search(r"^STATE_SCHEMA_VERSION\s*=\s*(\d+)", source_text, re.MULTILINE)
     state_schema_version = int(version_match.group(1)) if version_match else 0
     static_contract = {
-        "schema_version_declared": state_schema_version == 2,
+        "schema_version_declared": state_schema_version == 3,
         "sqlite_user_version_used": "PRAGMA user_version" in source_text,
         "transactional_begin_immediate_used": "BEGIN IMMEDIATE" in source_text,
         "pre_migration_backup_used": "backup_state_for_migration" in source_text and "conn.backup(" in source_text,
@@ -64,7 +65,8 @@ def evaluate(run_id: str, junit: Path) -> dict[str, Any]:
         "failure_receipt_written": "migration-failed-" in source_text,
     }
     migration_results = {
-        "legacy_v0_to_v2": "pass",
+        "legacy_v0_to_v3": "pass",
+        "legacy_v2_to_v3_qdex_permission_columns": "pass",
         "pre_migration_backup": "pass",
         "transactional_rollback": "pass",
         "interrupted_migration_retry": "pass",
@@ -77,7 +79,7 @@ def evaluate(run_id: str, junit: Path) -> dict[str, Any]:
         "repository_scoped_public_ids_preserved": "pass",
         "receipt_digest_validation_preserved": "pass",
     }
-    passed = not missing_tests and all(static_contract.values()) and state_schema_version == 2
+    passed = not missing_tests and all(static_contract.values()) and state_schema_version == 3
     return {
         "schema_version": "qwendex.manager_state_migration_summary.v1",
         "run_id": run_id,
@@ -101,7 +103,7 @@ def evaluate(run_id: str, junit: Path) -> dict[str, Any]:
         ],
         "state_schema": {
             "current_version": state_schema_version,
-            "supported_upgrade_from": [0, 1],
+            "supported_upgrade_from": [0, 1, 2],
             "migration_mode": "transactional_with_pre_migration_sqlite_backup",
             "journal_mode": "WAL",
             "busy_timeout_ms": 2000,

@@ -887,3 +887,34 @@ Reason: the rc.1 runtime behavior was correct and source-bound release gates
 passed, but post-publication audit found a missing schema default and a
 contradictory configuration-guide sentence. A successor tag preserves public
 history and supplies a complete source artifact without force-moving rc.1.
+
+## Manager State Schema v3 Permission Provenance
+
+Decision: Manager state schema v3 records Qdex permission mode and source on
+each decision. The version advances from v2 so existing databases receive the
+additive columns transactionally, with the standard SQLite backup before the
+first migration. Immutable runtime manifests bind the same state-schema
+version as the embedded CLI.
+
+Reason: permission provenance was added to Manager decision writes without a
+schema-version advance. A database already marked v2 could therefore pass
+status and dry preflight yet fail a normal Qdex launch on the missing column.
+Versioning the additive migration and sealing the matching version into the
+runtime generation keeps live launch, dry-run, and upgrade behavior aligned.
+
+## Codex 0.144.4 Canonical Patch Contract
+
+Decision: Qwendex supports Codex `0.144.4` through the official
+`rust-v0.144.4` source commit, the unchanged verified source-patch footprint,
+and release-pinned full-index patch and normalized Cargo.lock digests. The
+Qwendex release advances to `0.6.0-rc.3` and retains the existing stock-Codex
+Off-mode boundary.
+
+Reason: the supported version must bind the actual source, patch, lockfile,
+binary, installer, and public compatibility claim. Source preflight confirmed
+the existing patch anchors and replacements apply cleanly to `0.144.4`; the
+new digests make a later changed checkout or source patch fail closed rather
+than silently claiming compatibility. Direct CLI smoke fixtures also remove
+launch-snapshotted Qdex permission values from their inherited environment, so
+the release contract is tested against its published configuration unless a
+fixture explicitly supplies an override.

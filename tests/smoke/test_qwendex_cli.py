@@ -25,6 +25,8 @@ _AMBIENT_QWENDEX_RUNTIME_KEYS = {
     "QWENDEX_LOCAL_SUBAGENTS",
     "QWENDEX_ORCHESTRATION_MODE",
     "QWENDEX_OUTPUT_POLICY",
+    "QWENDEX_QDEX_PERMISSION_MODE",
+    "QWENDEX_QDEX_PERMISSION_SOURCE",
     "QWENDEX_RUN_ID",
 }
 
@@ -317,7 +319,7 @@ def test_qwendex_version_and_config_are_in_sync():
     sample_config = json.loads((ROOT / "config" / "qwendex" / "qwendex.sample.json").read_text(encoding="utf-8"))
     version = json_result("version", "--json")
 
-    assert qwendex.VERSION == "0.6.0-rc.2"
+    assert qwendex.VERSION == "0.6.0-rc.3"
     assert version["data"]["version"] == qwendex.VERSION
     assert project_config["version"] == qwendex.VERSION
     assert sample_config["version"] == qwendex.VERSION
@@ -952,7 +954,7 @@ def test_qwendex_dev_env_public_surface_is_visible_and_isolated():
     assert dependencies["schema_version"] == "qwendex.dependencies.v1"
     assert {"bash", "python3", "git", "rsync", "curl", "codex"} <= set(dependencies["required_commands"])
     assert {"pytest", "ruff"} <= set(dependencies["validation_python_modules"])
-    assert 'QWENDEX_CODEX_REQUIRED_VERSION:-0.144.0' in installer_text
+    assert 'QWENDEX_CODEX_REQUIRED_VERSION:-0.144.4' in installer_text
     assert 'QWENDEX_CODEX_NPM_SPEC:-@openai/codex@$QWENDEX_CODEX_REQUIRED_VERSION' in installer_text
     assert 'npm install -g --prefix "$HOME/.local" "$codex_npm_spec"' in installer_text
     assert '"pytest==$QWENDEX_PYTEST_REQUIRED_VERSION"' in installer_text
@@ -1124,12 +1126,12 @@ def test_qwendex_install_deps_check_rejects_wrong_executable_codex(tmp_path):
     assert result.returncode == 1, result.stderr or result.stdout
     payload = json.loads(result.stdout)
     assert payload["status"] == "blocked"
-    assert payload["required_codex_version"] == "0.144.0"
+    assert payload["required_codex_version"] == "0.144.4"
     assert payload["codex_compatible"] is False
     assert payload["tools"]["codex"]["path"] == str(fake_codex)
     assert payload["tools"]["codex"]["version"] == "codex-cli 9.9.9"
     assert payload["incompatible_required"] == [
-        "codex version 'codex-cli 9.9.9' does not match required 'codex-cli 0.144.0'"
+        "codex version 'codex-cli 9.9.9' does not match required 'codex-cli 0.144.4'"
     ]
 
 
@@ -1140,7 +1142,7 @@ def test_qwendex_install_deps_check_rejects_codex_version_with_extra_tokens(tmp_
     fake_home.mkdir()
     fake_bin.mkdir()
     fake_codex.write_text(
-        "#!/usr/bin/env bash\nprintf 'codex-cli 0.144.0 extra\\n'\n",
+        "#!/usr/bin/env bash\nprintf 'codex-cli 0.144.4 extra\\n'\n",
         encoding="utf-8",
     )
     fake_codex.chmod(0o755)
@@ -1172,11 +1174,11 @@ def test_qwendex_install_deps_check_rejects_codex_version_with_extra_tokens(tmp_
     assert payload["status"] == "blocked"
     assert payload["codex_compatible"] is False
     assert payload["tools"]["codex"]["normalized_output"] == (
-        "codex-cli 0.144.0 extra"
+        "codex-cli 0.144.4 extra"
     )
     assert payload["incompatible_required"] == [
-        "codex version 'codex-cli 0.144.0 extra' does not match required "
-        "'codex-cli 0.144.0'"
+        "codex version 'codex-cli 0.144.4 extra' does not match required "
+        "'codex-cli 0.144.4'"
     ]
 
 
@@ -1188,7 +1190,7 @@ def test_qwendex_install_deps_failed_npm_logs_real_rc_and_stays_blocked(tmp_path
     fake_bin.mkdir()
 
     scripts = {
-        "codex": "#!/usr/bin/env bash\nprintf 'codex-cli 0.144.0 extra\\n'\n",
+        "codex": "#!/usr/bin/env bash\nprintf 'codex-cli 0.144.4 extra\\n'\n",
         "npm": "#!/usr/bin/env bash\nexit 37\n",
         "python3": (
             "#!/usr/bin/env bash\n"
@@ -1241,7 +1243,7 @@ def test_qwendex_install_deps_failed_npm_logs_real_rc_and_stays_blocked(tmp_path
     log_text = install_log.read_text(encoding="utf-8")
     assert (
         f"command failed (37): npm install -g --prefix {fake_home / '.local'} "
-        "@openai/codex@0.144.0"
+        "@openai/codex@0.144.4"
     ) in log_text
 
 
@@ -1266,7 +1268,7 @@ def test_qwendex_install_deps_requests_system_python_when_version_is_too_old(tmp
             "#!/usr/bin/env bash\n"
             "if [[ \"${1:-}\" == \"-u\" ]]; then printf '0\\n'; else exec /usr/bin/id \"$@\"; fi\n"
         ),
-        "codex": "#!/usr/bin/env bash\nprintf 'codex-cli 0.144.0\\n'\n",
+        "codex": "#!/usr/bin/env bash\nprintf 'codex-cli 0.144.4\\n'\n",
     }
     for name, text in scripts.items():
         path = fake_bin / name
@@ -1358,7 +1360,7 @@ def same_root_dev_env_fixture(tmp_path):
     fake_codex.write_text(
         """#!/usr/bin/env bash
 if [[ "${1:-}" == "--version" ]]; then
-  printf 'codex-cli 0.144.0\\n'
+  printf 'codex-cli 0.144.4\\n'
 fi
 """,
         encoding="utf-8",
@@ -1492,7 +1494,7 @@ def test_qwendex_dev_env_second_same_root_sync_skips_its_codex_wrapper(tmp_path)
 
     assert second_sync.returncode == 0, second_sync.stderr or second_sync.stdout
     assert codex_main.returncode == 0, codex_main.stderr or codex_main.stdout
-    assert codex_main.stdout.strip() == "codex-cli 0.144.0"
+    assert codex_main.stdout.strip() == "codex-cli 0.144.4"
     assert str(fake_codex) in (checkout / "bin" / "codex-main").read_text(encoding="utf-8")
     assert qdex.returncode == 0, qdex.stderr or qdex.stdout
     dry_run = json.loads(qdex.stdout)
@@ -1599,7 +1601,7 @@ def test_qwendex_upgrade_ignores_stale_main_codex_and_installed_qdex_opens_other
 printf '%s\\n' "$@" > "$QWENDEX_FAKE_CODEX_ARGS"
 for arg in "$@"; do
   if [[ "$arg" == "--version" ]]; then
-    printf 'codex-cli 0.144.0\\n'
+    printf 'codex-cli 0.144.4\\n'
     break
   fi
 done
@@ -1655,7 +1657,7 @@ done
     assert not legacy_codex.exists()
     assert installed_qdex.is_file()
     assert launched.returncode == 0, launched.stderr or launched.stdout
-    assert launched.stdout.strip() == "codex-cli 0.144.0"
+    assert launched.stdout.strip() == "codex-cli 0.144.4"
     launched_args = args_file.read_text(encoding="utf-8").splitlines()
     assert launched_args[launched_args.index("-C") + 1] == str(downstream_repo)
     runtime = (checkout / ".qwendex-dev" / "bin" / "qwendex-codex-runtime").read_text(
@@ -1728,7 +1730,7 @@ def test_qwendex_dev_env_preserves_upstream_codex_and_versions_model_cache(tmp_p
     assert sourced.returncode == 0, sourced.stderr or sourced.stdout
     resolved_codex, cache_file, sourced_home, runtime = sourced.stdout.splitlines()
     assert resolved_codex == str(fake_codex)
-    assert cache_file == "models_cache.qwendex-0.144.0.json"
+    assert cache_file == "models_cache.qwendex-0.144.4.json"
     assert sourced_home == "__unset__"
     assert runtime == str(checkout / ".qwendex-dev" / "bin" / "qwendex-codex-runtime")
 
@@ -1751,7 +1753,7 @@ def test_qwendex_dev_codex_wrapper_requires_code_mode_host(tmp_path):
     dev_codex = build_bin / "codex"
     code_mode_host = build_bin / "codex-code-mode-host"
     dev_codex.write_text(
-        "#!/usr/bin/env bash\nprintf 'codex-cli 0.144.0\\n'\n",
+        "#!/usr/bin/env bash\nprintf 'codex-cli 0.144.4\\n'\n",
         encoding="utf-8",
     )
     dev_codex.chmod(0o755)
@@ -1797,7 +1799,7 @@ def test_qwendex_dev_codex_wrapper_requires_code_mode_host(tmp_path):
         timeout=10,
     )
     assert ready.returncode == 0, ready.stderr or ready.stdout
-    assert ready.stdout.strip() == "codex-cli 0.144.0"
+    assert ready.stdout.strip() == "codex-cli 0.144.4"
 
 
 def assert_same_root_supports_quoted_path(tmp_path, path_fragment):
@@ -1881,12 +1883,12 @@ def assert_same_root_supports_quoted_path(tmp_path, path_fragment):
 
     assert config["projects"] == {str(checkout): {"trust_level": "trusted"}}
     assert qwendex.returncode == 0, qwendex.stderr or qwendex.stdout
-    assert json.loads(qwendex.stdout)["data"]["version"] == "0.6.0-rc.2"
+    assert json.loads(qwendex.stdout)["data"]["version"] == "0.6.0-rc.3"
     assert qwendex_dev.returncode == 0, qwendex_dev.stderr or qwendex_dev.stdout
     assert sourced_env.returncode == 0, sourced_env.stderr or sourced_env.stdout
     assert sourced_env.stdout.strip() == str(checkout)
     assert codex.returncode == 0, codex.stderr or codex.stdout
-    assert codex.stdout.strip() == "codex-cli 0.144.0"
+    assert codex.stdout.strip() == "codex-cli 0.144.4"
     assert qdex.returncode == 0, qdex.stderr or qdex.stdout
     dry_run = json.loads(qdex.stdout)
     assert dry_run["target_repo"] == str(checkout)
@@ -2072,6 +2074,8 @@ Path(os.environ["QWENDEX_FAKE_CODEX_ARGS"]).write_text(json.dumps({
         "CODEX_AGENT_USE",
         "QWENDEX_MANAGER_ALLOW_UNHOOKED",
         "QWENDEX_MANAGER_UNHOOKED_REASON",
+        "QWENDEX_QDEX_PERMISSION_MODE",
+        "QWENDEX_QDEX_PERMISSION_SOURCE",
     ):
         env.pop(key, None)
     sync = subprocess.run(
@@ -2627,7 +2631,7 @@ def test_qwendex_codex_patch_apply_updates_supported_source_checkout(tmp_path):
 def test_qwendex_codex_patch_preflight_rejects_partially_applied_source(tmp_path):
     qwendex = load_qwendex()
     source = tmp_path / "codex"
-    manifest = qwendex.CODEX_PATCH_MANIFESTS["0.144.0"]
+    manifest = qwendex.CODEX_PATCH_MANIFESTS["0.144.4"]
     for index, spec in enumerate(manifest["source_anchors"]):
         rel = str(spec["path"])
         path = source / rel
@@ -2638,7 +2642,7 @@ def test_qwendex_codex_patch_preflight_rejects_partially_applied_source(tmp_path
         path.write_text(text + "\n", encoding="utf-8")
 
     fake_codex = tmp_path / "codex-bin"
-    fake_codex.write_text("#!/usr/bin/env bash\nprintf 'codex-cli 0.144.0\\n'\n", encoding="utf-8")
+    fake_codex.write_text("#!/usr/bin/env bash\nprintf 'codex-cli 0.144.4\\n'\n", encoding="utf-8")
     fake_codex.chmod(0o755)
 
     state = qwendex.codex_source_patch_state(source, manifest)

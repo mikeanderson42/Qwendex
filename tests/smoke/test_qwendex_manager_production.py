@@ -57,7 +57,7 @@ def state_env(tmp_path: Path, state_db: Path) -> dict[str, str]:
     }
 
 
-def test_state_schema_v2_migration_is_backed_up_transactional_and_idempotent(tmp_path):
+def test_state_schema_v3_migration_is_backed_up_transactional_and_idempotent(tmp_path):
     state_db = tmp_path / "qwendex.sqlite"
     legacy_state(state_db)
     env = state_env(tmp_path, state_db)
@@ -65,7 +65,7 @@ def test_state_schema_v2_migration_is_backed_up_transactional_and_idempotent(tmp
     first = run_qwendex("manager", "status", "--json", env=env)
     assert first.returncode == 0, first.stderr or first.stdout
     with sqlite3.connect(state_db) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
         assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
         assert conn.execute(
             "SELECT value_json FROM qwendex_manager_settings WHERE key = 'selected_mode'"
@@ -73,14 +73,14 @@ def test_state_schema_v2_migration_is_backed_up_transactional_and_idempotent(tmp
         migration = conn.execute(
             "SELECT from_version, to_version, status, backup_path FROM qwendex_state_migrations"
         ).fetchone()
-        assert migration[:3] == (0, 2, "pass")
+        assert migration[:3] == (0, 3, "pass")
         assert Path(migration[3]).is_file()
 
-    backups = sorted((tmp_path / "migrations" / state_db.name).glob("state-v0-to-v2-*.sqlite"))
+    backups = sorted((tmp_path / "migrations" / state_db.name).glob("state-v0-to-v3-*.sqlite"))
     assert len(backups) == 1
     second = run_qwendex("manager", "status", "--json", env=env)
     assert second.returncode == 0, second.stderr or second.stdout
-    assert sorted((tmp_path / "migrations" / state_db.name).glob("state-v0-to-v2-*.sqlite")) == backups
+    assert sorted((tmp_path / "migrations" / state_db.name).glob("state-v0-to-v3-*.sqlite")) == backups
     with sqlite3.connect(state_db) as conn:
         assert conn.execute("SELECT COUNT(*) FROM qwendex_state_migrations").fetchone()[0] == 1
 
@@ -108,23 +108,51 @@ def test_interrupted_state_migration_rolls_back_and_preserves_recovery_receipts(
         ).fetchone()[0] == 0
 
     migration_dir = tmp_path / "migrations" / state_db.name
-    assert len(list(migration_dir.glob("state-v0-to-v2-*.sqlite"))) == 1
+    assert len(list(migration_dir.glob("state-v0-to-v3-*.sqlite"))) == 1
     failures = list(migration_dir.glob("migration-failed-*.json"))
     assert len(failures) == 1
     failure = json.loads(failures[0].read_text(encoding="utf-8"))
     assert failure["status"] == "blocked"
     assert failure["from_version"] == 0
-    assert failure["target_version"] == 2
+    assert failure["target_version"] == 3
 
     retry_env = dict(env)
     retry_env.pop("QWENDEX_STATE_MIGRATION_FAIL_AT")
     retried = run_qwendex("manager", "status", "--json", env=retry_env)
     assert retried.returncode == 0, retried.stderr or retried.stdout
     with sqlite3.connect(state_db) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
         assert conn.execute(
             "SELECT value_json FROM qwendex_manager_settings WHERE key = 'selected_mode'"
         ).fetchone()[0] == '"medium"'
+
+
+def test_state_schema_v2_upgrade_adds_qdex_permission_columns(tmp_path):
+    state_db = tmp_path / "qwendex.sqlite"
+    env = state_env(tmp_path, state_db)
+    initial = run_qwendex("manager", "status", "--json", env=env)
+    assert initial.returncode == 0, initial.stderr or initial.stdout
+
+    with sqlite3.connect(state_db) as conn:
+        conn.execute("ALTER TABLE qwendex_manager_decisions DROP COLUMN qdex_permission_mode")
+        conn.execute("ALTER TABLE qwendex_manager_decisions DROP COLUMN qdex_permission_source")
+        conn.execute("PRAGMA user_version = 2")
+
+    upgraded = run_qwendex("manager", "status", "--json", env=env)
+    assert upgraded.returncode == 0, upgraded.stderr or upgraded.stdout
+    with sqlite3.connect(state_db) as conn:
+        columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(qwendex_manager_decisions)")
+        }
+        assert {"qdex_permission_mode", "qdex_permission_source"} <= columns
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+        migration = conn.execute(
+            "SELECT from_version, to_version, status, backup_path "
+            "FROM qwendex_state_migrations ORDER BY rowid DESC LIMIT 1"
+        ).fetchone()
+        assert migration[:3] == (2, 3, "pass")
+        assert Path(migration[3]).is_file()
 
 
 def test_corrupt_state_fails_closed_without_reinitializing_operator_data(tmp_path):
@@ -554,7 +582,7 @@ def test_qdex_isolated_home_leaves_normal_codex_home_byte_for_byte_unchanged(tmp
     (normal_home / "config.toml").write_text('model = "normal-decoy"\n', encoding="utf-8")
     (normal_home / "hooks.json").write_text('{"hooks":{"PreToolUse":[]}}\n', encoding="utf-8")
     (normal_home / "auth.json").write_text('{"auth":"normal-decoy"}\n', encoding="utf-8")
-    (normal_home / "version.json").write_text('{"latest":"0.144.0"}\n', encoding="utf-8")
+    (normal_home / "version.json").write_text('{"latest":"0.144.4"}\n', encoding="utf-8")
     (normal_home / "installation_id").write_text("normal-installation\n", encoding="utf-8")
     (normal_home / "sentinel.bin").write_bytes(b"normal-codex-home-must-not-change\x00")
     fake_bin = tmp_path / "bin"
@@ -562,7 +590,7 @@ def test_qdex_isolated_home_leaves_normal_codex_home_byte_for_byte_unchanged(tmp
     fake_codex = fake_bin / "codex"
     fake_codex.write_text(
         "#!/usr/bin/env bash\n"
-        "if [[ \"${1:-}\" == \"--version\" ]]; then printf 'codex-cli 0.144.0\\n'; fi\n",
+        "if [[ \"${1:-}\" == \"--version\" ]]; then printf 'codex-cli 0.144.4\\n'; fi\n",
         encoding="utf-8",
     )
     fake_codex.chmod(0o755)

@@ -9,6 +9,27 @@ QWENDEX_CODEX_MAX_CONCURRENT_THREADS=9
 QWENDEX_CODEX_MAX_WAIT_TIMEOUT_MS=120000
 caller_cwd="$PWD"
 
+# A generation pin is valid only after the stable selector has transferred
+# control to that generation's immutable Qdex copy.  Do not let a value left
+# in a login shell make a fresh top-level launch reuse a stale generation.
+launcher_qdex="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || true)"
+pinned_qdex=""
+if [[ -n "${QWENDEX_RUNTIME_TREE:-}" ]]; then
+  pinned_qdex="$(readlink -f "$QWENDEX_RUNTIME_TREE/scripts/qdex" 2>/dev/null || true)"
+fi
+if [[ "${QWENDEX_RUNTIME_PINNED:-0}" == "1" && ( -z "$launcher_qdex" || -z "$pinned_qdex" || "$launcher_qdex" != "$pinned_qdex" ) ]]; then
+  unset QWENDEX_RUNTIME_PINNED
+  unset QWENDEX_RUNTIME_GENERATION_ID
+  unset QWENDEX_RUNTIME_GENERATION_DIR
+  unset QWENDEX_RUNTIME_TREE
+  unset QWENDEX_RUNTIME_CONTRACT_SHA256
+  unset QWENDEX_HOOK_GENERATION
+  unset QWENDEX_CODEX_HOME
+  unset QWENDEX_CODEX_RUNTIME
+  unset QWENDEX_RUNTIME_ROOT
+  unset QWENDEX_ROOT
+fi
+
 # The installed launcher is a stable selector.  It reads one atomically
 # replaced selection record, validates the selected generation boundary, then
 # transfers control to the immutable Qdex copy in that generation.  A process
