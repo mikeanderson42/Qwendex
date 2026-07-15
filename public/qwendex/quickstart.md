@@ -14,7 +14,7 @@ git switch --detach <published-release-tag>
 git status --short
 ```
 
-The annotated `v0.6.0-rc.2` tag is the publication boundary for this
+The annotated `v0.6.0-rc.3` tag is the publication boundary for this
 prerelease. Untagged source is candidate material until the release operation
 creates and pushes that tag.
 
@@ -38,7 +38,7 @@ qwendex-dev doctor
 scripts/qwendex check --json
 ```
 
-The dependency helper requires Codex CLI `0.144.0`, the version covered by this
+The dependency helper requires Codex CLI `0.144.4`, the version covered by this
 release's native-patch contract, and installs that version when the active
 binary differs. For intentional compatibility testing, set both
 `QWENDEX_CODEX_NPM_SPEC` and `QWENDEX_CODEX_REQUIRED_VERSION`.
@@ -285,7 +285,7 @@ The tmux session starts a Qwendex console plus `qwendex-local` and
 `qwendex-full` Codex panes. Each Codex pane launches with a visible banner:
 
 ```text
->_ OpenAI Codex (v0.144.0) /w Qwendex
+>_ OpenAI Codex (v0.144.4) /w Qwendex
 ```
 
 `codex-preflight` detects the installed Codex CLI version and checks it against

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import os
 import shutil
 import sqlite3
 import subprocess
@@ -80,7 +81,7 @@ def write_pinned_codex_fixture(dev_root: Path) -> tuple[Path, Path]:
     codex.write_text(
         "#!/usr/bin/env bash\n"
         "if [[ \"${1:-}\" == \"--version\" ]]; then\n"
-        "  printf 'codex-cli 0.144.0\\n'\n"
+        "  printf 'codex-cli 0.144.4\\n'\n"
         "  exit 0\n"
         "fi\n"
         "exit 0\n",
@@ -94,10 +95,10 @@ def write_pinned_codex_fixture(dev_root: Path) -> tuple[Path, Path]:
         "schema_version": "qwendex.dev.codex_build.v1",
         "status": "pass",
         "source_head": "1" * 40,
-        "source_ref": "rust-v0.144.0",
+        "source_ref": "rust-v0.144.4",
         "source_patch_sha256": "2" * 64,
         "binary_sha256": sha256_file(codex),
-        "binary_version": "codex-cli 0.144.0",
+        "binary_version": "codex-cli 0.144.4",
         "code_mode_host": {"binary_sha256": sha256_file(host)},
     }
     receipt_path = dev_root / ".qwendex-dev" / "results" / "meta" / "codex_build.json"
@@ -137,6 +138,7 @@ def test_runtime_generations_are_immutable_atomic_and_recoverable(tmp_path, monk
     first_qwendex_sha = sha256_file(first_dir / "tree" / "scripts" / "qwendex_cli.py")
     first_hook = (first_dir / "codex_home" / "hooks.json").read_text(encoding="utf-8")
     assert first["status"] == "validated"
+    assert first["contract"]["state_schema_version"] == 3
     assert first_id in first_hook
     assert RUNTIME.validate_generation(runtime_root, first_id)["valid"] is True
 
@@ -208,6 +210,53 @@ def test_runtime_generation_excludes_operator_qdex_permission_config(tmp_path, m
     assert second["config_digest"] == first["config_digest"]
 
 
+def test_qdex_top_level_discards_an_inherited_stale_runtime_pin(tmp_path, monkeypatch):
+    source = tmp_path / "candidate"
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    copy_candidate_source(source)
+    qdex = source / "scripts" / "qdex"
+    marker = "pinned_runtime_generation_id=\"${QWENDEX_RUNTIME_GENERATION_ID:-}\"\n"
+    test_exit = (
+        'if [[ "${QDEX_SELECTOR_TEST:-0}" == "1" ]]; then\n'
+        '  printf \'%s\\n\' "${QWENDEX_RUNTIME_GENERATION_ID:-}"\n'
+        "  exit 0\n"
+        "fi\n\n"
+    )
+    qdex.write_text(
+        qdex.read_text(encoding="utf-8").replace(marker, test_exit + marker, 1),
+        encoding="utf-8",
+    )
+    codex, host = write_pinned_codex_fixture(source)
+    runtime_root = source / ".qwendex-dev" / "runtime"
+    generation = build_candidate(source, runtime_root, codex, host)
+    RUNTIME.activate_generation(runtime_root, generation["generation_id"])
+
+    stale_tree = tmp_path / "stale-runtime" / "tree"
+    result = subprocess.run(
+        [str(ROOT / "scripts" / "qdex")],
+        cwd=source,
+        env={
+            **os.environ,
+            "QWENDEX_DEV_ROOT": str(source),
+            "QWENDEX_RUNTIME_PINNED": "1",
+            "QWENDEX_RUNTIME_TREE": str(stale_tree),
+            "QWENDEX_RUNTIME_GENERATION_ID": "rtg-stale",
+            "QWENDEX_CODEX_HOME": str(tmp_path / "stale-home"),
+            "QWENDEX_CODEX_RUNTIME": str(tmp_path / "stale-codex"),
+            "QDEX_SELECTOR_TEST": "1",
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=30,
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert result.stdout.strip() == generation["generation_id"]
+
+
 def test_safe_prune_reads_live_decision_and_child_generation_refs(tmp_path):
     state_db = tmp_path / "state.sqlite"
     with sqlite3.connect(state_db) as conn:
@@ -250,7 +299,7 @@ def test_runtime_shares_auth_but_copies_version_cache_and_installation_identity(
     version = normal_home / "version.json"
     installation = normal_home / "installation_id"
     authentication.write_text('{"auth":"fixture"}\n', encoding="utf-8")
-    version.write_text('{"latest":"0.144.0"}\n', encoding="utf-8")
+    version.write_text('{"latest":"0.144.4"}\n', encoding="utf-8")
     installation.write_text("installation-fixture\n", encoding="utf-8")
     monkeypatch.setenv("HOME", str(home))
 
@@ -265,7 +314,7 @@ def test_runtime_shares_auth_but_copies_version_cache_and_installation_identity(
     assert not (codex_home / "installation_id").is_symlink()
     assert (codex_home / "installation_id").read_bytes() == installation.read_bytes()
     (codex_home / "version.json").write_text('{"latest":"fixture-new"}\n', encoding="utf-8")
-    assert version.read_text(encoding="utf-8") == '{"latest":"0.144.0"}\n'
+    assert version.read_text(encoding="utf-8") == '{"latest":"0.144.4"}\n'
 
 
 def test_corrupt_selector_fails_closed(tmp_path):

@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+## 0.6.0-rc.3
+
+`v0.6.0-rc.3` updates the supported canonical Codex patch to `0.144.4` and
+contains only corrective fixes needed for this release.
+
+- Pins the official `rust-v0.144.4` source commit, full-index Qwendex patch
+  digest, normalized Cargo.lock digest, dependency helper, and versioned model
+  cache to the tested 0.144.4 contract.
+- Revalidates the Qwendex TUI, hooks, root-only collaboration controls,
+  bounded wait behavior, and model-cache patch against the 0.144.4 source.
+- Fixes the Manager state-schema v2→v3 upgrade so preexisting databases gain
+  Qdex permission-provenance columns before decision writes.
+- Clears inherited stale runtime pins before a new top-level Qdex selector
+  chooses its current immutable runtime generation.
+- Keeps direct CLI smoke fixtures from inheriting an operator's Qdex permission
+  posture, preserving published-contract coverage in managed environments.
+
 ## 0.6.0-rc.2
 
 `v0.6.0-rc.2` is a corrective prerelease; the published `v0.6.0-rc.1` tag

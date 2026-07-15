@@ -8,7 +8,7 @@ instead of mutating the binary in place.
 
 With stock Codex, the standalone Qwendex CLI, checks, routing, receipts,
 offline evals, and Off-mode recovery remain supported. Enforced Heavy/Manager
-claims require the canonical Linux/Codex `0.144.0` patch, its matching
+claims require the canonical Linux/Codex `0.144.4` patch, its matching
 `codex-code-mode-host`, verified managed hooks, and one validated runtime
 generation. Unknown versions or anchor drift fail closed rather than silently
 downgrading to prompt-only policy.
@@ -107,7 +107,7 @@ upstream Git package can install it separately from
 
 ## Source Locations
 
-For the current Codex `0.144.0` target (`rust-v0.144.0`), the patch touches
+For the current Codex `0.144.4` target (`rust-v0.144.4`), the patch touches
 these source areas (the retained `0.143.0` compatibility manifest uses the same
 locations):
 

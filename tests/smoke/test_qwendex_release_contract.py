@@ -249,7 +249,7 @@ def release_fixture(tmp_path: Path) -> dict[str, object]:
         'VERSION = "1.2.3"\n', encoding="utf-8"
     )
     (repo / "scripts/qwendex_dev_env").write_text(
-        'QWENDEX_RELEASE_CODEX_VERSION="0.144.0"\n'
+        'QWENDEX_RELEASE_CODEX_VERSION="0.144.4"\n'
         f'QWENDEX_RELEASE_CODEX_SOURCE_COMMIT="{CANONICAL_CODEX_SOURCE_COMMIT}"\n'
         f'QWENDEX_RELEASE_CODEX_SOURCE_REPO="{CANONICAL_CODEX_SOURCE_ORIGIN}"\n'
         f'QWENDEX_RELEASE_CODEX_PATCH_SHA256="{CANONICAL_CODEX_PATCH_SHA256}"\n'
@@ -257,21 +257,21 @@ def release_fixture(tmp_path: Path) -> dict[str, object]:
         encoding="utf-8",
     )
     (repo / "scripts/qwendex_install_deps").write_text(
-        'export QWENDEX_CODEX_REQUIRED_VERSION="${QWENDEX_CODEX_REQUIRED_VERSION:-0.144.0}"\n',
+        'export QWENDEX_CODEX_REQUIRED_VERSION="${QWENDEX_CODEX_REQUIRED_VERSION:-0.144.4}"\n',
         encoding="utf-8",
     )
     write_json(repo / "config/qwendex/qwendex.json", {"version": "1.2.3"})
     write_json(repo / "config/qwendex/qwendex.sample.json", {"version": "1.2.3"})
     (repo / "README.md").write_text(
-        "This checkout is seeded as `v1.2.3`. The installer requires `@openai/codex@0.144.0`.\n",
+        "This checkout is seeded as `v1.2.3`. The installer requires `@openai/codex@0.144.4`.\n",
         encoding="utf-8",
     )
     (repo / "RELEASE.md").write_text(
-        "# v1.2.3\n\nBuilds the patched Codex `0.144.0` binary.\n",
+        "# v1.2.3\n\nBuilds the patched Codex `0.144.4` binary.\n",
         encoding="utf-8",
     )
     (repo / "public/qwendex/quickstart.md").write_text(
-        "The dependency helper requires Codex CLI `0.144.0`.\n",
+        "The dependency helper requires Codex CLI `0.144.4`.\n",
         encoding="utf-8",
     )
     (repo / "public/qwendex/release-notes.md").write_text(
@@ -300,7 +300,7 @@ def release_fixture(tmp_path: Path) -> dict[str, object]:
                 "schema_version": release_gate.CODEX_BUILD_INPUTS_SCHEMA,
                 "generated_at": generated_at,
                 "status": "pass",
-                "source_ref": "rust-v0.144.0",
+                "source_ref": "rust-v0.144.4",
                 "source_head": source_head,
                 "source_ref_target": source_head,
                 "source_tree_manifest_sha256": "1" * 64,
@@ -333,7 +333,7 @@ def release_fixture(tmp_path: Path) -> dict[str, object]:
                 "validated_at": generated_at,
                 "run_id": run_id,
                 "status": "pass",
-                "source_ref": "rust-v0.144.0",
+                "source_ref": "rust-v0.144.4",
                 "source_head": source_head,
                 "source_patch_sha256": build_inputs["source_patch_sha256"],
                 "expected_source_patch_sha256": build_inputs[
@@ -357,7 +357,7 @@ def release_fixture(tmp_path: Path) -> dict[str, object]:
                 "build_inputs_sha256": "4" * 64,
                 "build_inputs": build_inputs,
                 "binary": str(binary),
-                "binary_version": "codex-cli 0.144.0",
+                "binary_version": "codex-cli 0.144.4",
                 "binary_bytes": binary.stat().st_size,
                 "binary_sha256": sha256_file(binary),
                 "source_receipt_sha256": "5" * 64,
@@ -483,7 +483,7 @@ def invoke(
         "--expected-tag",
         "v1.2.3",
         "--expected-codex-version",
-        "0.144.0",
+        "0.144.4",
         "--run-id",
         str(fixture["run_id"]),
         "--run-started-at",
@@ -1297,7 +1297,7 @@ def test_ci_run_url_identity_allows_github_repository_case_normalization(tmp_pat
         Path(fixture["repo"]),
         "1.2.3",
         "v1.2.3",
-        "0.144.0",
+        "0.144.4",
         "main",
         TRUSTED_ORIGIN,
     )
@@ -1382,7 +1382,7 @@ def test_codex_binary_digest_is_streamed_without_path_read_bytes(tmp_path, monke
     monkeypatch.setattr(Path, "read_bytes", reject_read_bytes)
     checks, blockers = release_gate.validate_codex_build_receipt(
         payload,
-        "0.144.0",
+        "0.144.4",
         CANONICAL_CODEX_SOURCE_COMMIT,
         CANONICAL_CODEX_SOURCE_ORIGIN,
         CANONICAL_CODEX_PATCH_SHA256,
@@ -1618,7 +1618,7 @@ def test_release_gate_rejects_incomplete_codex_build_contract(tmp_path):
             "schema_version": "qwendex.dev.codex_build.v1",
             "generated_at": datetime.now(UTC).isoformat(),
             "status": "pass",
-            "source_ref": "rust-v0.144.0",
+            "source_ref": "rust-v0.144.4",
             "binary_version": "codex-cli 0.143.0",
             "binary_bytes": 0,
             "binary_sha256": "not-a-digest",

@@ -1,3 +1,22 @@
+# v0.6.0-rc.3
+
+Codex `0.144.4` compatibility and corrective prerelease.
+
+- Updates the canonical patched-Codex source contract to
+  `rust-v0.144.4`, including its verified source commit, full-index patch
+  digest, normalized Cargo.lock digest, and versioned model-cache file.
+- Verifies the existing Qwendex TUI, hook-identity, root-only collaboration,
+  wait behavior, and model-cache patch against the official 0.144.4 source
+  checkout and rebuilds it as one source-bound runtime contract.
+- Repairs the Manager state-schema upgrade from v2 when Qdex permission
+  provenance columns are absent, using the existing transactional backup and
+  migration path.
+- Prevents a top-level Qdex launch from reusing an inherited stale runtime pin
+  before the stable selector transfers into the selected immutable generation.
+- Keeps direct CLI smoke fixtures isolated from an inherited operator Qdex
+  permission posture, so they verify the published permission contract.
+- Preserves prior release tags and historical validation records unchanged.
+
 # v0.6.0-rc.2
 
 Corrective Agent Manager prerelease. It preserves immutable

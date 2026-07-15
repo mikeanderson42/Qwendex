@@ -676,7 +676,7 @@ def build_generation(
             "code_mode_host_sha256": codex["code_mode_host_sha256"],
             "config_sha256": config_digest,
             "schema_sha256": schema_digest,
-            "state_schema_version": 2,
+            "state_schema_version": 3,
         }
         contract_sha = digest_json(contract)
         generation_id = f"rtg-{contract_sha[:20]}"

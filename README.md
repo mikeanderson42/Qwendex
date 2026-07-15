@@ -67,7 +67,7 @@ Manager routing is per lane. The main Codex session keeps the user's selected
 model and reasoning. Low-risk bounded lanes may use local Qwen; high-risk lanes
 escalate to GPT/Codex authority.
 
-Qwendex `0.6.0-rc.2` installs validated runtime generations side by side. Each
+Qwendex `0.6.0-rc.3` installs validated runtime generations side by side. Each
 Qdex process is pinned to one immutable source/hook/binary/config contract;
 activation affects only new sessions, and shell recovery can restore the prior
 known-good generation without invoking Qdex. Stock Codex supports Qwendex's
@@ -102,7 +102,7 @@ git fetch --tags origin
 git switch --detach <published-release-tag>
 ```
 
-The annotated `v0.6.0-rc.2` tag is the publication boundary for this
+The annotated `v0.6.0-rc.3` tag is the publication boundary for this
 prerelease; untagged source remains candidate material until the release gates
 create and push that tag.
 
@@ -124,7 +124,7 @@ scripts/qwendex_install_deps --check --json
 The supported runtime baseline is Bash 4+ and Python 3.11+; the dependency
 receipt blocks older interpreters instead of failing later in Qwendex startup.
 
-The installer requires `@openai/codex@0.144.0`, matching this release's
+The installer requires `@openai/codex@0.144.4`, matching this release's
 native-patch compatibility contract. For intentional compatibility testing,
 override both `QWENDEX_CODEX_NPM_SPEC` and
 `QWENDEX_CODEX_REQUIRED_VERSION`.
@@ -350,7 +350,9 @@ claims require GPT/Codex review and the appropriate Qwendex verification tier.
 
 ## Current Release / Known Limits
 
-This checkout is seeded as `v0.6.0-rc.2` and prepares that corrective prerelease. Its
+This checkout is seeded as `v0.6.0-rc.3` and prepares the Codex `0.144.4`
+compatibility prerelease. It includes only the supported-Codex update and the
+state-schema/runtime isolation fixes described in the release notes. Its
 source-bound Manager production validation summary is generated only after the
 offline, live, self-hosting, fresh-install, upgrade, rollback, and release
 tiers pass. The annotated tag and GitHub prerelease are created only after the
@@ -368,6 +370,6 @@ Known limits:
 - Patched Codex footer and hotkeys depend on a supported source checkout and a
   rebuilt Codex binary.
 - Enforced Manager guarantees are certified only on the tested Linux / Codex
-  `0.144.0` canonical patch combination. Stock Codex is supported for Off-mode
+  `0.144.4` canonical patch combination. Stock Codex is supported for Off-mode
   recovery and non-native Qwendex CLI functions, not as an equivalent Manager
   enforcement runtime.

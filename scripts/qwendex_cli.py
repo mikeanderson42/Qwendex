@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.6.0-rc.2"
+VERSION = "0.6.0-rc.3"
 CONFIG_DIR = ROOT / "config" / "qwendex"
 DEFAULT_PROJECT_CONFIG = CONFIG_DIR / "qwendex.json"
 DEFAULT_USER_CONFIG = Path.home() / ".config" / "qwendex" / "config.json"
@@ -176,7 +176,10 @@ AGENT_USE_ALIASES = {
 }
 AGENT_TERMINAL_STATUSES = {"completed", "blocked", "failed", "closed", "tombstoned", "waived"}
 STATE_BUSY_TIMEOUT_MS = 2000
-STATE_SCHEMA_VERSION = 2
+# Version 3 adds the Qdex permission provenance recorded with each Manager
+# decision. Bump the version so already-migrated v2 databases receive the
+# additive columns before a live Qdex preflight writes them.
+STATE_SCHEMA_VERSION = 3
 STATE_MIGRATION_FAULT_ENV = "QWENDEX_STATE_MIGRATION_FAIL_AT"
 AGENT_HOOK_EVENTS = {
     "SessionStart",
@@ -669,6 +672,10 @@ CODEX_PATCH_MANIFESTS["0.143.0"] = {
 CODEX_PATCH_MANIFESTS["0.144.0"] = {
     **CODEX_PATCH_MANIFESTS["0.143.0"],
     "codex_tag": "rust-v0.144.0",
+}
+CODEX_PATCH_MANIFESTS["0.144.4"] = {
+    **CODEX_PATCH_MANIFESTS["0.144.0"],
+    "codex_tag": "rust-v0.144.4",
 }
 
 DEFAULT_CONFIG: dict[str, Any] = {
