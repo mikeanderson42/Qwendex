@@ -1,3 +1,19 @@
+# v0.6.0-rc.4
+
+Advisory Agent Management prerelease.
+
+- Makes Manager planning, lifecycle metadata, hooks, identities, lane
+  assignments, validation evidence, and health advisory observability rather
+  than a second authorization layer.
+- Preserves native `multi_agent_v2` capacity, depth, wait, root-only
+  management, explicitly read-only child lanes, Local routing, and the
+  operator-selected Codex sandbox/Yolo posture.
+- Removes process-environment release approval and unhooked-override variables
+  from the supported workflow; explicit user intent and Codex/host permissions
+  remain authoritative.
+- Preserves the immutable `v0.6.0-rc.3` publication and its Codex `0.144.4`
+  compatibility contract unchanged.
+
 # v0.6.0-rc.3
 
 Codex `0.144.4` compatibility and corrective prerelease.

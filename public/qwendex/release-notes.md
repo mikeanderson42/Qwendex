@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.6.0-rc.4
+
+`v0.6.0-rc.4` publishes the advisory Agent Management boundary required for
+normal Qwendex operation.
+
 - Reframed Agent Management as advisory delegation and lifecycle observability.
   Manager metadata no longer authorizes or blocks prompts, root tools,
   publish/release commands, or final responses.

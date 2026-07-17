@@ -948,3 +948,14 @@ final response because advisory lifecycle metadata was incomplete. That
 impeded the operator rather than improving context and token efficiency. The
 superseding boundary keeps the useful delegation enhancements and observability
 while removing Qwendex as a second prompt, tool, release, or response gate.
+
+## Advisory Agent Management Publication
+
+Decision: publish the Advisory Agent Management Boundary as
+`v0.6.0-rc.4`. Keep `v0.6.0-rc.3` immutable as the preceding Codex `0.144.4`
+compatibility prerelease.
+
+Reason: the advisory boundary is required for normal prompt, tool, and release
+operation; it cannot be represented by rewriting the already published rc.3
+tag. A successor prerelease makes the supported source, CLI/config version,
+documentation, tag, and GitHub release agree.
