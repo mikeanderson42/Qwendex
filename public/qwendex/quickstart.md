@@ -55,8 +55,9 @@ the published `workspace-write` permission posture and does not add
 without changing caller arguments. An ignored operator-local
 `${XDG_CONFIG_HOME:-$HOME/.config}/qwendex/qdex.json` may select the same mode,
 but is never copied into a runtime generation or release artifact. In Manager
-Mode Qdex also supplies `--dangerously-bypass-hook-trust` only after the
-required Qwendex preflight verifies the managed hook set. That project becomes
+Mode Qdex may supply `--dangerously-bypass-hook-trust` after its advisory
+preflight observes the managed hook set. Missing hooks reduce lifecycle
+observability but do not block launch. That project becomes
 the Qwendex manager target, execution directory, Codex add-dir, local-harness
 trusted root, and MCP trusted root. This repo binding limits those Qwendex/MCP
 scopes and supplies a per-launch Codex trusted-project override for the exact
@@ -66,8 +67,8 @@ isolated `CODEX_HOME` only for its child process. Sourcing the environment
 leaves the caller's `CODEX_HOME` and ordinary upstream `codex` unchanged, so
 upstream Codex remains available for recovery; `codex-main` is an explicit
 captured-upstream alias. The release tag pins the Qwendex source. Patched Codex
-footer/hotkey support and enforced Manager identity/lifecycle guarantees remain
-a separately built, version-checked integration.
+footer/hotkey support and native delegation capacity, depth, wait, and child
+tool-surface behavior remain a separately built, version-checked integration.
 
 Qdex resolves permission mode in this order: CLI option, environment,
 operator-local config, published config, then the hard fallback

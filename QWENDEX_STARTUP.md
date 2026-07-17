@@ -58,5 +58,7 @@ CLI/API command path, a smoke test or receipt, and docs. If it depends on a
 patched Codex build or is only a placeholder, label that boundary plainly.
 
 Stop and repair if Local-off routes to Qwen, fresh-home isolation touches the
-normal safe-home, receipts fail schema/digest checks, manager sessions are
-unexpectedly active or stale, or live output shows guard markers or tool markup.
+normal safe-home, receipts fail schema/digest checks, or live output shows
+guard markers or tool markup. Unexpected active or stale Manager sessions are
+advisory lifecycle state to inspect and reconcile, not a reason to block
+unrelated work.

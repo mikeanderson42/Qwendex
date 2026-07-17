@@ -23,9 +23,9 @@ The public contract is intentionally narrow:
 - JSON commands return a stable envelope with status, summary, artifacts,
   next actions, errors, and version.
 - Local Qwen routes are advisory and receipt-backed.
-- Manager Mode lanes are lifecycle- and verifier-gated when Qdex uses the
-  supported patched Codex runtime; stock Codex remains the Off-mode recovery
-  plane.
+- Manager Mode adds advisory delegation guidance and lifecycle observability
+  through the supported patched Codex runtime; it does not become an authority
+  gate over prompts, root tools, publication, or final responses.
 - Public behavior is backed by smoke tests, evals, and release gates.
 
 ## What Is Included
@@ -68,12 +68,13 @@ model and reasoning. Low-risk bounded lanes may use local Qwen; high-risk lanes
 escalate to GPT/Codex authority.
 
 Qwendex `0.6.0-rc.3` installs validated runtime generations side by side. Each
-Qdex process is pinned to one immutable source/hook/binary/config contract;
+Qdex process is pinned to one immutable source/binary/config contract;
 activation affects only new sessions, and shell recovery can restore the prior
 known-good generation without invoking Qdex. Stock Codex supports Qwendex's
-standalone CLI, routing, receipts, checks, and Off-mode recovery, but it does
-not provide the patched native identity, child-tool-surface, or lifecycle-hook
-guarantees required for enforced Heavy/Manager delegation.
+standalone CLI, routing, receipts, checks, and Off-mode recovery. The supported
+patch adds native delegation capacity, depth, wait, child-tool-surface, and
+lifecycle-observability integration without turning Manager metadata into an
+execution authority.
 
 ## How It Is Built
 
@@ -167,11 +168,9 @@ select `yolo`; invalid explicit values stop before Codex starts. See
 the exact precedence and local-config boundary.
 
 Qwendex separates health output into advisory and strict modes for `check` and
-`doctor`. Advisory mode is for daily operator visibility:
-it can report Manager Mode warnings and repair hints without blocking the whole
-surface check. Strict mode is for staging and release gates: missing public
-surface, public-doc audit failures, and Manager Mode health issues must fail the
-command.
+`doctor`. Manager Mode warnings and repair hints remain advisory in both modes
+and do not block unrelated work. Strict mode still fails for product-integrity
+problems such as missing public surface or public-doc audit failures.
 
 Inspect routing and run the offline harness:
 
@@ -200,9 +199,10 @@ performance, and normal-Codex isolation gates. Raw live receipts stay ignored.
 
 ## Manager Mode And Local Routing
 
-Manager Mode is additive to normal Codex operation. It coordinates advisory
-subagent lanes, records context packets and heartbeats, and keeps stale writer
-lanes blocked until an operator integrates or explicitly stops them.
+Manager Mode is additive to normal Codex operation. It helps the model use
+bounded subagents outside Ultra and records advisory context, lifecycle, and
+validation metadata. It does not authorize or block prompts, root tools,
+release commands, or final responses.
 
 Common commands:
 
@@ -217,26 +217,25 @@ scripts/qwendex --agent-use Manager agent policy --json
 scripts/qwendex agent status --json
 ```
 
-`manager_deploy_policy` defaults to `auto`. An idle Manager Mode session with
-no attached prompt is healthy `standby`; an attached trivial/direct turn is
-also healthy without workers. An attached complex turn blocks only when its
-required lanes are missing or unresolved. Set the policy to `disabled` only
-when intentionally opting out of deployment requirements.
+`manager_deploy_policy` defaults to `auto`, which lets Qwendex recommend and
+observe useful lanes. Missing, unresolved, or stale lanes are reported as
+advisory state; `disabled` turns off those deployment recommendations without
+changing Codex authority.
 
 Manager status semantics are:
 
 - `standby`: manager delegation is off, not required, or waiting for an
   operator-selected lane.
-- `warning`: advisory issues exist, but no writer lane or required deployment
-  contract is blocked.
-- `blocked`: an attached complex turn has missing or unresolved required lanes,
-  or a stale writer lane requires integration or an explicit stop.
+- `warning`: advisory issues exist, including missing, unresolved, or stale
+  lifecycle rows that may merit cleanup.
+- `blocked`: reserved for invalid Manager CLI requests or state operations, not
+  for prompts, root tools, releases, or ordinary Codex finalization.
 
 Connected public recovery commands are `manager close`, `manager close-stale`,
 `manager repair --safe`, and `manager status`. `manager repair --safe` closes
 stale read-only lanes and harmless empty stale writer lanes; a remaining stale
-writer lane is a blocker until an operator integrates it or explicitly closes
-it with `manager close --agent-id ... --reason ... --json`.
+writer lane remains an advisory cleanup item until an operator integrates it or
+explicitly closes it with `manager close --agent-id ... --reason ... --json`.
 
 Local routing also separates intent from availability. `Local: [Ready]` means
 local subagents may be considered and the configured `qwen-local` alias is
@@ -255,9 +254,9 @@ subprocess env exports, and root/child management tool-surface metadata. See
 
 ## Codex TUI Integration
 
-Qwendex standalone CLI functions, checks, routing, receipts, and Off-mode
-recovery work with stock Codex. Enforced Heavy and Manager guarantees require
-the supported canonical patch.
+Qwendex standalone CLI functions, checks, routing, and receipts work with stock
+Codex. The supported canonical patch adds native delegation capacity, depth,
+wait, child-tool-surface, and lifecycle-observability integration.
 
 The runtime contract is:
 
@@ -369,7 +368,7 @@ Known limits:
   are not yet a general permission engine in the public CLI.
 - Patched Codex footer and hotkeys depend on a supported source checkout and a
   rebuilt Codex binary.
-- Enforced Manager guarantees are certified only on the tested Linux / Codex
-  `0.144.4` canonical patch combination. Stock Codex is supported for Off-mode
-  recovery and non-native Qwendex CLI functions, not as an equivalent Manager
-  enforcement runtime.
+- Native Manager delegation integration is certified only on the tested Linux /
+  Codex `0.144.4` canonical patch combination. Stock Codex remains supported for
+  standalone Qwendex CLI functions without that patched capacity, depth, wait,
+  child-tool-surface, or lifecycle-observability integration.

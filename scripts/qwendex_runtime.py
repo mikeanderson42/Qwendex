@@ -422,7 +422,8 @@ def write_generation_codex_config(dev_root: Path, codex_home: Path) -> None:
         shutil.copy2(seed, codex_home / "config.toml")
         return
     (codex_home / "config.toml").write_text(
-        'approval_policy = "never"\nsandbox_mode = "workspace-write"\n',
+        'approval_policy = "never"\nsandbox_mode = "workspace-write"\n'
+        'suppress_unstable_features_warning = true\n',
         encoding="utf-8",
     )
 

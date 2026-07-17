@@ -57,11 +57,10 @@ scripts/qwendex doctor --json
 scripts/qwendex eval --json
 ```
 
-Qwendex keeps the advisory/strict health split explicit. Advisory health can
-emit Manager Mode warnings, repair hints, and high-value-add guidance without
-blocking a daily operator loop. Strict health is the mode for staging and
-release claims: missing required surface, public documentation audit failures,
-or Manager Mode health issues such as stale writer lanes must fail the command.
+Qwendex keeps the advisory/strict health split explicit. Manager Mode warnings,
+repair hints, and high-value-add guidance remain advisory in both modes. Strict
+health still fails for product-integrity problems such as missing required
+surface or public documentation audit failures, not for Manager lifecycle rows.
 
 ## Local Exploration Telemetry
 
@@ -232,13 +231,11 @@ Manager Mode defaults to `max_subagents: 4`. Operators may configure a lower or
 higher bounded value up to the conservative product ceiling of 8 concurrent
 worker lanes; Codex V2 counts the root separately.
 
-`manager_deploy_policy` defaults to `auto`. An idle Manager Mode session with
-no attached prompt is healthy `standby`, and an attached direct/trivial turn is
-healthy without workers. An attached complex turn blocks when required lanes
-are missing or unresolved; a stale writer lane blocks until integration or an
-explicit stop. Set `manager_deploy_policy` to `disabled` to opt out of
-deployment requirements; explicit manual manager lifecycle commands remain
-operator-directed.
+`manager_deploy_policy` defaults to `auto`, enabling advisory lane planning and
+lifecycle visibility. Direct work remains valid, and missing, unresolved, or
+stale rows do not block prompts, tools, publication, final responses, or health
+checks. Set it to `disabled` to turn off deployment recommendations; explicit
+manual lifecycle commands remain operator-directed.
 
 Use `scripts/qwendex manager close --agent-id ... --reason integrated --json`
 after integrating or intentionally stopping a writer lane. `close-stale` only
@@ -248,9 +245,9 @@ auto-closes stale read-only lanes.
 safe manager-state issues. It closes stale read-only lanes and harmless empty
 stale writer lanes, then leaves non-empty writer lanes open with an explicit
 manual `manager close --agent-id ... --reason ... --json` command. Those
-remaining stale writer lanes are advisory warnings during daily health and
-blockers during strict health.
+remaining stale writer rows are advisory warnings in both daily and strict
+health.
 
-Every assigned lane records a context packet and remains advisory until the main
-session reviews receipts, touched files, validation status, blockers, and
-unresolved risk.
+Every assigned lane records a context packet and remains advisory. The main
+session may review receipts, touched files, validation status, blockers, and
+unresolved risk, but missing reports or validation do not block its response.

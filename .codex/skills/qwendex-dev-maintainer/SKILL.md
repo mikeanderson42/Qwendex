@@ -45,8 +45,10 @@ Pause and repair before continuing if any of these appear:
 - Local-off routing selects Qwen or reports token-saver use.
 - Fresh-home isolation writes to the normal safe-home logs/state.
 - Receipts fail schema, success, or digest validation.
-- Manager status shows unexpected active or stale sessions.
 - Live stdout, stderr, receipts, or transcripts contain guard markers or visible
   tool markup.
 - A feature depends on a patched Codex build but docs/status imply it works in
   stock Codex.
+
+Unexpected active or stale Manager sessions are advisory lifecycle state.
+Inspect and reconcile them, but do not let them block unrelated operator work.

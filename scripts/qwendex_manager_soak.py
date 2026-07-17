@@ -189,7 +189,6 @@ def base_environment(root: Path, repo: Path, session_index: int) -> dict[str, st
             "QWENDEX_PERFORMANCE_DB": str(state / "qwendex-performance.sqlite"),
             "QWENDEX_RESULTS_ROOT": str(results),
             "QWENDEX_MANAGER_TARGET_REPO": str(repo),
-            "QWENDEX_MANAGER_ALLOW_UNHOOKED": "1",
             "QWENDEX_FORCE_LOCAL_QWEN_AVAILABLE": "0",
             "QWENDEX_LOCAL_ENABLED": "0",
             "QWENDEX_MANAGER_LAUNCH_PID": str(os.getpid()),
@@ -226,12 +225,9 @@ def hook_event_payload(event: str, *, repo: Path, session_index: int) -> dict[st
     if event == "SubagentStop":
         return {
             **common,
-            "last_assistant_message": (
-                "FINAL_REPORT\nstatus: completed\nagent_id: none\ntask_name: unplanned probe\n"
-                "summary: no work performed\nfiles_inspected: none\nfiles_changed: none\n"
-                "commands_run: none\nevidence: hook contract only\nartifacts: none\n"
-                "blockers: none\nremaining_risk: none\nnext_recommended_action: none"
-            ),
+            "agent_id": f"unplanned-worker-{session_index}",
+            "agent_type": "explorer",
+            "last_assistant_message": "Read-only inspection complete; no changes were needed.",
         }
     if event == "PreToolUse":
         return {
@@ -455,7 +451,6 @@ def run_soak(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, Any]]:
                 "QWENDEX_DEV_ROOT": str(ROOT),
                 "QWENDEX_QDEX_DRY_RUN": "1",
                 "QWENDEX_AGENT_USE": "Manager",
-                "QWENDEX_MANAGER_ALLOW_UNHOOKED": "1",
                 "PYTHONDONTWRITEBYTECODE": "1",
             }
         )

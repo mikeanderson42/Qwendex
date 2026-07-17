@@ -506,15 +506,15 @@ PY
 qdex_launch_meta_root="$QWENDEX_META_ROOT/qdex/$QWENDEX_RUN_ID"
 mkdir -p "$qdex_launch_meta_root"
 codex_status_write_file="$qdex_launch_meta_root/codex_status_write.json"
+codex_status_fields_file="$qdex_launch_meta_root/codex_status_fields.txt"
 
+codex_status_rc=0
 "$QWENDEX_QWENDEX_COMMAND" codex-status \
   --write "$QWENDEX_CODEX_STATUS_FILE" \
-  --json > "$codex_status_write_file"
+  --json > "$codex_status_write_file" || codex_status_rc=$?
 
 qwendex_status_fields=()
-while IFS= read -r status_field; do
-  qwendex_status_fields+=("$status_field")
-done < <(python3 - "$codex_status_write_file" <<'PY'
+if [[ "$codex_status_rc" -eq 0 ]] && python3 - "$codex_status_write_file" > "$codex_status_fields_file" <<'PY'
 import json
 import sys
 with open(sys.argv[1], encoding="utf-8") as handle:
@@ -531,7 +531,11 @@ print(policy.get("wait_timeout_ms", ""))
 print("1" if data.get("manager_preflight_required") else "0")
 print(data.get("agent_policy_hash", policy.get("policy_hash", "")))
 PY
-)
+then
+  mapfile -t qwendex_status_fields < "$codex_status_fields_file"
+else
+  printf 'Qwendex Agent Manager status: advisory (continuing with safe delegation defaults)\n' >&2
+fi
 agent_use="${qwendex_status_fields[0]:-}"
 agent_mode="${qwendex_status_fields[1]:-}"
 agent_policy_max_threads="${qwendex_status_fields[2]:-}"
@@ -635,14 +639,17 @@ else
 fi
 
 case "$agent_mode" in
+  auto)
+    multi_agent_mode_hint="Qwendex Auto delegation is active independently of reasoning effort. Use task complexity, independence, and your judgment to delegate bounded exploration, research, or verification when it saves root context or user tokens. Stay direct for small or tightly coupled tasks, and use no more than ${codex_worker_cap} workers."
+    ;;
   medium)
     multi_agent_mode_hint="Qwendex Medium delegation is active independently of reasoning effort. Opportunistically delegate independent read-heavy mapping, focused investigation, or verification when it materially helps. Use no more than ${codex_worker_cap} bounded workers, keep direct work for small or tightly coupled tasks, and state the direct-work reason when useful."
     ;;
   heavy)
-    multi_agent_mode_hint="Qwendex Heavy delegation is active independently of reasoning effort. Proactively delegate non-trivial repository work into bounded, purpose-specific lanes. Normally use an explorer before broad edits and a verifier after meaningful edits, with no more than ${codex_worker_cap} workers active under this policy."
+    multi_agent_mode_hint="Qwendex Heavy delegation is active independently of reasoning effort. Proactively delegate independent, purpose-specific lanes when they save context or improve quality. An explorer or verifier is often useful, but the user instruction and task needs decide the team. Use no more than ${codex_worker_cap} workers."
     ;;
   manager)
-    multi_agent_mode_hint="Qwendex Manager delegation is active independently of reasoning effort. Work orchestration-first on complex tasks: create an explicit lane plan, delegate bounded independent lanes, maintain lifecycle evidence, and require verification after meaningful edits. Use no more than ${codex_worker_cap} workers under the immutable launch policy."
+    multi_agent_mode_hint="Qwendex Manager delegation is active independently of reasoning effort. For complex tasks, use bounded independent workers when they save root context or tokens. Plans, lifecycle records, and verification are advisory aids and never override the user's instruction. Use no more than ${codex_worker_cap} workers."
     ;;
   lite)
     multi_agent_mode_hint="Qwendex Lite uses explicit-only delegation. Work directly unless the user, applicable AGENTS.md instructions, or an active skill explicitly requires a bounded worker. Never create a proactive worker team."
@@ -652,14 +659,15 @@ case "$agent_mode" in
     ;;
 esac
 
-root_agent_usage_hint="You are the root Qwendex orchestrator operating under the ${agent_use:-Off} AgentPolicy. Keep the root as the default sole writer and integrator. Delegate only independent, purpose-specific lanes within the ${codex_worker_cap}-worker ceiling, give each worker a narrow artifact contract, and integrate and verify every result. Do not ask workers to delegate recursively. Call wait_agent only while list_agents shows a running worker. After a wait timeout, inspect list_agents once; if no worker is running, do not retry wait_agent and instead integrate terminal evidence or finalize. If a verifier returns failed or pending evidence and you then change the workspace, use at most one followup_task on that same verifier for final-state revalidation; do not spawn a duplicate verification lane, and stop with the remaining risk if that revalidation does not pass."
-subagent_usage_hint="You are a bounded Qwendex worker. Execute only the assigned lane, do not spawn or manage subagents, and do not edit unless the assignment grants an exact isolated write surface. Run read-only validation commands separately using the narrow canonical form permitted by the lane; classify blocked or diagnostic commands explicitly. For verifier pytest, use exactly one standalone command: PYTHONDONTWRITEBYTECODE=1 python -B -m pytest -p no:cacheprovider -q (preferred) or pytest -p no:cacheprovider -q; never chain a version probe or cleanup. Your final response must contain a line exactly FINAL_REPORT with no colon, followed by status, validation_status (PASS or FAIL after classifying any non-blocking diagnostic), evidence, changed paths if any, validation commands, and blockers. If completion is impossible, use a line exactly BLOCKED or FAILED and put evidence on following lines."
+root_agent_usage_hint="You are the root Qwendex orchestrator operating under the ${agent_use:-Off} AgentPolicy. Keep the root as the default sole writer and integrator. Delegate independent, purpose-specific lanes within the ${codex_worker_cap}-worker ceiling when doing so saves context or improves quality, then integrate their results. Qwendex plans and lifecycle records are advisory; follow the user's instruction and your task judgment. Do not ask workers to delegate recursively. Call wait_agent only while list_agents shows a running worker. After a wait timeout, inspect list_agents once; if no worker is running, integrate available evidence or finalize. If verifier evidence becomes stale after a root edit, consider a bounded follow-up to that verifier when it would be useful."
+subagent_usage_hint="You are a bounded Qwendex worker. Execute the assigned lane, do not spawn or manage subagents, and respect any explicitly read-only scope. Return a concise outcome with evidence, changed paths, validation, blockers, and remaining risk when available. A structured FINAL_REPORT is optional; ordinary clear output is accepted."
 
 cmd=(
   "$QWENDEX_CODEX_RUNTIME"
   --no-alt-screen
 )
 codex_policy_args=(
+  --config "suppress_unstable_features_warning=true"
   --config "features.multi_agent_v2.enabled=true"
   --config "features.multi_agent_v2.max_concurrent_threads_per_session=$codex_native_max_threads"
   --config "features.multi_agent_v2.min_wait_timeout_ms=$codex_wait_min_timeout_ms"
@@ -764,12 +772,12 @@ with open(sys.argv[1], encoding="utf-8") as handle:
 data = payload.get("data", {})
 route = data.get("routing_decision", {})
 hook = data.get("hook_status", {})
-print(f"Qwendex Manager preflight: {'ready' if data.get('ok') else 'blocked'}")
+print(f"Qwendex Manager preflight: {'ready' if data.get('ok') else 'advisory'}")
 print(f"ledger: {data.get('ledger_id', '')}")
 print(f"root: {data.get('root_agent_id', '')}")
 print(f"route: {route.get('selected_route', '')}")
 print(f"hooks: {'override' if hook.get('override') else 'verified' if hook.get('verified') else 'missing'}")
-print(f"verifier: {'required' if route.get('verifier_required') else 'not_required'}")
+print(f"verifier: {'suggested' if route.get('verifier_suggested') else 'not_suggested'}")
 print(f"stop: {data.get('stop_status', '')}")
 PY
     fi
@@ -793,14 +801,14 @@ PY
     if [[ "$preflight_rc" -eq 0 ]]; then
       preflight_rc=1
     fi
-    python3 - "$preflight_file" "$agent_policy_hash" >&2 <<'PY'
+    python3 - "$preflight_file" "$agent_policy_hash" >&2 <<'PY' || true
 import json
 import sys
 with open(sys.argv[1], encoding="utf-8") as handle:
     payload = json.load(handle)
 data = payload.get("data", {})
 hook = data.get("hook_status", {})
-print("Qwendex Manager preflight: blocked")
+print("Qwendex Manager preflight: advisory")
 exports = data.get("exports", {})
 root_agent_id = str(exports.get("QWENDEX_MANAGER_ROOT_AGENT_ID") or "").strip()
 reason = data.get('routing_decision', {}).get('routing_reason', '')
@@ -815,12 +823,10 @@ if data.get("ok") and root_agent_id and (
 print(f"reason: {reason}")
 print(f"install: {hook.get('install_command', '')}")
 print(f"verify: {hook.get('verify_command', '')}")
-print(f"stop: {data.get('stop_status', '')}")
+print(f"continuing without Manager bookkeeping; stop: {data.get('stop_status', '')}")
 PY
-    exit "${preflight_rc:-1}"
-  fi
-
-  eval "$(python3 - "$preflight_file" <<'PY'
+  else
+    eval "$(python3 - "$preflight_file" <<'PY'
 import json
 import shlex
 import sys
@@ -845,8 +851,9 @@ print(f"ledger: {data.get('ledger_id', '')}")
 print(f"root: {data.get('root_agent_id', '')}")
 print(f"route: {route.get('selected_route', '')}")
 print(f"hooks: {'override' if hook.get('override') else 'verified' if hook.get('verified') else 'missing'}")
-print(f"verifier: {'required' if route.get('verifier_required') else 'not_required'}")
+print(f"verifier: {'suggested' if route.get('verifier_suggested') else 'not_suggested'}")
 PY
+  fi
 elif [[ "$manager_preflight_dry_run" == "1" || "${QWENDEX_QDEX_DRY_RUN:-0}" == "1" ]]; then
   if [[ "$json_output" == "1" ]]; then
     python3 - "$codex_status_write_file" "$target_repo" "${final_cmd[@]}" <<'PY'

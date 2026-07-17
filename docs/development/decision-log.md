@@ -918,3 +918,33 @@ than silently claiming compatibility. Direct CLI smoke fixtures also remove
 launch-snapshotted Qdex permission values from their inherited environment, so
 the release contract is tested against its published configuration unless a
 fixture explicitly supplies an override.
+
+## Advisory Agent Management Boundary
+
+Decision: Agent Management exists to help Codex use bounded subagents outside
+Ultra and to expose useful delegation state. Qdex retains the native
+`multi_agent_v2` surface, capacity/depth/wait limits, root-only collaboration
+management, no recursive child management, explicitly read-only child lanes,
+Local routing, and the operator-selected Codex sandbox/Yolo posture. Manager
+planning, preflight, hooks, identities, ledgers, lane assignments, reports,
+validation evidence, write metadata, and health are advisory observability.
+They must not authorize or block a user prompt, root tool, file write,
+publish/release command, or root final response.
+
+This decision supersedes the enforcement portions of AgentPolicy Facade
+Boundary, Selected Manager Mode As Policy Source, Manager Session
+Reconciliation, Manager Preflight Session Contract, Launcher-Derived Manager
+Root Ownership, Release Command Approval Provenance, Immutable Native Manager
+Delegation Runtime, Prompt-Aware Manager Health, and Bounded Verifier
+Revalidation. Their historical records and compatible state/receipt fields are
+retained. Missing or stale hooks, identities, lanes, reports, validation, or
+lifecycle rows produce diagnostics only. No `QWENDEX_RELEASE_APPROVED` or
+`QWENDEX_MANAGER_ALLOW_UNHOOKED` process variable is part of the supported
+workflow; explicit user intent and Codex/host permissions remain authoritative.
+
+Reason: the prior fail-closed Manager layer duplicated Codex authority and could
+reject an explicitly authorized publication, a valid continuation prompt, or a
+final response because advisory lifecycle metadata was incomplete. That
+impeded the operator rather than improving context and token efficiency. The
+superseding boundary keeps the useful delegation enhancements and observability
+while removing Qwendex as a second prompt, tool, release, or response gate.

@@ -17,15 +17,19 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_ACTUAL_TESTS = {
+    "test_qdex_manager_preflight_is_advisory_and_exports_env_when_available",
     "test_preflight_and_first_event_turn_admission_are_idempotent_across_mode_toggle",
-    "test_manager_subagent_start_binds_exact_plan_without_pretool_reservation",
-    "test_qwendex_agent_hooks_enforce_final_contract_and_manager_stop_gate",
-    "test_qwendex_concurrent_manager_assignments_cannot_exceed_subagent_limit",
+    "test_manager_prompt_bookkeeping_is_advisory_by_mode",
+    "test_manager_subagent_start_attaches_advisory_plan_without_pretool_reservation",
+    "test_qwendex_worker_and_root_stop_contracts_are_advisory",
+    "test_qwendex_root_pre_tool_allows_release_without_secondary_approval",
+    "test_qwendex_pre_tool_keeps_intrinsic_child_boundaries_but_never_gates_root",
+    "test_qwendex_concurrent_manager_assignments_record_capacity_advisories",
     "test_qwendex_manager_launch_status_validates_process_repo_start_and_policy",
     "test_qwendex_concurrent_write_lock_acquisition_serializes_conflict_check_and_insert",
     "test_qwendex_begin_immediate_reports_bounded_busy_state",
     "test_qwendex_read_only_shell_gate_is_fail_closed_and_quote_aware",
-    "test_qwendex_read_only_non_shell_tool_gate_is_fail_closed",
+    "test_qwendex_non_shell_tools_allow_root_and_restrict_read_only_children",
     "test_runtime_generations_are_immutable_atomic_and_recoverable",
     "test_interrupted_state_migration_rolls_back_and_preserves_recovery_receipts",
     "test_corrupt_state_fails_closed_without_reinitializing_operator_data",
@@ -80,7 +84,7 @@ class LifecycleModel:
     immutable_policy_hash: str = "policy-manager-v1"
     desired_policy_hash: str = "policy-manager-v1"
     root_started: bool = False
-    prompt_admitted: bool = False
+    prompt_observed: bool = False
     root_terminal: bool = False
     decision_count: int = 0
     child_status: dict[str, str] = field(default_factory=dict)
@@ -88,11 +92,12 @@ class LifecycleModel:
     tool_locks: set[str] = field(default_factory=set)
     accepted_children: set[str] = field(default_factory=set)
     released_children: set[str] = field(default_factory=set)
-    blocked_stop_states: set[tuple[str, ...]] = field(default_factory=set)
+    observed_stop_states: set[tuple[str, ...]] = field(default_factory=set)
     rejections: list[str] = field(default_factory=list)
+    advisories: list[str] = field(default_factory=list)
     faults_seen: set[str] = field(default_factory=set)
     duplicate_events: int = 0
-    stop_continuations: int = 0
+    root_stop_passes: int = 0
     cross_repository_mutations: int = 0
     recovery_count: int = 0
     runtime_generation: str = "known-good"
@@ -107,7 +112,7 @@ class LifecycleModel:
         elif previous in {"completed", "failed", "recovered"}:
             self.duplicate_events += 1
         else:
-            self.rejections.append("subagent_stop_before_registration")
+            self.advisories.append("subagent_stop_before_registration")
 
     def apply(self, event: str) -> None:
         if event in REQUIRED_FAULTS:
@@ -120,11 +125,11 @@ class LifecycleModel:
             return
         if event == "user_prompt_submit":
             if not self.root_started or self.root_terminal:
-                self.rejections.append("prompt_without_live_root")
-            elif self.prompt_admitted:
+                self.advisories.append("prompt_bookkeeping_without_live_root")
+            if self.prompt_observed:
                 self.duplicate_events += 1
             else:
-                self.prompt_admitted = True
+                self.prompt_observed = True
                 self.decision_count += 1
             return
         if event == "subagent_start_primary":
@@ -158,15 +163,15 @@ class LifecycleModel:
             return
         if event == "parent_stop":
             active = tuple(sorted(child for child, status in self.child_status.items() if status == "active"))
-            if active:
-                if active in self.blocked_stop_states:
-                    self.duplicate_events += 1
-                else:
-                    self.blocked_stop_states.add(active)
-                    self.stop_continuations += 1
+            self.root_stop_passes += 1
+            if active in self.observed_stop_states:
+                self.duplicate_events += 1
             else:
-                self.root_terminal = True
-                self.tool_locks.clear()
+                self.observed_stop_states.add(active)
+            if active:
+                self.advisories.append("root_stopped_with_active_children")
+            self.root_terminal = True
+            self.tool_locks.clear()
             return
         if event == "abrupt_child_termination":
             active = sorted(child for child, status in self.child_status.items() if status == "active")
@@ -197,7 +202,7 @@ class LifecycleModel:
             "missing_corrupt_hook_shim",
             "sqlite_busy_locked",
         }:
-            self.rejections.append(event)
+            self.advisories.append(event)
             return
         if event in {"missing_corrupt_runtime_binary", "interrupted_runtime_activation"}:
             assert self.runtime_generation == "known-good"
@@ -230,9 +235,12 @@ class LifecycleModel:
         raise AssertionError(f"unknown deterministic event: {event}")
 
     def _start_child(self, child: str, lane: str, repo: str, policy_hash: str) -> None:
-        if not self.root_started or not self.prompt_admitted or self.root_terminal:
-            self.rejections.append("subagent_start_without_admission")
-            return
+        if not self.root_started:
+            self.advisories.append("subagent_start_without_root_bookkeeping")
+        if not self.prompt_observed:
+            self.advisories.append("subagent_start_without_prompt_bookkeeping")
+        if self.root_terminal:
+            self.advisories.append("subagent_start_after_root_stop")
         if repo != self.repository:
             self.rejections.append("repository_mismatch")
             return
@@ -269,8 +277,6 @@ class LifecycleModel:
             errors.append("failed_candidate_selected")
         if self.migration_version != 2:
             errors.append("interrupted_migration_committed")
-        if self.stop_continuations > len(self.blocked_stop_states):
-            errors.append("unbounded_stop_continuation")
         if self.recovery_count < 1:
             errors.append("recovery_not_executed")
         return errors
@@ -338,7 +344,9 @@ def evaluate(run_id: str, junit: Path, permutations: int) -> dict[str, Any]:
                 "event_count": len(events),
                 "duplicate_event_count": model.duplicate_events,
                 "rejection_count": len(model.rejections),
-                "stop_continuation_count": model.stop_continuations,
+                "advisory_count": len(model.advisories),
+                "root_stop_pass_count": model.root_stop_passes,
+                "root_stop_advisory_state_count": len(model.observed_stop_states),
                 "accepted_child_count": len(model.accepted_children),
                 "released_child_count": len(model.released_children),
                 "errors": errors,
@@ -397,11 +405,13 @@ def evaluate(run_id: str, junit: Path, permutations: int) -> dict[str, Any]:
             "invariant_violation_count": sum(len(item["errors"]) for item in failed),
         },
         "required_outcomes": {
-            "duplicate_events_idempotent_or_rejected": not failed,
+            "duplicate_events_idempotent_or_recorded": not failed,
             "duplicate_active_ledger_rows": 0,
             "double_slot_release": 0,
             "active_workers_after_recovery": 0,
-            "unbounded_stop_continuations": 0,
+            "root_stop_blocks": 0,
+            "root_prompt_blocks": 0,
+            "worker_stop_blocks": 0,
             "indefinite_waits_or_closes": 0,
             "cross_repository_mutations": 0,
             "silent_heavy_manager_downgrades": 0,

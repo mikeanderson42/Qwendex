@@ -410,11 +410,11 @@ def test_live_invariants_resolve_failed_worker_with_visible_waiver_without_hidin
     }
     summary = live.invariant_summary(state, [])
     assert summary["duplicate_equivalent_lanes"] == 0
-    assert summary["unresolved_required_lanes_at_finalization"] == 0
-    assert summary["required_lane_count"] == 1
-    assert summary["required_lane_completed_count"] == 1
-    assert summary["waived_required_lane_count"] == 1
-    assert summary["required_lane_completion_rate"] == 1.0
+    assert summary["unresolved_suggested_lanes"] == 0
+    assert summary["suggested_lane_count"] == 1
+    assert summary["suggested_lane_observed_count"] == 1
+    assert summary["waived_suggested_lane_count"] == 1
+    assert summary["suggested_lane_observation_rate"] == 1.0
 
     state["agents"].extend(
         [

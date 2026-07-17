@@ -18,7 +18,7 @@ for a scoped change.
 | Release artifact leakage | The release gate scans every tracked blob, path, and symlink for runtime/private material and binds the result to the tagged tree |
 | Adapter drift | Launcher checks verify model alias, context, guard profile, and status contract |
 | Stale delegation state | Manager sessions record heartbeat, stop condition, stop reason, and close metadata in local state |
-| Unsafe agent tool use | Agent pre-tool gates deny recursive child spawn, fail closed on non-allowlisted read-only shell events, reject conflicting write locks, and require approval for release/publish commands |
+| Delegation scope | Native capacity/depth/wait limits, root-only management tools, no recursive child management, and explicitly read-only child lanes bound subagent use; Qwendex does not gate root tools |
 
 ## Learning Preflight Denials
 
@@ -44,60 +44,25 @@ known secret-shaped strings, but receipts can still contain non-secret private
 context in output snippets.
 
 Exploration-performance telemetry is not a transcript or generic tool-call
-recorder. Its hook adapter captures only after the normal hook decision passes,
+recorder. Its hook adapter observes only accepted lifecycle events,
 uses local HMAC digests for correlation and duplicate comparison, and exposes
-aggregate-safe summaries only. A blocked hook produces no telemetry, storage
-failure cannot change the hook decision, and `QWENDEX_PERFORMANCE_DB` controls
+aggregate-safe summaries only. Events not accepted for observation produce no
+telemetry, storage failure cannot affect execution, and `QWENDEX_PERFORMANCE_DB` controls
 only the local store location. Operators should keep that database local and
 use `performance purge --approve` when its aggregate history is no longer
 needed.
 
-Tool capability manifests with per-tool network/write scopes are planned but not
-yet enforced as a general permission engine. The public CLI does enforce the
-Agent Management pre-tool gate for its managed events, including the
-single-writer file-lock strategy; stock Codex tool-registry filtering remains a
-separate patched-runtime integration boundary.
+Qwendex Agent Management is not a general permission engine. It does not
+authorize or deny prompts, root tools, file writes, release/publish commands, or
+final responses. Explicit user intent, Codex permissions, the selected
+sandbox/Yolo posture, credentials, network policy, and host controls remain the
+authority boundary.
 
-The release-command gate recognizes direct and path-qualified release commands,
-common `command`/`env` wrappers, shell `-c` and `eval` payloads, command
-substitutions, pipelines, and newline-separated commands. It is not a general
-shell sandbox: an arbitrary interpreter such as Python or `xargs` can construct
-commands the static recognizer cannot prove. Publication credentials, network
-egress controls, and the external execution sandbox therefore remain the final
-authority boundary. Only approval inherited by the managed hook process is
-trusted; command text and event JSON are untrusted inputs. Direct `gh api`
-POST, PUT, PATCH, and DELETE forms, plus body/field forms that imply POST, are
-approval-gated for every REST or GraphQL endpoint. An explicit GET remains a
-read-only request even when fields are supplied as query parameters.
-
-The managed read-only shell gate allows only the bare inspection commands and
-safe Git subcommands documented in [Agent Management](agent-management.md#write-safety).
-It parses quoted command lists and pipelines, then rejects unknown programs,
-interpreters, wrappers, shell expansion, redirection, external-output options,
-and unparseable input. This fail-closed classifier is effective only when the
-managed `PreToolUse` hook is installed and verified; OS sandboxing and command
-side effects outside that syntax-level contract remain separate controls.
-
-For writer profiles, the same classifier treats every non-allowlisted managed
-shell event as write-capable. Native subagents must use their top-level Codex
-`agent_id` and match an active registration, repository, current task, and
-declared write scope. Codex root events intentionally omit `agent_id`; in
-Manager Mode Qwendex accepts only the root owner derived from the matching
-`qdex` preflight and ignores identity claims in prompt or tool input. Opaque
-writes take the conservative repository lease, so arbitrary shell commands
-never bypass ownership merely because their side effects are difficult to
-infer. Per-tool root leases are released on `PostToolUse`, with Manager `Stop`
-providing turn-boundary cleanup. An aborted tool remains locked rather than
-weakening the single-writer boundary. After an abrupt launcher exit, orphan
-reclamation requires the recorded PID/process-start identity to be dead; a
-still-live prior launcher remains blocking.
-
-Manager prompt trust is established only by Qdex's live PID/start-ticks,
-repository-scoped preflight ledger/session, derived root identity, isolated
-Codex home, verified hooks, and policy hash. A direct internal-runtime process
-cannot become trusted by selecting the same repository or state database.
-Untrusted `UserPromptSubmit` fails before model work; untrusted `Stop` is
-non-blocking and cannot attach to or mutate a decision.
+The patched native delegation surface still applies capacity, depth and wait
+limits, hides management tools from children, prevents recursive child
+management, and preserves explicitly read-only child lanes. Manager hooks and
+ledgers add advisory context and observability; missing or mismatched identity,
+reports, validation, or hook wiring is reported without blocking root work.
 
 ## Certified Boundary
 
@@ -105,20 +70,19 @@ The production-hardening claim is deliberately limited to the tested Linux and
 Codex `0.144.4` canonical-patch matrix. Qwendex orchestration policy is not an
 operating-system sandbox: normal Qdex defaults to `workspace-write`, while
 Yolo is an explicit CLI, environment, or ignored operator-local opt-in that
-adds Codex's bypass flag once. A Manager preflight snapshots the resolved mode
-and source, so an active session cannot silently adopt a later permission
-change. `qwendex-dev` bare-launch bypass mode is development-only. Stock Codex
+adds Codex's bypass flag once. A Manager preflight may snapshot the resolved
+mode and source for diagnostics; it does not grant or revoke permission.
+`qwendex-dev` bare-launch bypass mode is development-only. Stock Codex
 and its normal home remain independent and provide the Off-mode recovery path.
 Qwendex shares the operator's authentication file intentionally, but keeps a
 generation-local copy of Codex's volatile `version.json` cache and installation
 identity. Acceptance compares the normal home's stable config, hooks, and
 installation identity and separately compares complete isolated decoy homes.
 
-Runtime source, hooks, patch identity, binary pair, config/schema, and state
+Runtime source, patch identity, binary pair, config/schema, and state
 schema are bound into one validated generation for each Qdex process. Mutable
-agent reports are written outside the sealed tree. Environment changes cannot
-replace an active policy or generation, child threads lack root collaboration
-tools in the canonical patch, read-only lanes cannot acquire writer ownership,
-and repository/symlink or policy-hash spoof attempts fail closed. These
-controls do not make claims about unsupported platforms, Codex versions, or
-arbitrary commands outside the managed-hook and host-sandbox boundary.
+agent reports are written outside the sealed tree. Child threads lack root
+collaboration tools in the canonical patch, recursively managed children are
+disabled, and explicitly read-only lanes remain constrained. These controls do
+not make Qwendex a root-tool or publication gate and do not make claims about
+unsupported platforms or Codex versions.

@@ -260,11 +260,11 @@ is configured; it does not probe availability.
 `orchestration` controls manager defaults:
 
 - `mode`: `off`, `auto`, `lite`, `medium`, `heavy`, or `manager`
-- `manager_deploy_policy`: `auto` by default; Manager Mode requires active
-  registered agent lanes unless this is set to `disabled`
+- `manager_deploy_policy`: `auto` by default; enables advisory lane planning
+  and observability, while `disabled` turns off deployment recommendations
 - `kaveman`: persisted enabled state and the enforced terse-output directive
 - `local_subagents`: default Local enabled state
-- `mode_profiles`: status label and default enforced worker capacity per mode:
+- `mode_profiles`: status label and native worker capacity per mode:
   Off 0, Auto 4, Lite 1, Medium 2, Heavy 3, and Manager 4; configured capacity
   is bounded by the conservative hard ceiling of 8
 - `local_qwen_eligibility`: deterministic classifier classes and max risk for
@@ -284,11 +284,11 @@ The selected mode profile's `max_subagents` also supplies
 one limit. Codex V2 counts the root thread separately, so Qdex supplies a
 native per-session ceiling of `max_subagents + 1`.
 
-The selected policy is sealed into each non-Off Qdex launch. The snapshot hash
-covers its behavioral fields and is revalidated on every managed hook. Current
-global state is retained separately as `desired_global_policy_hash`; changing
-Manager mode, Kaveman, or Local routing affects the next launch and marks an
-existing session as drifted rather than mutating it in place. Prompt admission
+The selected delegation policy is sealed into each non-Off Qdex launch. The
+snapshot covers native capacity, depth and wait limits, mode guidance, Kaveman,
+and Local routing. Current global state is retained separately as
+`desired_global_policy_hash`; changing it affects the next launch and can be
+reported as drift without blocking the current session. Lifecycle planning
 continues with the recorded launch availability and local-routing snapshot.
 
 `QWENDEX_MANAGER_MODE` and `QWENDEX_ORCHESTRATION_MODE` override the configured
@@ -335,16 +335,13 @@ scripts/qwendex manager close-stale --stale-after-minutes 30 --json
 
 `manager_only` remains a compatibility alias for `manager`.
 
-`manager_deploy_policy` defaults to `auto`. A Manager Mode session with no
-attached prompt is healthy `standby`, and an attached trivial/direct turn is
-healthy without a worker lane. An attached complex turn blocks when its
-required lane is missing or unresolved; a stale writer lane also blocks until
-it is integrated or explicitly stopped. Set `manager_deploy_policy` to
-`disabled` to opt out of deployment requirements; explicit manual manager
-lifecycle commands remain operator-directed.
+`manager_deploy_policy` defaults to `auto`. It enables advisory lane planning
+and lifecycle visibility; direct work remains valid, and missing, unresolved,
+or stale lanes do not block prompts, tools, publication, final responses, or
+health checks. Set it to `disabled` to turn off deployment recommendations;
+explicit manual lifecycle commands remain operator-directed.
 
 `manager repair --safe` is the public manager-state reconciliation path. The
 safe boundary is to reconcile read-only stale state and harmless empty stale
 writer lanes while keeping non-empty writer lanes open for operator review.
-Those remaining writer lanes are advisory warnings during daily health and
-blockers during strict health.
+Those remaining rows are advisory warnings in both daily and strict health.

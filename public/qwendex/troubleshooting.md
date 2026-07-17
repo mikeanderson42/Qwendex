@@ -18,7 +18,7 @@ Preserve the failed candidate and receipt for diagnosis; prune only with
 generations. If the affected checkout is v0.5.7, exit the old session and
 relaunch after upgrade because that release predates generation pinning.
 
-## Manager Prompt Is Rejected As An Untrusted Launch
+## Manager Lifecycle Identity Is Unmatched
 
 Use `qdex -C <repo>` rather than invoking Qwendex's internal runtime directly.
 For a persistent process, inspect the generic binding with:
@@ -28,17 +28,17 @@ scripts/qwendex manager launch-status --pid "$PID" --repo-root "$REPO" --json
 ```
 
 Reason codes distinguish missing or stale identity, repository mismatch,
-policy drift, and hook trust. An untrusted process is allowed to exit on its
-first Stop event; Qwendex does not attach it to a repository-matched decision.
+policy drift, and hook posture. These are observability diagnostics: they do not
+reject the prompt, root tools, release commands, or final response.
 
 Attachment diagnostics also distinguish `missing_launch_identity`,
 `state_db_mismatch`, `ledger_db_mismatch`, `decision_not_found`,
 `decision_ambiguous`, `session_mismatch`, `turn_unattached`, `turn_mismatch`,
 `repo_mismatch`, `process_identity_mismatch`, `policy_mismatch`, and
 `codex_home_mismatch`. Do not repair these by selecting the newest row or by
-repository alone. Exit the affected session and run the reported `qdex -C`
-recovery command from an external shell. Stop remains non-blocking when no
-single trusted decision can be selected and performs no guessed mutation.
+repository alone. Continue working if appropriate, and restart with `qdex -C`
+when you want a fresh lifecycle association. Qwendex performs no guessed state
+mutation.
 
 ## Native `qdex -C` Is Duplicated
 

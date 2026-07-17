@@ -349,7 +349,7 @@ def root_cause_evidence(
                 "patched_binary_digest",
                 "state_database_identity",
                 "ledger_database_identity",
-                "last_prompt_admission_id",
+                "last_prompt_bookkeeping_id",
                 "process_start_ticks",
             ],
         },
@@ -420,7 +420,7 @@ def root_cause_evidence(
             "generated_home_replaced",
             "patch_manifest_changed",
             "process_identity_rejected",
-            "prompt_admission_regression",
+            "prompt_bookkeeping_regression",
             "unknown_not_reproduced",
         ],
         "privacy_status": "pass",
@@ -505,7 +505,7 @@ def run_acceptance(run_id: str, output_root: Path) -> dict[str, Any]:
             ],
             cwd=source_root,
             environment=active_env,
-            label="active_session_prompt_admission",
+            label="active_session_prompt_bookkeeping",
         )
         commands.append(record)
         prompt_data = prompt.get("data") if isinstance(prompt.get("data"), Mapping) else {}
@@ -585,7 +585,7 @@ def run_acceptance(run_id: str, output_root: Path) -> dict[str, Any]:
                         "session_id": root_session,
                         "turn_id": root_turn,
                         "cwd": str(source_root),
-                        "last_assistant_message": "Version inspected. No edits. Validation: not required. Risks: none.",
+                        "last_assistant_message": "Version inspected.",
                         "edit_happened": False,
                     },
                     separators=(",", ":"),
@@ -804,6 +804,7 @@ def run_acceptance(run_id: str, output_root: Path) -> dict[str, Any]:
             "known_good_selected_during_candidate_build": selection_after_build.get("current") == generation_one_id,
             "active_generation_bytes_unchanged": immutable_before == immutable_after_build,
             "old_hook_passed_after_candidate_build": hook_after_build.get("status") == "pass",
+            "old_stop_passed_without_closeout_contract": old_stop.get("status") == "pass",
             "old_session_remained_on_generation_one": (old_stop_data.get("manager_decision") or {}).get("runtime_generation") == generation_one_id,
             "new_session_used_generation_two": qdex_preflight_data.get("runtime_generation") == generation_two_id,
             "failed_activation_restored_generation_two": selection_after_failure.get("current") == generation_two_id,

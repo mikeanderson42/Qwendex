@@ -1,17 +1,18 @@
 # Codex TUI Patching
 
-Qwendex standalone CLI functions, checks, routing, receipts, and Off-mode
-recovery work with stock Codex. Enforced Heavy and Manager guarantees require
-the supported canonical patch. The installed Codex npm package ships a stripped
+Qwendex standalone CLI functions, checks, routing, and receipts work with stock
+Codex. The supported canonical patch adds native delegation capacity, depth,
+wait, root-only management, no recursive child management, and explicitly
+read-only child behavior. The installed Codex npm package ships a stripped
 native binary, so Qwendex treats the integration as a versioned source patch
 instead of mutating the binary in place.
 
-With stock Codex, the standalone Qwendex CLI, checks, routing, receipts,
-offline evals, and Off-mode recovery remain supported. Enforced Heavy/Manager
-claims require the canonical Linux/Codex `0.144.4` patch, its matching
-`codex-code-mode-host`, verified managed hooks, and one validated runtime
-generation. Unknown versions or anchor drift fail closed rather than silently
-downgrading to prompt-only policy.
+With stock Codex, the standalone Qwendex CLI, checks, routing, receipts, and
+offline evals remain supported. Native patched behavior requires the canonical
+Linux/Codex `0.144.4` patch, its matching `codex-code-mode-host`, and one
+validated runtime generation. Managed hooks remain optional observability.
+Unknown versions or anchor drift fail closed for patch/build claims, not for
+ordinary root prompts, tools, publication, or final responses.
 
 ## Contract
 

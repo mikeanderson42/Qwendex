@@ -13,10 +13,10 @@ scripts/qwendex eval --json
 ```
 
 Advisory health is for daily operator visibility and strict health is for
-staging, release, and public claims. Advisory mode may keep `check` and
-`doctor` passing while surfacing manager warnings and repair hints; strict mode
-must fail on those issues. Require strict receipts before making
-release-readiness claims.
+staging, release, and public claims. Manager warnings and repair hints remain
+advisory in both modes. Strict mode still fails product-integrity issues such as
+missing required surface or public-documentation audit failures. Require strict
+receipts before making release-readiness claims.
 
 `scripts/qwendex eval --json` runs the full offline harness suite by default.
 Use `--case exact_marker` only for an offline marker fixture; it is not live
@@ -47,7 +47,8 @@ installer with system writes disabled, explicitly installs and verifies its
 managed hooks, then proves its preflight before the candidate checkout,
 migration, and rollback checks.
 The first upgraded status may be `standby` when the isolated state has no
-sessions; the gate accepts it only with Manager mode and ready write safety.
+sessions; acceptance verifies Manager mode, native delegation bounds, and the
+advisory lifecycle projection without treating write metadata as authority.
 Normal-Codex isolation compares stable upstream config, hooks, and installation
 identity plus complete decoy homes. Authentication is intentionally shared;
 the volatile version cache is copied into each generation rather than linked.

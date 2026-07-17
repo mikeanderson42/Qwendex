@@ -106,5 +106,6 @@ schema, hook ingestion, or retention behavior.
   release, patching, or public/private-boundary decisions.
 - Stop and repair before continuing if Local-off routes to Qwen, fresh-home
   checks write to the normal safe-home, receipts fail schema/digest validation,
-  manager state shows unexpected active/stale sessions, or live output contains
-  local-model guard markers or visible tool markup.
+  or live output contains local-model guard markers or visible tool markup.
+  Unexpected active or stale Manager rows are advisory lifecycle state: inspect
+  and reconcile them, but do not let them block unrelated operator work.

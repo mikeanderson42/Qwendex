@@ -102,18 +102,20 @@ is itself the selected project.
 
 Normal Qdex launches also allocate a per-launch metadata directory under the
 configured metadata root. Status and preflight JSON files are therefore not
-shared by concurrent launches. Manager capacity, locks, and worker ledgers are
-keyed by canonical repository root, so two repositories can hold independent
-live sessions without consuming one another's lanes.
+shared by concurrent launches. Manager capacity, advisory write metadata, and
+worker ledgers are keyed by canonical repository root, so two repositories can
+hold independent live sessions without consuming one another's lanes.
 
 ## Manager Delegation Acceptance
 
 The Manager runtime acceptance matrix covers Lite direct work, Medium bounded
 mapping, Heavy edit plus post-edit verification, full Manager root-only
 integration, Ultra/native proactive coexistence, immutable policy drift, and
-two simultaneous repository sessions. Each non-Off launch must prove prompt
-admission, a sealed launch policy, deterministic plan data, final worker
-reports, validation evidence, and a closed Stop status.
+two simultaneous repository sessions. It verifies native capacity, depth,
+wait, root-only management, no recursive child management, and explicitly
+read-only child constraints. Prompt association, plan data, worker reports,
+validation evidence, and Stop status are observability checks and never an
+authority gate over root work.
 
 Run the repository smoke suite and inspect the durable acceptance bundle:
 

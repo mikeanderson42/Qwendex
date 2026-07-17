@@ -516,7 +516,7 @@ def run_fresh_live(
         mode="Manager",
         prompt=(
             "Add a parse_record helper in app.py with focused regression tests. "
-            "Use the required non-Ultra Manager lane, run the full suite, and close all lifecycle reports."
+            "Use bounded non-Ultra Manager specialists when they help, then run the full suite."
         ),
         label="fresh_install_live",
         raw_root=raw_root,
@@ -545,10 +545,7 @@ def run_fresh_live(
         and not session.get("timed_out")
         and validation.get("result") == "pass"
         and int((session.get("worktree") or {}).get("changed_file_count") or 0) > 0
-        and invariants.get("required_lane_completion_rate") == 1.0
         and int(invariants.get("orphaned_active_sessions_after_cleanup") or 0) == 0
-        and int(invariants.get("unresolved_required_lanes_at_finalization") or 0) == 0
-        and int(invariants.get("manager_closed_count") or 0) == 1
     )
     return {
         "schema_version": "qwendex.fresh_install_live.v1",

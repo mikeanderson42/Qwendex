@@ -28,8 +28,9 @@ Use this file when diagnosing Qwendex, local-Qwen, or patched Codex behavior.
 - A live launch policy hash changes after an Agent Manager toggle: current-
   launch policy drift; hooks must use the preflight-exported effective policy
   and leave the toggle for the next launch.
-- Missing or ambiguous Manager attachment blocks Stop: recovery failure; Stop
-  must exit without guessed decision or lease mutation.
+- Missing or ambiguous Manager attachment: advisory association gap; Stop must
+  exit without guessing a decision or mutating unrelated lifecycle state, and
+  the root final response remains available.
 
 ## Debug Order
 

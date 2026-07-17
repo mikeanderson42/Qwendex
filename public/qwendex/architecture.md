@@ -10,8 +10,10 @@ Codex launch identity is deliberately split three ways:
 - the ignored `qwendex-codex-runtime` selects the supported patched build or a
   labelled upstream fallback and is not a public launch entrypoint.
 
-Only Qdex creates Manager launch authority. The internal runtime and repository
-scope alone are insufficient.
+Qdex is the public entrypoint for complete Manager lifecycle association. The
+internal runtime and repository scope alone are insufficient for those
+diagnostics, but lifecycle association is advisory and does not grant or revoke
+Codex authority.
 
 | Layer | Role |
 | --- | --- |
@@ -23,7 +25,7 @@ scope alone are insufficient.
 | Guard | Detects duplicate-read, loop, malformed markup, and configured budget issues |
 | Evidence | Writes receipts, indexes ledger metadata, and exposes eval summaries |
 | Learn | Validates a built-in non-mutating mock contract, inspects staged proposals, and delegates explicit external runs to SkillOpt |
-| Manager | Coordinates subagent lanes, shortcut policy, and stale-agent cleanup |
+| Manager | Advises on subagent lanes and exposes lifecycle state and stale-agent cleanup |
 | Seats | Defines `primary`, `qwen`, `audit`, `release`, and `sandbox` authority |
 
 The adapter is not a hidden second agent. It translates protocol, streams

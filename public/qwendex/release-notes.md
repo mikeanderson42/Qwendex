@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Reframed Agent Management as advisory delegation and lifecycle observability.
+  Manager metadata no longer authorizes or blocks prompts, root tools,
+  publish/release commands, or final responses.
+- Preserved native `multi_agent_v2` capacity/depth/wait limits, root-only
+  management, no recursive child management, explicitly read-only child lanes,
+  Local routing, and Codex sandbox/Yolo selection.
+- Suppressed Codex's expected unstable-feature startup warning in generated
+  Qdex homes while keeping `multi_agent_v2` enabled.
+- Removed process-environment release approval and unhooked-override variables
+  from the supported workflow; explicit user intent and Codex/host permissions
+  remain authoritative.
+
 ## 0.6.0-rc.3
 
 `v0.6.0-rc.3` updates the supported canonical Codex patch to `0.144.4` and

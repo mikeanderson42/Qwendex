@@ -547,7 +547,7 @@ class QdexManagerAttachmentTests(unittest.TestCase):
         self.assertEqual(rows[0][:3], ("goal-session", "goal-turn", 1))
         self.assertEqual(rows[0][3], first["data"]["policy_hash"])
 
-    def test_ambiguous_decisions_block_subagent_admission_without_selection(self) -> None:
+    def test_ambiguous_decisions_leave_subagent_admission_to_codex(self) -> None:
         repo, env = self.manager_env("ambiguous-spawn")
         preflight = self.preflight(env)
         manager_env = {**env, **preflight["data"]["exports"]}
@@ -579,9 +579,10 @@ class QdexManagerAttachmentTests(unittest.TestCase):
 
         result, payload = self.hook("PreToolUse", event, env=manager_env, check=False)
 
-        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.returncode, 0)
         hook_result = payload["data"]["hook_result"]
-        self.assertEqual(hook_result["event"], "manager.subagent_admission_rejected")
+        self.assertEqual(hook_result["event"], "manager.subagent_plan_unavailable")
+        self.assertNotEqual(hook_result.get("decision"), "block")
         self.assertEqual(hook_result["reason_code"], "decision_ambiguous")
         self.assertEqual(hook_result["manager_resolution"]["candidate_count"], 2)
 
