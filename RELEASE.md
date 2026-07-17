@@ -1,6 +1,6 @@
-# v0.6.0-rc.4
+# v0.6.1
 
-Advisory Agent Management prerelease.
+Stable Advisory Agent Management release.
 
 - Makes Manager planning, lifecycle metadata, hooks, identities, lane
   assignments, validation evidence, and health advisory observability rather
@@ -11,8 +11,12 @@ Advisory Agent Management prerelease.
 - Removes process-environment release approval and unhooked-override variables
   from the supported workflow; explicit user intent and Codex/host permissions
   remain authoritative.
-- Preserves the immutable `v0.6.0-rc.3` publication and its Codex `0.144.4`
-  compatibility contract unchanged.
+- Supersedes the `v0.6.0-rc.4` prerelease while retaining the immutable
+  `v0.6.0-rc.3` Codex `0.144.4` compatibility publication unchanged.
+
+# v0.6.0-rc.4
+
+Prerelease of the Advisory Agent Management boundary, superseded by `v0.6.1`.
 
 # v0.6.0-rc.3
 

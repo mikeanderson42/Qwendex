@@ -959,3 +959,14 @@ Reason: the advisory boundary is required for normal prompt, tool, and release
 operation; it cannot be represented by rewriting the already published rc.3
 tag. A successor prerelease makes the supported source, CLI/config version,
 documentation, tag, and GitHub release agree.
+
+## Stable Advisory Agent Management Publication
+
+Decision: promote the required Advisory Agent Management boundary to the
+stable `v0.6.1` release. Retain `v0.6.0-rc.4` and earlier tags/releases as
+immutable history.
+
+Reason: this behavior is required for normal Qwendex operation, and the
+operator selected a stable current release rather than an ongoing prerelease
+channel. Version, CLI/config metadata, documentation, the tag, and GitHub
+release must therefore converge on `0.6.1`.

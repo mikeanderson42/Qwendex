@@ -2,10 +2,10 @@
 
 ## Unreleased
 
-## 0.6.0-rc.4
+## 0.6.1
 
-`v0.6.0-rc.4` publishes the advisory Agent Management boundary required for
-normal Qwendex operation.
+`v0.6.1` is the stable release of the advisory Agent Management boundary
+required for normal Qwendex operation.
 
 - Reframed Agent Management as advisory delegation and lifecycle observability.
   Manager metadata no longer authorizes or blocks prompts, root tools,
@@ -18,6 +18,11 @@ normal Qwendex operation.
 - Removed process-environment release approval and unhooked-override variables
   from the supported workflow; explicit user intent and Codex/host permissions
   remain authoritative.
+
+## 0.6.0-rc.4
+
+`v0.6.0-rc.4` was the prerelease publication of the advisory Agent Management
+boundary, superseded by the stable `v0.6.1` release.
 
 ## 0.6.0-rc.3
 
