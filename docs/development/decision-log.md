@@ -970,3 +970,16 @@ Reason: this behavior is required for normal Qwendex operation, and the
 operator selected a stable current release rather than an ongoing prerelease
 channel. Version, CLI/config metadata, documentation, the tag, and GitHub
 release must therefore converge on `0.6.1`.
+
+## Codex 0.144.6 Compatibility Refresh
+
+Decision: advance the supported patched-Codex contract to Codex `0.144.6`
+using the official `rust-v0.144.6` source commit, a verified full-index
+Qwendex patch digest, and the normalized Cargo.lock digest produced by the
+isolated release build. Publish this compatibility refresh as Qwendex `0.6.2`.
+
+Reason: Codex version-specific native integration must bind the installer,
+source tag, source commit, patch footprint, binary pair, validation receipts,
+and public claims to one tested version. A patch release keeps the stable
+Qwendex API while preventing an upgraded stock CLI from silently running
+against an unsupported patched-runtime contract.

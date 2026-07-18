@@ -81,7 +81,7 @@ def write_pinned_codex_fixture(dev_root: Path) -> tuple[Path, Path]:
     codex.write_text(
         "#!/usr/bin/env bash\n"
         "if [[ \"${1:-}\" == \"--version\" ]]; then\n"
-        "  printf 'codex-cli 0.144.4\\n'\n"
+        "  printf 'codex-cli 0.144.6\\n'\n"
         "  exit 0\n"
         "fi\n"
         "exit 0\n",
@@ -95,10 +95,10 @@ def write_pinned_codex_fixture(dev_root: Path) -> tuple[Path, Path]:
         "schema_version": "qwendex.dev.codex_build.v1",
         "status": "pass",
         "source_head": "1" * 40,
-        "source_ref": "rust-v0.144.4",
+        "source_ref": "rust-v0.144.6",
         "source_patch_sha256": "2" * 64,
         "binary_sha256": sha256_file(codex),
-        "binary_version": "codex-cli 0.144.4",
+        "binary_version": "codex-cli 0.144.6",
         "code_mode_host": {"binary_sha256": sha256_file(host)},
     }
     receipt_path = dev_root / ".qwendex-dev" / "results" / "meta" / "codex_build.json"
@@ -299,7 +299,7 @@ def test_runtime_shares_auth_but_copies_version_cache_and_installation_identity(
     version = normal_home / "version.json"
     installation = normal_home / "installation_id"
     authentication.write_text('{"auth":"fixture"}\n', encoding="utf-8")
-    version.write_text('{"latest":"0.144.4"}\n', encoding="utf-8")
+    version.write_text('{"latest":"0.144.6"}\n', encoding="utf-8")
     installation.write_text("installation-fixture\n", encoding="utf-8")
     monkeypatch.setenv("HOME", str(home))
 
@@ -314,7 +314,7 @@ def test_runtime_shares_auth_but_copies_version_cache_and_installation_identity(
     assert not (codex_home / "installation_id").is_symlink()
     assert (codex_home / "installation_id").read_bytes() == installation.read_bytes()
     (codex_home / "version.json").write_text('{"latest":"fixture-new"}\n', encoding="utf-8")
-    assert version.read_text(encoding="utf-8") == '{"latest":"0.144.4"}\n'
+    assert version.read_text(encoding="utf-8") == '{"latest":"0.144.6"}\n'
 
 
 def test_corrupt_selector_fails_closed(tmp_path):
