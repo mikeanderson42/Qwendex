@@ -44,6 +44,7 @@ def qdex_fixture(
             #!/usr/bin/env python3
             import json
             import os
+            import shutil
             import sys
             from pathlib import Path
 
@@ -51,6 +52,15 @@ def qdex_fixture(
                 json.dumps(sys.argv[1:]),
                 encoding="utf-8",
             )
+            environment_capture = os.environ.get("QDEX_RUNTIME_ENV_CAPTURE", "")
+            if environment_capture:
+                Path(environment_capture).write_text(
+                    json.dumps({
+                        "path": os.environ.get("PATH", ""),
+                        "qwendex": shutil.which("qwendex") or "",
+                    }),
+                    encoding="utf-8",
+                )
             print("fake codex")
             """
         ),
@@ -78,6 +88,12 @@ def qdex_fixture(
                     print("status unavailable", file=sys.stderr)
                     raise SystemExit(3)
                 target = Path(args[args.index("--write") + 1])
+                session_state = Path(
+                    os.environ.get("QWENDEX_MANAGER_SESSION_STATE_FILE", "")
+                )
+                if str(session_state):
+                    session_state.parent.mkdir(parents=True, exist_ok=True)
+                    session_state.write_text("{}", encoding="utf-8")
                 agent_use = os.environ["TEST_AGENT_USE"]
                 policy = json.loads(os.environ["TEST_AGENT_POLICY"])
                 payload = {
@@ -87,6 +103,10 @@ def qdex_fixture(
                         "agent_policy": policy,
                         "manager_preflight_required": policy.get("mode") == "manager",
                         "agent_policy_hash": policy.get("policy_hash", ""),
+                        "status_file": str(target),
+                        "session_state_file": os.environ.get(
+                            "QWENDEX_MANAGER_SESSION_STATE_FILE", ""
+                        ),
                     },
                 }
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -370,6 +390,38 @@ def test_qdex_launches_with_safe_defaults_when_manager_status_is_unavailable(tmp
     assert overrides["features.multi_agent_v2.max_concurrent_threads_per_session"] == 1
 
 
+def test_qdex_pins_tui_qwendex_lookup_to_the_launch_runtime(tmp_path: Path) -> None:
+    repo, env, capture, _ = qdex_fixture(
+        tmp_path,
+        agent_use="Off",
+        policy={"mode": "off", "max_threads": 0},
+    )
+    env.pop("QWENDEX_QDEX_DRY_RUN")
+    environment_capture = tmp_path / "runtime-environment.json"
+    competing_bin = tmp_path / "competing-bin"
+    competing_bin.mkdir()
+    write_executable(competing_bin / "qwendex", "#!/usr/bin/env bash\nexit 99\n")
+    env["PATH"] = f"{competing_bin}:{env.get('PATH', '')}"
+    env["QDEX_RUNTIME_ENV_CAPTURE"] = str(environment_capture)
+
+    result = subprocess.run(
+        [str(QDEX), "-C", str(repo)],
+        cwd=repo,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=30,
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert capture.exists()
+    captured = json.loads(environment_capture.read_text(encoding="utf-8"))
+    launch_scripts = tmp_path / "dev" / "scripts"
+    assert captured["path"].split(":", 1)[0] == str(launch_scripts)
+    assert captured["qwendex"] == str(launch_scripts / "qwendex")
+
+
 def test_qdex_concurrent_launches_use_isolated_metadata_files(tmp_path: Path) -> None:
     repo, env, _, _ = qdex_fixture(
         tmp_path,
@@ -404,6 +456,56 @@ def test_qdex_concurrent_launches_use_isolated_metadata_files(tmp_path: Path) ->
     assert len(launch_roots) == 2
     assert all((root / "codex_status_write.json").is_file() for root in launch_roots)
     assert all((root / "manager_preflight.json").is_file() for root in launch_roots)
+
+
+def test_qdex_concurrent_launches_use_per_session_status_and_control_state_files(tmp_path: Path) -> None:
+    repo, env, _, _ = qdex_fixture(
+        tmp_path,
+        agent_use="Manager",
+        policy={
+            "mode": "manager",
+            "max_threads": 4,
+            "native_max_concurrent_threads": 5,
+            "policy_hash": "shared-policy",
+        },
+    )
+    other_repo = tmp_path / "other-repo"
+    other_repo.mkdir()
+    processes = [
+        subprocess.Popen(
+            [str(QDEX), "--qdex-json", "-C", str(target)],
+            cwd=target,
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        for target in (repo, other_repo)
+    ]
+
+    outputs = [process.communicate(timeout=30) for process in processes]
+    payloads = []
+    for process, (stdout, stderr) in zip(processes, outputs, strict=True):
+        assert process.returncode == 0, stderr or stdout
+        payloads.append(json.loads(stdout))
+
+    launch_roots = sorted((tmp_path / "dev/.qwendex-dev/results/meta/qdex").iterdir())
+    assert len(launch_roots) == 2
+    assert all((root / "codex_status.json").is_file() for root in launch_roots)
+    assert all((root / "manager_session_state.json").is_file() for root in launch_roots)
+    assert not (tmp_path / "dev/.qwendex-dev/codex_status.json").exists()
+
+    assert all(payload["schema_version"] == "qwendex.qdex.dry_run.v1" for payload in payloads)
+    status_payloads = [
+        json.loads((root / "codex_status_write.json").read_text(encoding="utf-8"))
+        for root in launch_roots
+    ]
+    status_files = [str(payload["data"]["status_file"]) for payload in status_payloads]
+    session_files = [str(payload["data"]["session_state_file"]) for payload in status_payloads]
+    assert len(set(status_files)) == 2
+    assert len(set(session_files)) == 2
+    assert all(Path(path).name == "codex_status.json" for path in status_files)
+    assert all(Path(path).name == "manager_session_state.json" for path in session_files)
 
 
 def test_qdex_preserves_native_ultra_proactive_mode_without_weakening_qwendex_policy(
