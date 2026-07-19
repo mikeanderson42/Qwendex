@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## 0.6.2
+
+`v0.6.2` refreshes the canonical patched-Codex compatibility contract for
+Codex `0.144.6`.
+
+- Pins `rust-v0.144.6`, its source commit, the full-index Qwendex patch digest,
+  and the normalized Cargo.lock digest as one reproducible build contract.
+- Rebuilds and validates the patched Codex binary and matching
+  `codex-code-mode-host` companion against that contract.
+- Requires `@openai/codex@0.144.6` in the dependency helper and updates public
+  compatibility, runtime, and validation documentation accordingly.
+- Keeps standalone Qwendex CLI, routing, receipts, checks, and Off-mode
+  recovery supported with stock Codex.
+
 ## 0.6.1
 
 `v0.6.1` is the stable release of the advisory Agent Management boundary

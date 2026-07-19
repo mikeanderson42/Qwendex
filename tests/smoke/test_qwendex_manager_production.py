@@ -582,7 +582,7 @@ def test_qdex_isolated_home_leaves_normal_codex_home_byte_for_byte_unchanged(tmp
     (normal_home / "config.toml").write_text('model = "normal-decoy"\n', encoding="utf-8")
     (normal_home / "hooks.json").write_text('{"hooks":{"PreToolUse":[]}}\n', encoding="utf-8")
     (normal_home / "auth.json").write_text('{"auth":"normal-decoy"}\n', encoding="utf-8")
-    (normal_home / "version.json").write_text('{"latest":"0.144.4"}\n', encoding="utf-8")
+    (normal_home / "version.json").write_text('{"latest":"0.144.6"}\n', encoding="utf-8")
     (normal_home / "installation_id").write_text("normal-installation\n", encoding="utf-8")
     (normal_home / "sentinel.bin").write_bytes(b"normal-codex-home-must-not-change\x00")
     fake_bin = tmp_path / "bin"
@@ -590,7 +590,7 @@ def test_qdex_isolated_home_leaves_normal_codex_home_byte_for_byte_unchanged(tmp
     fake_codex = fake_bin / "codex"
     fake_codex.write_text(
         "#!/usr/bin/env bash\n"
-        "if [[ \"${1:-}\" == \"--version\" ]]; then printf 'codex-cli 0.144.4\\n'; fi\n",
+        "if [[ \"${1:-}\" == \"--version\" ]]; then printf 'codex-cli 0.144.6\\n'; fi\n",
         encoding="utf-8",
     )
     fake_codex.chmod(0o755)

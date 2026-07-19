@@ -1,3 +1,16 @@
+# v0.6.2
+
+Codex `0.144.6` compatibility refresh.
+
+- Pins the official `rust-v0.144.6` source commit and the verified
+  full-index Qwendex patch and normalized Cargo.lock digests.
+- Rebuilds the supported patched Codex runtime and its matching
+  `codex-code-mode-host` companion against that source-bound contract.
+- Updates the installer, runtime selector, validation receipts, test fixtures,
+  and public compatibility claims to require Codex `0.144.6`.
+- Retains the stock-Codex Off-mode boundary and all prior release tags as
+  immutable history.
+
 # v0.6.1
 
 Stable Advisory Agent Management release.

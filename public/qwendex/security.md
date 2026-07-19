@@ -67,7 +67,7 @@ reports, validation, or hook wiring is reported without blocking root work.
 ## Certified Boundary
 
 The production-hardening claim is deliberately limited to the tested Linux and
-Codex `0.144.4` canonical-patch matrix. Qwendex orchestration policy is not an
+Codex `0.144.6` canonical-patch matrix. Qwendex orchestration policy is not an
 operating-system sandbox: normal Qdex defaults to `workspace-write`, while
 Yolo is an explicit CLI, environment, or ignored operator-local opt-in that
 adds Codex's bypass flag once. A Manager preflight may snapshot the resolved
