@@ -26,10 +26,12 @@ scripts/qwendex manager mode --toggle --json
 
 The selected Agent Manager mode is the default backend `AgentPolicy` source.
 `codex-status`, `manager status`, `agent policy`, and native lifecycle hooks
-read the same persisted mode, so the visible footer and delegation guidance
-move together when `Alt+M` changes modes. Explicit `--agent-use`,
-`QWENDEX_AGENT_USE`, or `CODEX_AGENT_USE` selectors still override the selected
-mode for that CLI session.
+read the same Qdex session control record. The repository setting is only the
+default for a fresh Qdex launch, so concurrent TUIs can hold different values.
+If a selected mode would require different native capacity, the footer shows
+the requested and active modes with a restart marker. Explicit `--agent-use`,
+`QWENDEX_AGENT_USE`, or `CODEX_AGENT_USE` selectors still override one CLI
+invocation without mutating an open TUI.
 
 Visible indicators:
 
@@ -45,7 +47,8 @@ scripts/qwendex manager kaveman --toggle --json
 
 When Kaveman is `[Y]`, Qwendex writes a terse-output directive into the Codex
 status file. The patched Codex TUI reads that directive and appends it to
-developer instructions for thread start, resume, and fork flows. This is
+developer instructions for the next root turn. The active root turn and its
+children retain the policy snapshot accepted at `UserPromptSubmit`. This is
 lightweight Qwendex state, not a vendored copy of the external Caveman package.
 
 `Alt+L` toggles whether local subagents may be used:
@@ -141,15 +144,13 @@ needed because hooks do not gate launch or work.
 Legacy compatibility remains: the `manager_only` spelling maps to
 `Manager Mode`.
 
-The preflight policy is immutable for the life of the Qdex process. Its
-content hash includes the selected Manager level, Kaveman output policy, Local
-enabled state, and launch-relevant local routing configuration. A later global
-Manager, Kaveman, or Local change affects only a new launch. Existing-session status reports
-`policy_drift`, `restart_required`, `policy_hash`,
-`desired_global_policy_hash`, and `session_policy_valid`; later turns retain the
-original selected mode, Local routing eligibility, and policy hash until Qdex
-restarts. Lifecycle planning uses launch-time Local availability and does not
-re-probe or reinterpret Local state inside the prompt hook.
+Native capacity, depth, waits, and launch-time Local routing are immutable for
+the life of a Qdex process. A later Manager or Local selection that conflicts
+with that snapshot is requested state and needs restart; `codex-status` and
+`manager status` expose both values and the precise restart reason. Kaveman is
+different: it is accepted at the next root prompt, then frozen for that root
+turn and its child hooks. Lifecycle planning keeps launch-time Local
+availability and does not re-probe or reinterpret it inside a prompt hook.
 
 Qdex always enables the supported Codex V2 surface and injects the selected
 worker cap plus root/worker usage hints. For non-Ultra reasoning it also injects
@@ -333,11 +334,13 @@ running; terminal evidence is integrated or the turn is finalized instead.
 
 ## Recovery And Rollback
 
-When status reports policy drift, restart Qdex when convenient to adopt the
-desired mode; do not rewrite the live snapshot. Missing hooks or patch features
-reduce Manager observability and should produce repair guidance, not block the
-session. Setting the next-launch mode to `Off` selects stock delegation
-behavior. Preserve lifecycle receipts when useful for diagnosis.
+When a mode or Local status reports restart-required, restart Qdex to adopt the
+requested native snapshot; do not rewrite the live one. A Kaveman selection
+instead applies at the next root prompt and remains frozen for that turn.
+Missing hooks or patch features reduce Manager observability and should produce
+repair guidance, not block the session. Setting the next-launch mode to `Off`
+selects stock delegation behavior. Preserve lifecycle receipts when useful for
+diagnosis.
 
 Qdex sessions launched by this candidate are pinned to one immutable runtime
 generation. Building a candidate does not change the active session; atomic
@@ -377,11 +380,11 @@ Writing hook config is explicit and overwrite-protected. `--install` updates
 Qwendex-managed entries in place while preserving unrelated handlers;
 `--install --force` replaces the complete file. Generated hook commands
 use `agent hook ... --codex-hook-output`, which strips the diagnostic Qwendex
-envelope and emits only Codex-compatible hook stdout. They also embed the active
-Qwendex state DB, ledger DB, receipt root, status file, and root hints; reinstall
-managed hooks after moving a dev home. Hooks and ledger associations are
-optional observability, so missing entries are reported without an override or
-admission gate.
+envelope and emits only Codex-compatible hook stdout. They embed fixed Qwendex
+state, ledger, receipt, and runtime paths, while inheriting Qdex's private
+status/control paths; reinstall managed hooks after moving a dev home. Hooks
+and ledger associations are optional observability, so missing entries are
+reported without an override or admission gate.
 
 The CLI records `agent_id`, lane, task, owner, write surface, stop condition,
 artifacts, context packet, heartbeat time, validation status, stop reason, and

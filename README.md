@@ -252,6 +252,11 @@ subprocess env exports, and root/child management tool-surface metadata. See
 [Agent Management](public/qwendex/agent-management.md) for the public
 `qwendex agent ...` commands.
 
+Qdex TUI controls are per-launch: `codex-status` distinguishes requested,
+launch-effective, and accepted-turn policy. Kaveman changes the next root turn;
+mode or Local changes that need different native capacity are shown as
+restart-required rather than silently changing an active process.
+
 ## Codex TUI Integration
 
 Qwendex standalone CLI functions, checks, routing, and receipts work with stock

@@ -8,9 +8,11 @@ in the local state DB, not by prompt memory alone.
 
 By default, the selected Agent Manager mode is the backend `AgentPolicy`
 source. In the patched TUI, `Alt+M` runs
-`scripts/qwendex manager mode --toggle --json`; the selected mode is persisted
-in the local state DB and drives the policy reported by `agent`, `manager`,
-`check`, `doctor`, `codex-status`, and native lifecycle hooks.
+`scripts/qwendex manager mode --toggle --json`. A Qdex launch stores that
+selection in its private session control record; the repository state DB is a
+default for future launches, not shared truth for open TUIs. `codex-status`
+and `manager status` identify requested, launch-effective, and accepted-turn
+policy separately.
 
 Use a CLI selector for one command:
 
@@ -207,14 +209,17 @@ record exists. A continuation can begin without a prompt hook; later lifecycle
 events may fill the association. Ambiguity stays diagnostic rather than becoming
 an execution gate.
 
-The effective AgentPolicy exported by preflight is pinned for that live launch.
-Its content hash covers Agent Manager mode, Kaveman output policy, Local enabled
-state, and launch-relevant local routing configuration. Changing any of those
-updates the next launch but does not change the policy used by hooks in an
-already-running Qdex process. Hooks report snapshot drift when observed. Status
-reports the desired global hash, `policy_drift`,
-`restart_required`, and `session_policy_valid`; later turns keep the recorded
-launch policy and launch-time Local availability until restart.
+Each Qdex launch owns a private control record and status file. Native worker
+capacity, depth, waits, and launch-time Local routing are immutable for that
+process. If an `Alt+M` selection needs different capacity, the footer and JSON
+show the requested mode, active mode, and `restart_required` rather than
+pretending the capacity changed live.
+
+Kaveman is turn-scoped: the next root `UserPromptSubmit` accepts a fresh output
+policy hash, while the active root turn and its children retain their accepted
+snapshot. A Kaveman toggle therefore changes the next turn without partially
+mutating an in-flight root/child pair. `status_authority` exposes the active and
+next-turn hashes plus the scope of the status source.
 
 `manager launch-status --pid <pid> --repo-root <path> --json` exposes a stable,
 read-only health projection for generic supervisors. It does not return
@@ -222,9 +227,10 @@ prompts, environment values, credentials, ledger identifiers, or raw decision
 records.
 
 `agent policy --json`, `agent plan --json`, `manager status --json`,
-`codex-status --json`, and `manager preflight --json` all expose the same
-`output_policy` object. When Kaveman is enabled, that policy requires terse
-output, carries the configured directive, changes the policy hash, and exports
+`codex-status --json`, and `manager preflight --json` expose the resolved
+`output_policy`; per-launch status also names whether it is active now or for
+the next root turn. When Kaveman is enabled, that policy requires terse output,
+carries the configured directive, changes the policy hash, and exports
 `QWENDEX_OUTPUT_POLICY=kaveman` plus the Kaveman directive for managed workflow
 launches.
 
@@ -232,9 +238,9 @@ Manual `agent hook ... --json` commands return the stable Qwendex diagnostic
 envelope. Managed Codex hook config uses `agent hook ... --codex-hook-output`
 so hook stdout contains only the raw Codex event schema accepted by the Codex
 hook parser. Generated hook commands carry fixed Qwendex state DB, ledger DB,
-performance DB, receipt root, status file, and root hints. Dynamic Qdex launch identity must
-still be inherited from the live process; fixed state paths cannot substitute
-for that identity.
+performance DB, receipt root, and runtime hints, but deliberately inherit the
+per-launch status and control paths from Qdex. Hook verification rejects a
+managed command that statically overrides `QWENDEX_CODEX_STATUS_FILE`.
 
 Generate Codex-compatible managed hook wiring with:
 
