@@ -1,3 +1,18 @@
+# v0.6.3
+
+Agent Manager, Kaveman, and Local TUI toggle acceptance release.
+
+- Connects the native `qwendex-manager` footer and `Alt+M`, `Alt+K`, and
+  `Alt+L` hotkeys to the canonical per-launch Qwendex control and status-file
+  contract.
+- Validates the full Agent Manager duty cycle, Kaveman active-turn snapshot
+  and next-turn adoption, Local fail-closed routing, concurrent session
+  isolation, and Local restart adoption.
+- Makes a pending Local native-snapshot change visible as `[Ready (restart)]`
+  or `[Off (restart)]` until a fresh Qdex launch adopts it.
+- Rebuilds and verifies the supported Codex `0.144.6` patched binary contract;
+  stock Codex remains the Off-mode recovery path.
+
 # v0.6.2
 
 Codex `0.144.6` compatibility refresh.

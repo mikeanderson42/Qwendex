@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## 0.6.3
+
+`v0.6.3` validates the supported Codex TUI controls for Agent Manager, Kaveman,
+and Local routing against per-launch Qwendex state.
+
+- Connects `Alt+M`, `Alt+K`, and `Alt+L` to the canonical Qwendex manager
+  commands and refreshes the `qwendex-manager` footer after each toggle.
+- Covers the complete Agent Manager duty cycle, Kaveman next-turn policy
+  snapshots, Local fail-closed routing, per-launch isolation, and Local
+  restart adoption in the smoke and release-contract suites.
+- Shows an explicit Local restart marker when a running launch has a different
+  native Local snapshot from the newly requested control state.
+- Verifies the source-patched Codex `0.144.6` binary with an isolated PTY
+  smoke, including all three hotkeys and their status-file updates.
+
 ## 0.6.2
 
 `v0.6.2` refreshes the canonical patched-Codex compatibility contract for
