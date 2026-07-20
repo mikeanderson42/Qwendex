@@ -4966,10 +4966,19 @@ def apply_manager_session_policy_surface(
     return data
 
 
-def manager_status_surface_text(label: str, local_state: str, kaveman_enabled: bool) -> str:
+def manager_status_surface_text(
+    label: str,
+    local_state: str,
+    kaveman_enabled: bool,
+    *,
+    local_restart_required: bool = False,
+) -> str:
+    local_label = local_state_label(local_state)
+    if local_restart_required:
+        local_label = f"{local_label} (restart)"
     return (
         f"{{Qwendex}} Agent Manager: [{label}] | Kaveman: [{'Y' if kaveman_enabled else 'N'}] "
-        f"| Local: [{local_state_label(local_state)}] (Alt+M/K/L)"
+        f"| Local: [{local_label}] (Alt+M/K/L)"
     )
 
 
@@ -5118,6 +5127,7 @@ def codex_status_payload(config: Mapping[str, Any], *, write_path: Path | None =
         status_label,
         str(local_status.get("local_state") or "unknown"),
         kaveman_enabled,
+        local_restart_required=bool(policy_transition.get("local_restart_required")),
     )
     data = {
         "text": text,

@@ -2746,6 +2746,47 @@ def test_qwendex_session_mode_change_is_requested_until_a_capacity_restart(tmp_p
     assert restored["data"]["local_enabled"] == before["data"]["local_enabled"]
 
 
+def test_qwendex_session_local_change_is_requested_until_a_capacity_restart(tmp_path):
+    session_env = {
+        "QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite"),
+        "QWENDEX_MANAGER_SESSION_STATE_FILE": str(tmp_path / "session-a.json"),
+        "QWENDEX_QDEX_LAUNCH_ID": "session-a",
+        "QWENDEX_CODEX_STATUS_FILE": str(tmp_path / "session-a-status.json"),
+        "QWENDEX_QDEX_LAUNCH_MODE": "manager",
+        "QWENDEX_QDEX_LAUNCH_AGENT_USE": "Manager",
+        "QWENDEX_QDEX_LAUNCH_MAX_WORKERS": "4",
+        "QWENDEX_QDEX_LAUNCH_LOCAL_ENABLED": "0",
+        "QWENDEX_FORCE_LOCAL_QWEN_AVAILABLE": "1",
+    }
+
+    json_result("manager", "mode", "--set", "manager", "--json", env=session_env)
+    json_result("manager", "local", "--set", "off", "--json", env=session_env)
+    before = json_result("codex-status", "--json", env=session_env)
+    json_result("manager", "local", "--set", "on", "--json", env=session_env)
+    requested = json_result("codex-status", "--json", env=session_env)
+
+    assert before["data"]["text"] == "{Qwendex} Agent Manager: [Manager Mode] | Kaveman: [N] | Local: [Off] (Alt+M/K/L)"
+    assert requested["data"]["text"] == "{Qwendex} Agent Manager: [Manager Mode] | Kaveman: [N] | Local: [Ready (restart)] (Alt+M/K/L)"
+    assert requested["data"]["local_enabled"] is True
+    assert requested["data"]["effective_local_enabled"] is False
+    assert requested["data"]["policy_transition"]["local_restart_required"] is True
+    assert requested["data"]["status_authority"]["restart_required"] is True
+
+    fresh_env = {
+        **session_env,
+        "QWENDEX_MANAGER_SESSION_STATE_FILE": str(tmp_path / "session-b.json"),
+        "QWENDEX_QDEX_LAUNCH_ID": "session-b",
+        "QWENDEX_CODEX_STATUS_FILE": str(tmp_path / "session-b-status.json"),
+        "QWENDEX_QDEX_LAUNCH_LOCAL_ENABLED": "1",
+    }
+    fresh = json_result("codex-status", "--json", env=fresh_env)
+
+    assert fresh["data"]["local_enabled"] is True
+    assert fresh["data"]["effective_local_enabled"] is True
+    assert fresh["data"]["policy_transition"]["local_restart_required"] is False
+    assert fresh["data"]["status_authority"]["local_restart_required"] is False
+
+
 def test_qwendex_codex_status_reports_unusable_local_state(tmp_path):
     status_file = tmp_path / "codex_status.json"
     env = {
