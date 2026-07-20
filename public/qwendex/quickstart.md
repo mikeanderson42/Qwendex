@@ -14,7 +14,7 @@ git switch --detach <published-release-tag>
 git status --short
 ```
 
-The annotated `v0.6.2` tag is the publication boundary for this stable
+The annotated `v0.6.3` tag is the publication boundary for this stable
 release. Untagged source is candidate material until the release operation
 creates and pushes that tag.
 

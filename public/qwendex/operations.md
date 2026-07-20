@@ -227,6 +227,12 @@ and `Alt+L` toggles Local. `Local: [Off]` means Qwendex will skip local
 subagents even when the local model endpoint is healthy; `Local: [Unavailable]`
 means intent is on but the probe could not confirm a usable local route.
 
+These controls are scoped to the open Qdex launch. Inspect
+`codex-status --json` or `manager status --json` for `status_authority` and
+`policy_transition`: Kaveman applies at the next root prompt and stays frozen
+for its children, while mode or Local changes that exceed the launch snapshot
+are explicitly restart-required.
+
 Manager Mode defaults to `max_subagents: 4`. Operators may configure a lower or
 higher bounded value up to the conservative product ceiling of 8 concurrent
 worker lanes; Codex V2 counts the root separately.

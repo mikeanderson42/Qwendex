@@ -67,7 +67,7 @@ Manager routing is per lane. The main Codex session keeps the user's selected
 model and reasoning. Low-risk bounded lanes may use local Qwen; high-risk lanes
 escalate to GPT/Codex authority.
 
-Qwendex `0.6.2` installs validated runtime generations side by side. Each
+Qwendex `0.6.3` installs validated runtime generations side by side. Each
 Qdex process is pinned to one immutable source/binary/config contract;
 activation affects only new sessions, and shell recovery can restore the prior
 known-good generation without invoking Qdex. Stock Codex supports Qwendex's
@@ -103,7 +103,7 @@ git fetch --tags origin
 git switch --detach <published-release-tag>
 ```
 
-The annotated `v0.6.2` tag is the publication boundary for this stable
+The annotated `v0.6.3` tag is the publication boundary for this stable
 release; untagged source remains candidate material until the release gates
 create and push that tag.
 
@@ -252,6 +252,11 @@ subprocess env exports, and root/child management tool-surface metadata. See
 [Agent Management](public/qwendex/agent-management.md) for the public
 `qwendex agent ...` commands.
 
+Qdex TUI controls are per-launch: `codex-status` distinguishes requested,
+launch-effective, and accepted-turn policy. Kaveman changes the next root turn;
+mode or Local changes that need different native capacity are shown as
+restart-required rather than silently changing an active process.
+
 ## Codex TUI Integration
 
 Qwendex standalone CLI functions, checks, routing, and receipts work with stock
@@ -349,10 +354,11 @@ claims require GPT/Codex review and the appropriate Qwendex verification tier.
 
 ## Current Release / Known Limits
 
-This checkout is seeded as `v0.6.2` and supports Codex `0.144.6`.
+This checkout is seeded as `v0.6.3` and supports Codex `0.144.6`.
 It includes the supported-Codex update,
-state-schema/runtime isolation fixes, and advisory Agent Management boundary
-described in the release notes. Its
+state-schema/runtime isolation fixes, advisory Agent Management boundary, and
+validated Agent Manager/Kaveman/Local TUI controls described in the release
+notes. Its
 source-bound Manager production validation summary is generated only after the
 offline, live, self-hosting, fresh-install, upgrade, rollback, and release
 tiers pass. The annotated tag and GitHub prerelease are created only after the

@@ -340,12 +340,12 @@ root ownership id, and policy hash to Codex only after the preflight record
 exists. Manager Stop gates require that ledger and close either a managed-lane
 completion or a direct-work exception with validation evidence.
 
-Update: the immutable launch hash also seals Local enabled state and the
+Update: the immutable launch hash seals Local enabled state and the
 launch-relevant local routing and eligibility configuration. Prompt admission
 uses the recorded launch availability rather than re-reading or probing the
-global Local setting. Manager, Kaveman, or Local changes therefore appear as
-desired policy drift while the active session remains valid under its original
-snapshot.
+global Local setting. Manager and Local changes that need a different native
+snapshot are restart-required. Kaveman instead accepts a fresh policy only at a
+new root prompt, then freezes it for that root turn and its children.
 
 Reason: Manager Mode is an execution contract, not only a selected label. The
 operator should not be able to start write-capable direct Codex work in Manager
@@ -353,6 +353,29 @@ Mode without a recorded route decision, hook posture, verifier expectation, and
 finalization path. Interactive prompts can still start before the task text is
 known, but that path is explicitly recorded as
 `interactive_prompt_unknown_prelaunch`.
+
+## Session-Scoped TUI Controls And Turn Snapshots
+
+Decision: every Qdex launch creates private manager-control and Codex-status
+files under its launch metadata root. The repository manager setting remains a
+default for new launches, never the canonical state of an open TUI. Generated
+managed-hook commands must inherit the dynamic launch environment rather than
+embedding `QWENDEX_CODEX_STATUS_FILE`; verification rejects a static status-file
+override. Qdex also places its pinned runtime scripts first on `PATH` so the
+patched TUI hotkeys invoke the same generation as the running process.
+
+Mode and Local controls remain constrained by immutable native launch capacity
+and routing state. Status therefore presents requested mode separately from
+the active effective mode and names a restart requirement. Kaveman is
+turn-scoped: a root `UserPromptSubmit` atomically records the policy hash, and
+root/child hooks use that accepted snapshot until the next root prompt.
+
+Reason: a shared `codex_status.json` and global Manager settings were
+last-writer-wins under concurrent Qdex sessions, and a live Kaveman toggle could
+otherwise leave an active root and its child hooks with mismatched policy. The
+private control record, status authority fields, and accepted-turn snapshot
+make concurrent state and transition boundaries observable without changing
+permissions, routing authority, or Manager's advisory role.
 
 ## Launcher-Derived Manager Root Ownership
 

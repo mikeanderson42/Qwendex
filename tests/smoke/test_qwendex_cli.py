@@ -27,6 +27,12 @@ _AMBIENT_QWENDEX_RUNTIME_KEYS = {
     "QWENDEX_OUTPUT_POLICY",
     "QWENDEX_QDEX_PERMISSION_MODE",
     "QWENDEX_QDEX_PERMISSION_SOURCE",
+    "QWENDEX_QDEX_LAUNCH_ID",
+    "QWENDEX_QDEX_LAUNCH_POLICY_HASH",
+    "QWENDEX_QDEX_LAUNCH_MODE",
+    "QWENDEX_QDEX_LAUNCH_AGENT_USE",
+    "QWENDEX_QDEX_LAUNCH_MAX_WORKERS",
+    "QWENDEX_QDEX_LAUNCH_LOCAL_ENABLED",
     "QWENDEX_RUN_ID",
 }
 
@@ -319,7 +325,7 @@ def test_qwendex_version_and_config_are_in_sync():
     sample_config = json.loads((ROOT / "config" / "qwendex" / "qwendex.sample.json").read_text(encoding="utf-8"))
     version = json_result("version", "--json")
 
-    assert qwendex.VERSION == "0.6.2"
+    assert qwendex.VERSION == "0.6.3"
     assert version["data"]["version"] == qwendex.VERSION
     assert project_config["version"] == qwendex.VERSION
     assert sample_config["version"] == qwendex.VERSION
@@ -1883,7 +1889,7 @@ def assert_same_root_supports_quoted_path(tmp_path, path_fragment):
 
     assert config["projects"] == {str(checkout): {"trust_level": "trusted"}}
     assert qwendex.returncode == 0, qwendex.stderr or qwendex.stdout
-    assert json.loads(qwendex.stdout)["data"]["version"] == "0.6.2"
+    assert json.loads(qwendex.stdout)["data"]["version"] == "0.6.3"
     assert qwendex_dev.returncode == 0, qwendex_dev.stderr or qwendex_dev.stdout
     assert sourced_env.returncode == 0, sourced_env.stderr or sourced_env.stdout
     assert sourced_env.stdout.strip() == str(checkout)
@@ -2501,6 +2507,284 @@ def test_qwendex_codex_status_warns_on_state_db_mismatch(tmp_path):
     assert written["status_file_diagnostics"]["status_file_state_db"] == env_b["QWENDEX_STATE_DB"]
     assert not written["status_file_diagnostics"]["warnings"]
     assert "no verified Qwendex Codex hooks" in " ".join(written["warnings"])
+
+
+def test_qwendex_session_controls_are_isolated_from_defaults_and_status_authority(tmp_path):
+    state_db = tmp_path / "qwendex.sqlite"
+    default_env = {
+        "QWENDEX_STATE_DB": str(state_db),
+        "QWENDEX_FORCE_LOCAL_QWEN_AVAILABLE": "1",
+    }
+    session_a = {
+        **default_env,
+        "QWENDEX_MANAGER_SESSION_STATE_FILE": str(tmp_path / "session-a.json"),
+        "QWENDEX_QDEX_LAUNCH_ID": "session-a",
+        "QWENDEX_CODEX_STATUS_FILE": str(tmp_path / "session-a-status.json"),
+    }
+    session_b = {
+        **default_env,
+        "QWENDEX_MANAGER_SESSION_STATE_FILE": str(tmp_path / "session-b.json"),
+        "QWENDEX_QDEX_LAUNCH_ID": "session-b",
+        "QWENDEX_CODEX_STATUS_FILE": str(tmp_path / "session-b-status.json"),
+    }
+
+    json_result("manager", "mode", "--set", "off", "--json", env=default_env)
+    json_result("manager", "kaveman", "--set", "off", "--json", env=default_env)
+    json_result("manager", "mode", "--set", "manager", "--json", env=session_a)
+    json_result("manager", "kaveman", "--set", "on", "--json", env=session_a)
+
+    a_status = json_result("codex-status", "--write", session_a["QWENDEX_CODEX_STATUS_FILE"], "--json", env=session_a)
+    b_status = json_result("codex-status", "--write", session_b["QWENDEX_CODEX_STATUS_FILE"], "--json", env=session_b)
+    default_status = json_result("codex-status", "--json", env=default_env)
+
+    assert a_status["data"]["mode"] == "manager"
+    assert a_status["data"]["kaveman_enabled"] is True
+    assert a_status["data"]["agent_policy_hash"] != b_status["data"]["agent_policy_hash"]
+    assert b_status["data"]["mode"] == "off"
+    assert b_status["data"]["kaveman_enabled"] is False
+    assert default_status["data"]["mode"] == "off"
+    assert default_status["data"]["kaveman_enabled"] is False
+
+    assert a_status["data"]["control_state"]["scope"] == "per_launch_session"
+    assert a_status["data"]["control_state"]["session_id"] == "session-a"
+    assert a_status["data"]["status_authority"]["authoritative_for_open_session"] is True
+    assert b_status["data"]["status_authority"]["session_id"] == "session-b"
+    assert default_status["data"]["status_authority"]["scope"] == "aggregate_compatibility"
+    assert default_status["data"]["status_authority"]["authoritative_for_open_session"] is False
+
+    a_record = json.loads(Path(session_a["QWENDEX_MANAGER_SESSION_STATE_FILE"]).read_text(encoding="utf-8"))
+    b_record = json.loads(Path(session_b["QWENDEX_MANAGER_SESSION_STATE_FILE"]).read_text(encoding="utf-8"))
+    assert a_record["selected_mode"] == "manager"
+    assert a_record["kaveman_enabled"] is True
+    assert b_record["selected_mode"] == "off"
+    assert b_record["kaveman_enabled"] is False
+
+
+def test_qwendex_session_kaveman_toggle_snapshots_active_turn_and_refreshes_next_turn(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    default_env = with_live_manager_identity({
+        "QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite"),
+        "QWENDEX_RESULTS_ROOT": str(tmp_path / "results"),
+        "CODEX_HOME": str(tmp_path / "codex_home"),
+        "QWENDEX_MANAGER_ALLOW_UNHOOKED": "1",
+        "QWENDEX_MANAGER_TARGET_REPO": str(repo),
+        "QWENDEX_FORCE_LOCAL_QWEN_AVAILABLE": "0",
+    })
+    session_env = {
+        **default_env,
+        "QWENDEX_MANAGER_SESSION_STATE_FILE": str(tmp_path / "session-a.json"),
+        "QWENDEX_QDEX_LAUNCH_ID": "session-a",
+        "QWENDEX_CODEX_STATUS_FILE": str(tmp_path / "session-a-status.json"),
+    }
+
+    json_result("manager", "mode", "--set", "off", "--json", env=default_env)
+    json_result("manager", "kaveman", "--set", "off", "--json", env=default_env)
+    json_result("manager", "mode", "--set", "manager", "--json", env=session_env)
+    json_result("manager", "kaveman", "--set", "on", "--json", env=session_env)
+    preflight = json_result(
+        "manager", "preflight", "--interactive-prompt-unknown", "--json", env=session_env
+    )
+    initial_hash = preflight["data"]["policy_hash"]
+    active_env = {
+        **session_env,
+        **preflight["data"]["exports"],
+        "QWENDEX_QDEX_LAUNCH_POLICY_HASH": initial_hash,
+    }
+    before = json_result("codex-status", "--json", env=active_env)
+    prompt_hook = json_result(
+        "agent",
+        "hook",
+        "UserPromptSubmit",
+        "--event-json",
+        json.dumps({
+            "session_id": "root-session-a",
+            "turn_id": "root-turn-a",
+            "cwd": str(repo),
+            "prompt": "Use subagents to map the repository and verify the active output policy.",
+        }),
+        "--json",
+        env=active_env,
+    )
+    root_context = prompt_hook["data"]["hook_result"]["hookSpecificOutput"]["additionalContext"]
+    decision = prompt_hook["data"]["manager_decision"]
+    assignment = prompt_hook["data"]["agent_plan"]["assignments"][0]
+
+    json_result("manager", "kaveman", "--set", "off", "--json", env=session_env)
+    after = json_result("codex-status", "--json", env=active_env)
+    child_hook = json_result(
+        "agent",
+        "hook",
+        "SubagentStart",
+        "--event-json",
+        json.dumps({
+            "agent_id": "runtime-child-a",
+            "agent_type": assignment["profile"],
+            "task_name": assignment["agent_id"],
+            "parent_session_id": "root-session-a",
+            "session_id": "child-session-a",
+            "turn_id": "child-turn-a",
+            "cwd": str(repo),
+        }),
+        "--json",
+        env=active_env,
+    )
+    child_context = child_hook["data"]["hook_result"]["hookSpecificOutput"]["additionalContext"]
+    next_prompt_hook = json_result(
+        "agent",
+        "hook",
+        "UserPromptSubmit",
+        "--event-json",
+        json.dumps({
+            "session_id": "root-session-b",
+            "turn_id": "root-turn-b",
+            "cwd": str(repo),
+            "prompt": "Inspect the current repository state and report the selected output policy.",
+        }),
+        "--json",
+        env=active_env,
+    )
+    next_root_context = next_prompt_hook["data"]["hook_result"]["hookSpecificOutput"]["additionalContext"]
+    next_child_hook = json_result(
+        "agent",
+        "hook",
+        "SubagentStart",
+        "--event-json",
+        json.dumps({
+            "agent_id": "runtime-child-b",
+            "agent_type": assignment["profile"],
+            "task_name": assignment["agent_id"],
+            "parent_session_id": "root-session-b",
+            "session_id": "child-session-b",
+            "turn_id": "child-turn-b",
+            "cwd": str(repo),
+        }),
+        "--json",
+        env=active_env,
+    )
+    next_child_context = next_child_hook["data"]["hook_result"]["hookSpecificOutput"]["additionalContext"]
+
+    assert decision["policy_hash"] == initial_hash
+    assert "Qwendex output policy: Kaveman enabled." in root_context
+    assert "Qwendex output policy: Kaveman enabled." in child_context
+    assert "Qwendex output policy: Kaveman enabled." not in next_root_context
+    assert "Qwendex output policy: Kaveman enabled." not in next_child_context
+    assert after["data"]["kaveman_enabled"] is False
+    assert after["data"]["agent_policy_hash"] != initial_hash
+    assert after["data"]["status_authority"]["effective_policy_hash"] == initial_hash
+    assert after["data"]["status_authority"]["next_turn_policy_hash"] == after["data"]["agent_policy_hash"]
+    assert after["data"]["status_authority"]["policy_drift"] is True
+    assert after["data"]["status_authority"]["restart_required"] is False
+    assert after["data"]["status_authority"]["kaveman_applies_at"] == "next_user_prompt"
+    assert next_prompt_hook["data"]["accepted_turn_policy_hash"] == after["data"]["agent_policy_hash"]
+    assert after["data"]["qdex_permission"] == before["data"]["qdex_permission"]
+    assert after["data"]["local_enabled"] == before["data"]["local_enabled"]
+
+    fresh_env = {
+        **default_env,
+        "QWENDEX_MANAGER_SESSION_STATE_FILE": str(tmp_path / "session-d.json"),
+        "QWENDEX_QDEX_LAUNCH_ID": "session-d",
+        "QWENDEX_CODEX_STATUS_FILE": str(tmp_path / "session-d-status.json"),
+    }
+    fresh = json_result("codex-status", "--json", env=fresh_env)
+    assert fresh["data"]["mode"] == "off"
+    assert fresh["data"]["kaveman_enabled"] is False
+
+
+def test_qwendex_session_mode_change_is_requested_until_a_capacity_restart(tmp_path):
+    session_env = {
+        "QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite"),
+        "QWENDEX_MANAGER_SESSION_STATE_FILE": str(tmp_path / "session-a.json"),
+        "QWENDEX_QDEX_LAUNCH_ID": "session-a",
+        "QWENDEX_CODEX_STATUS_FILE": str(tmp_path / "session-a-status.json"),
+        "QWENDEX_QDEX_LAUNCH_MODE": "off",
+        "QWENDEX_QDEX_LAUNCH_AGENT_USE": "Off",
+        "QWENDEX_QDEX_LAUNCH_MAX_WORKERS": "0",
+        "QWENDEX_QDEX_LAUNCH_LOCAL_ENABLED": "0",
+        "QWENDEX_FORCE_LOCAL_QWEN_AVAILABLE": "0",
+    }
+
+    json_result("manager", "mode", "--set", "off", "--json", env=session_env)
+    json_result("manager", "local", "--set", "off", "--json", env=session_env)
+    before = json_result("codex-status", "--json", env=session_env)
+    json_result("manager", "mode", "--set", "manager", "--json", env=session_env)
+    requested = json_result("codex-status", "--json", env=session_env)
+    manager_requested = json_result("manager", "status", "--json", env=session_env)
+    prompt = json_result(
+        "agent",
+        "hook",
+        "UserPromptSubmit",
+        "--event-json",
+        json.dumps({
+            "session_id": "root-session-a",
+            "turn_id": "root-turn-a",
+            "prompt": "Map the repository with bounded helpers.",
+        }),
+        "--json",
+        env=session_env,
+    )
+    json_result("manager", "mode", "--set", "off", "--json", env=session_env)
+    restored = json_result("codex-status", "--json", env=session_env)
+
+    assert before["data"]["mode"] == "off"
+    assert requested["data"]["mode"] == "manager"
+    assert requested["data"]["effective_turn_mode"] == "off"
+    assert "Requested Manager Mode → active Off (restart)" in requested["data"]["text"]
+    assert requested["data"]["status_authority"]["mode_restart_required"] is True
+    assert requested["data"]["status_authority"]["restart_required"] is True
+    assert manager_requested["data"]["requested_agent_policy"]["mode"] == "manager"
+    assert manager_requested["data"]["agent_policy"]["mode"] == "off"
+    assert manager_requested["data"]["effective_turn_mode"] == "off"
+    assert manager_requested["data"]["effective_max_subagents"] == 0
+    assert manager_requested["data"]["status_authority"]["mode_restart_required"] is True
+    assert prompt["data"]["agent_policy"]["mode"] == "off"
+    assert "Active Qwendex agent mode: Off." in prompt["data"]["hook_result"]["hookSpecificOutput"]["additionalContext"]
+    assert restored["data"]["mode"] == "off"
+    assert restored["data"]["effective_turn_mode"] == "off"
+    assert restored["data"]["status_authority"]["restart_required"] is False
+    assert restored["data"]["qdex_permission"] == before["data"]["qdex_permission"]
+    assert restored["data"]["local_enabled"] == before["data"]["local_enabled"]
+
+
+def test_qwendex_session_local_change_is_requested_until_a_capacity_restart(tmp_path):
+    session_env = {
+        "QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite"),
+        "QWENDEX_MANAGER_SESSION_STATE_FILE": str(tmp_path / "session-a.json"),
+        "QWENDEX_QDEX_LAUNCH_ID": "session-a",
+        "QWENDEX_CODEX_STATUS_FILE": str(tmp_path / "session-a-status.json"),
+        "QWENDEX_QDEX_LAUNCH_MODE": "manager",
+        "QWENDEX_QDEX_LAUNCH_AGENT_USE": "Manager",
+        "QWENDEX_QDEX_LAUNCH_MAX_WORKERS": "4",
+        "QWENDEX_QDEX_LAUNCH_LOCAL_ENABLED": "0",
+        "QWENDEX_FORCE_LOCAL_QWEN_AVAILABLE": "1",
+    }
+
+    json_result("manager", "mode", "--set", "manager", "--json", env=session_env)
+    json_result("manager", "local", "--set", "off", "--json", env=session_env)
+    before = json_result("codex-status", "--json", env=session_env)
+    json_result("manager", "local", "--set", "on", "--json", env=session_env)
+    requested = json_result("codex-status", "--json", env=session_env)
+
+    assert before["data"]["text"] == "{Qwendex} Agent Manager: [Manager Mode] | Kaveman: [N] | Local: [Off] (Alt+M/K/L)"
+    assert requested["data"]["text"] == "{Qwendex} Agent Manager: [Manager Mode] | Kaveman: [N] | Local: [Ready (restart)] (Alt+M/K/L)"
+    assert requested["data"]["local_enabled"] is True
+    assert requested["data"]["effective_local_enabled"] is False
+    assert requested["data"]["policy_transition"]["local_restart_required"] is True
+    assert requested["data"]["status_authority"]["restart_required"] is True
+
+    fresh_env = {
+        **session_env,
+        "QWENDEX_MANAGER_SESSION_STATE_FILE": str(tmp_path / "session-b.json"),
+        "QWENDEX_QDEX_LAUNCH_ID": "session-b",
+        "QWENDEX_CODEX_STATUS_FILE": str(tmp_path / "session-b-status.json"),
+        "QWENDEX_QDEX_LAUNCH_LOCAL_ENABLED": "1",
+    }
+    fresh = json_result("codex-status", "--json", env=fresh_env)
+
+    assert fresh["data"]["local_enabled"] is True
+    assert fresh["data"]["effective_local_enabled"] is True
+    assert fresh["data"]["policy_transition"]["local_restart_required"] is False
+    assert fresh["data"]["status_authority"]["local_restart_required"] is False
 
 
 def test_qwendex_codex_status_reports_unusable_local_state(tmp_path):
@@ -5359,6 +5643,7 @@ def test_qwendex_agent_hook_config_generation_and_write_gate(tmp_path):
     assert "PostToolUse" in hooks
     assert stop_command.startswith("env ")
     assert "QWENDEX_STATE_DB=" in stop_command
+    assert "QWENDEX_CODEX_STATUS_FILE=" not in stop_command
     assert stop_command.endswith("scripts/qwendex agent hook Stop --codex-hook-output")
     assert hooks["PreToolUse"][0]["hooks"][0]["timeout"] == 5
 
@@ -5382,6 +5667,7 @@ def test_qwendex_agent_hook_config_generation_and_write_gate(tmp_path):
     payload = json.loads(target.read_text(encoding="utf-8"))
     assert written["artifacts"] == [str(target)]
     assert "QWENDEX_STATE_DB=" in payload["hooks"]["SubagentStop"][0]["hooks"][0]["command"]
+    assert "QWENDEX_CODEX_STATUS_FILE=" not in payload["hooks"]["SubagentStop"][0]["hooks"][0]["command"]
     assert payload["hooks"]["SubagentStop"][0]["hooks"][0]["command"].endswith("scripts/qwendex agent hook SubagentStop --codex-hook-output")
 
     overwrite_result = run_qwendex("agent", "hook-config", "--write", str(target), "--approve", "--json", env=env)
@@ -5422,6 +5708,24 @@ def test_qwendex_agent_hook_config_generation_and_write_gate(tmp_path):
     assert verified["data"]["hook_status"]["compatible_hook_source_count"] >= len(hooks)
     assert verified["data"]["hook_status"]["missing_runtime_env_events"] == []
     assert verified["data"]["hook_status"]["verified"] is True
+
+    legacy_payload = json.loads((codex_home / "hooks.json").read_text(encoding="utf-8"))
+    for entries in legacy_payload["hooks"].values():
+        for entry in entries:
+            for hook in entry.get("hooks", []):
+                command = str(hook.get("command") or "")
+                if "agent hook" in command:
+                    hook["command"] = command.replace(
+                        "env ",
+                        f"env QWENDEX_CODEX_STATUS_FILE={tmp_path / 'legacy-status.json'} ",
+                        1,
+                    )
+    (codex_home / "hooks.json").write_text(json.dumps(legacy_payload), encoding="utf-8")
+    legacy_result = run_qwendex("agent", "hook-config", "--verify", "--codex-home", str(codex_home), "--json", env=env)
+    legacy = parse_json_result(legacy_result)
+    assert legacy_result.returncode != 0
+    assert legacy["status"] == "blocked"
+    assert set(legacy["data"]["hook_status"]["status_file_override_events"]) == set(load_qwendex().MANAGED_AGENT_HOOKS)
 
 
 @pytest.mark.parametrize(

@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.6.2"
+VERSION = "0.6.3"
 CONFIG_DIR = ROOT / "config" / "qwendex"
 DEFAULT_PROJECT_CONFIG = CONFIG_DIR / "qwendex.json"
 DEFAULT_USER_CONFIG = Path.home() / ".config" / "qwendex" / "config.json"
@@ -354,7 +354,6 @@ MANAGED_HOOK_RUNTIME_ENV_KEYS = (
     "QWENDEX_PERFORMANCE_DB",
     "QWENDEX_RESULTS_ROOT",
     "QWENDEX_LEDGER_DB",
-    "QWENDEX_CODEX_STATUS_FILE",
     "QWENDEX_DEV_ROOT",
     "QWENDEX_ROOT",
     "QWENDEX_RUNTIME_ROOT",
@@ -367,6 +366,14 @@ MANAGED_HOOK_RUNTIME_ENV_KEYS = (
     "QWENDEX_QDEX_PERMISSION_SOURCE",
 )
 PERFORMANCE_DB_ENV = "QWENDEX_PERFORMANCE_DB"
+MANAGER_SESSION_STATE_FILE_ENV = "QWENDEX_MANAGER_SESSION_STATE_FILE"
+QDEX_LAUNCH_ID_ENV = "QWENDEX_QDEX_LAUNCH_ID"
+QDEX_LAUNCH_POLICY_HASH_ENV = "QWENDEX_QDEX_LAUNCH_POLICY_HASH"
+QDEX_LAUNCH_MODE_ENV = "QWENDEX_QDEX_LAUNCH_MODE"
+QDEX_LAUNCH_AGENT_USE_ENV = "QWENDEX_QDEX_LAUNCH_AGENT_USE"
+QDEX_LAUNCH_MAX_WORKERS_ENV = "QWENDEX_QDEX_LAUNCH_MAX_WORKERS"
+QDEX_LAUNCH_LOCAL_ENABLED_ENV = "QWENDEX_QDEX_LAUNCH_LOCAL_ENABLED"
+MANAGER_SESSION_STATE_SCHEMA = "qwendex.manager_session_state.v2"
 DEFAULT_PERFORMANCE_DB = Path.home() / ".local" / "state" / "qwendex" / "qwendex-performance.sqlite"
 PERFORMANCE_CAPTURE_MODES = {"off", "metadata"}
 ENV_OPTIONS_WITH_VALUE = {"-u", "--unset", "-C", "--chdir", "-a", "--argv0"}
@@ -2007,6 +2014,151 @@ def attach_native_proactive_source(
     return updated
 
 
+def qdex_launch_mode() -> str:
+    mode = normalize_manager_mode(os.environ.get(QDEX_LAUNCH_MODE_ENV) or "")
+    return mode if mode in MANAGER_MODE_ORDER else ""
+
+
+def qdex_launch_local_enabled() -> bool | None:
+    return normalize_local_toggle(os.environ.get(QDEX_LAUNCH_LOCAL_ENABLED_ENV))
+
+
+def session_turn_policy_projection(
+    config: Mapping[str, Any],
+    conn: sqlite3.Connection,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Resolve requested controls into the policy usable by the current launch.
+
+    A Qdex process has immutable native capacity and local-routing inputs. Its
+    Kaveman output policy is intentionally refreshed only when a new root turn
+    is accepted. This projection makes both boundaries explicit instead of
+    presenting a requested TUI value as an already-active runtime policy.
+    """
+    requested_mode = current_manager_mode(config, conn)
+    requested_kaveman = current_kaveman_enabled(config, conn)
+    requested_local_enabled = current_local_enabled(config, conn)
+    requested_policy = resolve_agent_policy(
+        config,
+        selected_manager_mode=requested_mode,
+        kaveman_enabled=requested_kaveman,
+    )
+    requested_policy = attach_local_routing_snapshot(
+        requested_policy,
+        config,
+        enabled=requested_local_enabled,
+    )
+    requested_policy = attach_native_proactive_source(requested_policy)
+
+    launch_mode = qdex_launch_mode()
+    launch_local_enabled = qdex_launch_local_enabled()
+    effective_mode = launch_mode or str(requested_policy.get("mode") or requested_mode)
+    if launch_local_enabled is None:
+        launch_local_enabled = requested_local_enabled
+    mode_restart_required = bool(launch_mode and effective_mode != requested_mode)
+    local_restart_required = bool(
+        manager_session_state_path() is not None
+        and qdex_launch_local_enabled() is not None
+        and launch_local_enabled != requested_local_enabled
+    )
+
+    if effective_mode == str(requested_policy.get("mode") or "") and not local_restart_required:
+        effective_policy = requested_policy
+    else:
+        effective_policy = resolve_agent_policy(
+            config,
+            selected_manager_mode=effective_mode,
+            kaveman_enabled=requested_kaveman,
+            env={},
+            selector_source_override="qwendex-launch-snapshot",
+        )
+        effective_policy = attach_local_routing_snapshot(
+            effective_policy,
+            config,
+            enabled=bool(launch_local_enabled),
+        )
+        effective_policy = attach_native_proactive_source(effective_policy)
+
+    transition = {
+        "scope": "per_launch_session" if manager_session_state_path() is not None else "repository_default",
+        "requested_mode": requested_mode,
+        "requested_policy_hash": str(requested_policy.get("policy_hash") or ""),
+        "effective_turn_mode": str(effective_policy.get("mode") or ""),
+        "launch_mode": launch_mode or None,
+        "requested_local_enabled": requested_local_enabled,
+        "effective_local_enabled": bool(launch_local_enabled),
+        "kaveman_enabled": requested_kaveman,
+        "mode_restart_required": mode_restart_required,
+        "local_restart_required": local_restart_required,
+        "restart_required": mode_restart_required or local_restart_required,
+        "kaveman_applies_at": "next_user_prompt" if manager_session_state_path() is not None else "immediate",
+        "mode_applies_at": "next_qdex_launch" if mode_restart_required else "next_user_prompt",
+    }
+    return effective_policy, transition
+
+
+def manager_session_policy_surface(
+    config: Mapping[str, Any],
+    conn: sqlite3.Connection,
+    *,
+    selected_manager_mode: str = "",
+    cli_agent_use: str = "",
+    kaveman_enabled: bool | None = None,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any] | None]:
+    """Return requested and usable policy data for a Manager status surface.
+
+    Normal Qdex controls are constrained by the launch snapshot. Explicit CLI
+    selectors remain one-command inspection inputs and intentionally do not
+    claim to mutate that running launch.
+    """
+    current_mode = current_manager_mode(config, conn)
+    requested_mode = normalize_manager_mode(selected_manager_mode) or current_mode
+    requested_kaveman = (
+        current_kaveman_enabled(config, conn)
+        if kaveman_enabled is None
+        else bool(kaveman_enabled)
+    )
+    requested_local_enabled = current_local_enabled(config, conn)
+    requested_policy = resolve_agent_policy(
+        config,
+        cli_agent_use=cli_agent_use,
+        selected_manager_mode=requested_mode,
+        kaveman_enabled=requested_kaveman,
+    )
+    requested_policy = attach_local_routing_snapshot(
+        requested_policy,
+        config,
+        enabled=requested_local_enabled,
+    )
+    requested_policy = attach_native_proactive_source(requested_policy)
+    session_state = manager_session_control_state(config, conn) or {}
+    accepted = session_state.get("accepted_turn")
+    accepted_turn = dict(accepted) if isinstance(accepted, Mapping) else None
+
+    # A one-command selector must not be reported as the live Qdex policy.
+    # Likewise, an explicit manager-mode request is an inspection override.
+    explicit_override = bool(cli_agent_use) or requested_mode != current_mode
+    if explicit_override:
+        transition = {
+            "scope": "command_override",
+            "requested_mode": str(requested_policy.get("mode") or requested_mode),
+            "requested_policy_hash": str(requested_policy.get("policy_hash") or ""),
+            "effective_turn_mode": str(requested_policy.get("mode") or requested_mode),
+            "launch_mode": qdex_launch_mode() or None,
+            "requested_local_enabled": requested_local_enabled,
+            "effective_local_enabled": requested_local_enabled,
+            "kaveman_enabled": requested_kaveman,
+            "mode_restart_required": False,
+            "local_restart_required": False,
+            "restart_required": False,
+            "kaveman_applies_at": "command_invocation",
+            "mode_applies_at": "command_invocation",
+        }
+        return requested_policy, requested_policy, transition, accepted_turn
+
+    effective_policy, transition = session_turn_policy_projection(config, conn)
+    return requested_policy, effective_policy, transition, accepted_turn
+
+
 def manager_decision_local_status(
     config: Mapping[str, Any],
     decision: Mapping[str, Any],
@@ -3622,9 +3774,241 @@ def set_manager_setting(conn: sqlite3.Connection, key: str, value: Any) -> None:
     )
 
 
+def manager_session_state_path() -> Path | None:
+    raw = str(os.environ.get(MANAGER_SESSION_STATE_FILE_ENV) or "").strip()
+    return Path(raw).expanduser() if raw else None
+
+
+def manager_control_default_values(
+    config: Mapping[str, Any],
+    conn: sqlite3.Connection,
+) -> dict[str, Any]:
+    stored_mode = normalize_manager_mode(get_manager_setting(conn, "selected_mode", ""))
+    stored_local = normalize_local_toggle(get_manager_setting(conn, "local_subagents_enabled", None))
+    stored_kaveman = normalize_local_toggle(get_manager_setting(conn, "kaveman_enabled", None))
+    return {
+        "selected_mode": stored_mode
+        if stored_mode in MANAGER_MODE_ORDER
+        else normalize_manager_mode(config.get("orchestration", {}).get("mode")) or "auto",
+        "local_subagents_enabled": local_subagents_default_enabled(config)
+        if stored_local is None
+        else stored_local,
+        "kaveman_enabled": kaveman_default_enabled(config)
+        if stored_kaveman is None
+        else stored_kaveman,
+    }
+
+
+def normalize_manager_turn_snapshot(raw: Any) -> dict[str, Any]:
+    """Return one complete, privacy-safe policy snapshot for an accepted turn."""
+    source = raw if isinstance(raw, Mapping) else {}
+    policy = source.get("agent_policy")
+    if not isinstance(policy, Mapping):
+        return {}
+    snapshot = dict(policy)
+    policy_hash = str(snapshot.get("policy_hash") or "").strip()
+    if (
+        not policy_hash
+        or str(snapshot.get("mode") or "") not in AGENT_USE_ORDER
+        or agent_policy_hash(snapshot) != policy_hash
+    ):
+        return {}
+    root_session_id = str(source.get("root_session_id") or "").strip()
+    turn_id = str(source.get("turn_id") or "").strip()
+    if not root_session_id or not turn_id:
+        return {}
+    return {
+        "root_session_id": root_session_id,
+        "turn_id": turn_id,
+        "accepted_at": str(source.get("accepted_at") or utc_now()),
+        "policy_hash": policy_hash,
+        "agent_policy": snapshot,
+    }
+
+
+def normalize_manager_session_state(
+    raw: Any,
+    *,
+    defaults: Mapping[str, Any],
+) -> dict[str, Any]:
+    now = utc_now()
+    source = raw if isinstance(raw, Mapping) else {}
+    selected_mode = normalize_manager_mode(source.get("selected_mode"))
+    if selected_mode not in MANAGER_MODE_ORDER:
+        selected_mode = str(defaults["selected_mode"])
+    local_enabled = normalize_local_toggle(source.get("local_subagents_enabled"))
+    kaveman_enabled = normalize_local_toggle(source.get("kaveman_enabled"))
+    accepted_turn = normalize_manager_turn_snapshot(source.get("accepted_turn"))
+    return {
+        "schema_version": MANAGER_SESSION_STATE_SCHEMA,
+        "session_id": str(source.get("session_id") or os.environ.get(QDEX_LAUNCH_ID_ENV) or ""),
+        "created_at": str(source.get("created_at") or now),
+        "updated_at": str(source.get("updated_at") or now),
+        "selected_mode": selected_mode,
+        "local_subagents_enabled": (
+            bool(defaults["local_subagents_enabled"])
+            if local_enabled is None
+            else local_enabled
+        ),
+        "kaveman_enabled": (
+            bool(defaults["kaveman_enabled"])
+            if kaveman_enabled is None
+            else kaveman_enabled
+        ),
+        "accepted_turn": accepted_turn,
+        "source": str(source.get("source") or "launch_default"),
+    }
+
+
+def manager_session_control_state(
+    config: Mapping[str, Any],
+    conn: sqlite3.Connection,
+    *,
+    updates: Mapping[str, Any] | None = None,
+    accepted_turn: Mapping[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Load or atomically update the private control record for one Qdex launch."""
+    path = manager_session_state_path()
+    if path is None:
+        return None
+    defaults = manager_control_default_values(config, conn)
+    lock_path = path.with_name(f".{path.name}.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        import fcntl
+
+        with lock_path.open("a+", encoding="utf-8") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                try:
+                    raw = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    raw = {}
+                state = normalize_manager_session_state(raw, defaults=defaults)
+                if updates:
+                    for key, value in updates.items():
+                        if key == "selected_mode":
+                            normalized = normalize_manager_mode(value)
+                            if normalized in MANAGER_MODE_ORDER:
+                                state[key] = normalized
+                        elif key in {"local_subagents_enabled", "kaveman_enabled"}:
+                            normalized = normalize_local_toggle(value)
+                            if normalized is not None:
+                                state[key] = normalized
+                    state["updated_at"] = utc_now()
+                    state["source"] = "tui_session_control"
+                if accepted_turn is not None:
+                    snapshot = normalize_manager_turn_snapshot(accepted_turn)
+                    if snapshot:
+                        state["accepted_turn"] = snapshot
+                        state["updated_at"] = utc_now()
+                if raw != state:
+                    atomic_write_text(path, json_dumps(state) + "\n")
+                    path.chmod(0o600)
+                return state
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+    except OSError:
+        # A status surface should remain diagnostic even when its private
+        # launch record is temporarily unavailable.
+        return None
+
+
+def manager_control_state_metadata() -> dict[str, Any]:
+    path = manager_session_state_path()
+    if path is None:
+        return {
+            "schema_version": MANAGER_SESSION_STATE_SCHEMA,
+            "scope": "repository_default",
+            "session_id": "",
+            "state_file_configured": False,
+        }
+    return {
+        "schema_version": MANAGER_SESSION_STATE_SCHEMA,
+        "scope": "per_launch_session",
+        "session_id": str(os.environ.get(QDEX_LAUNCH_ID_ENV) or ""),
+        "state_file_configured": True,
+    }
+
+
+def set_current_manager_control_setting(
+    config: Mapping[str, Any],
+    conn: sqlite3.Connection,
+    key: str,
+    value: Any,
+) -> dict[str, Any] | None:
+    state = manager_session_control_state(config, conn, updates={key: value})
+    if state is not None:
+        return state
+    set_manager_setting(conn, key, value)
+    return None
+
+
+def manager_session_accept_turn_policy(
+    config: Mapping[str, Any],
+    conn: sqlite3.Connection,
+    *,
+    event: Mapping[str, Any],
+    agent_policy: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """Atomically freeze a policy at root prompt admission for this launch."""
+    root_session_id = str(event.get("session_id") or "").strip()
+    turn_id = str(event.get("turn_id") or "").strip()
+    if not root_session_id or not turn_id:
+        return None
+    snapshot = {
+        "root_session_id": root_session_id,
+        "turn_id": turn_id,
+        "accepted_at": utc_now(),
+        "policy_hash": str(agent_policy.get("policy_hash") or ""),
+        "agent_policy": dict(agent_policy),
+    }
+    state = manager_session_control_state(
+        config,
+        conn,
+        accepted_turn=snapshot,
+    )
+    accepted = state.get("accepted_turn") if isinstance(state, Mapping) else None
+    if not isinstance(accepted, Mapping):
+        return None
+    policy = accepted.get("agent_policy")
+    return dict(policy) if isinstance(policy, Mapping) else None
+
+
+def manager_session_active_turn_policy(
+    config: Mapping[str, Any],
+    conn: sqlite3.Connection,
+    *,
+    event: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """Return the accepted root-turn policy for a matching root or child hook."""
+    state = manager_session_control_state(config, conn)
+    accepted = state.get("accepted_turn") if isinstance(state, Mapping) else None
+    if not isinstance(accepted, Mapping):
+        return None
+    root_session_id = str(
+        event.get("parent_session_id")
+        or event.get("session_id")
+        or ""
+    ).strip()
+    if root_session_id and root_session_id != str(accepted.get("root_session_id") or ""):
+        return None
+    policy = accepted.get("agent_policy")
+    if not isinstance(policy, Mapping):
+        return None
+    policy_hash = str(policy.get("policy_hash") or "")
+    if not policy_hash or agent_policy_hash(policy) != policy_hash:
+        return None
+    return dict(policy)
+
+
 def current_manager_mode(config: Mapping[str, Any], conn: sqlite3.Connection, explicit: str = "") -> str:
     if explicit:
         return normalize_manager_mode(explicit)
+    if state := manager_session_control_state(config, conn):
+        mode = normalize_manager_mode(state.get("selected_mode"))
+        if mode in MANAGER_MODE_ORDER:
+            return mode
     stored = get_manager_setting(conn, "selected_mode", "")
     mode = normalize_manager_mode(stored)
     if mode:
@@ -3641,12 +4025,20 @@ def selected_manager_mode_for_policy(config: Mapping[str, Any], explicit: str = 
 
 
 def current_local_enabled(config: Mapping[str, Any], conn: sqlite3.Connection) -> bool:
+    if state := manager_session_control_state(config, conn):
+        value = normalize_local_toggle(state.get("local_subagents_enabled"))
+        if value is not None:
+            return value
     stored = get_manager_setting(conn, "local_subagents_enabled", None)
     parsed = normalize_local_toggle(stored)
     return local_subagents_default_enabled(config) if parsed is None else parsed
 
 
 def current_kaveman_enabled(config: Mapping[str, Any], conn: sqlite3.Connection) -> bool:
+    if state := manager_session_control_state(config, conn):
+        value = normalize_local_toggle(state.get("kaveman_enabled"))
+        if value is not None:
+            return value
     stored = get_manager_setting(conn, "kaveman_enabled", None)
     parsed = normalize_local_toggle(stored)
     return kaveman_default_enabled(config) if parsed is None else parsed
@@ -4460,6 +4852,8 @@ def manager_mode_payload(
         "qdex_permission_valid": qdex_permission["valid"],
         "qdex_permission": qdex_permission,
         "output_policy": resolved_agent_policy.get("output_policy", {}),
+        "control_state": manager_control_state_metadata(),
+        "status_authority": status_authority_payload(resolved_agent_policy),
         "write_safety": file_lock_summary(config),
         "legacy_mode": legacy_mode,
         "ui_indicator": manager_ui_indicator(config, profile["mode"]),
@@ -4535,11 +4929,107 @@ def manager_mode_payload(
     return data
 
 
-def manager_status_surface_text(label: str, local_state: str, kaveman_enabled: bool) -> str:
+def apply_manager_session_policy_surface(
+    data: dict[str, Any],
+    *,
+    requested_policy: Mapping[str, Any],
+    effective_policy: Mapping[str, Any],
+    transition: Mapping[str, Any],
+    accepted_turn: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Make requested, launch-effective, and accepted-turn policy explicit."""
+    requested = dict(requested_policy)
+    effective = dict(effective_policy)
+    transition_data = dict(transition)
+    data["requested_agent_policy"] = requested
+    data["requested_agent_policy_hash"] = str(requested.get("policy_hash") or "")
+    data["agent_policy"] = effective
+    data["agent_policy_hash"] = str(effective.get("policy_hash") or "")
+    data["agent_policy_source"] = str(effective.get("source") or "")
+    data["agent_policy_warnings"] = list(effective.get("warnings") or [])
+    data["agent_use"] = str(effective.get("agent_use") or "")
+    data["output_policy"] = dict(effective.get("output_policy") or {})
+    data["effective_turn_mode"] = str(
+        transition_data.get("effective_turn_mode") or effective.get("mode") or ""
+    )
+    data["effective_max_subagents"] = max(0, int(effective.get("max_threads") or 0))
+    data["effective_local_enabled"] = bool(
+        transition_data.get("effective_local_enabled")
+    )
+    data["runtime_launch_mode"] = transition_data.get("launch_mode")
+    data["policy_transition"] = transition_data
+    data["status_authority"] = status_authority_payload(
+        effective,
+        transition=transition_data,
+        accepted_turn=accepted_turn,
+    )
+    return data
+
+
+def manager_status_surface_text(
+    label: str,
+    local_state: str,
+    kaveman_enabled: bool,
+    *,
+    local_restart_required: bool = False,
+) -> str:
+    local_label = local_state_label(local_state)
+    if local_restart_required:
+        local_label = f"{local_label} (restart)"
     return (
         f"{{Qwendex}} Agent Manager: [{label}] | Kaveman: [{'Y' if kaveman_enabled else 'N'}] "
-        f"| Local: [{local_state_label(local_state)}] (Alt+M/K/L)"
+        f"| Local: [{local_label}] (Alt+M/K/L)"
     )
+
+
+def status_authority_payload(
+    agent_policy: Mapping[str, Any],
+    *,
+    transition: Mapping[str, Any] | None = None,
+    accepted_turn: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    control_state = manager_control_state_metadata()
+    next_turn_policy_hash = str(agent_policy.get("policy_hash") or "")
+    launch_policy_hash = str(os.environ.get(QDEX_LAUNCH_POLICY_HASH_ENV) or "").strip()
+    per_launch = control_state["scope"] == "per_launch_session"
+    transition_data = dict(transition or {})
+    desired_policy_hash = str(
+        transition_data.get("requested_policy_hash")
+        or next_turn_policy_hash
+    )
+    accepted = accepted_turn if isinstance(accepted_turn, Mapping) else {}
+    accepted_policy = accepted.get("agent_policy") if isinstance(accepted, Mapping) else None
+    active_policy_hash = (
+        str(accepted_policy.get("policy_hash") or "")
+        if isinstance(accepted_policy, Mapping)
+        else ""
+    )
+    drift = bool(launch_policy_hash and desired_policy_hash and launch_policy_hash != desired_policy_hash)
+    return {
+        "scope": "per_launch_session" if per_launch else "aggregate_compatibility",
+        "authoritative_for_open_session": per_launch,
+        "session_id": control_state["session_id"] if per_launch else "",
+        "effective_policy_hash": active_policy_hash or next_turn_policy_hash,
+        "next_turn_policy_hash": next_turn_policy_hash,
+        "desired_policy_hash": desired_policy_hash,
+        "launch_policy_hash": launch_policy_hash or None,
+        "active_turn_policy_hash": active_policy_hash or None,
+        "active_turn": {
+            "root_session_id": str(accepted.get("root_session_id") or "") or None,
+            "turn_id": str(accepted.get("turn_id") or "") or None,
+            "accepted_at": str(accepted.get("accepted_at") or "") or None,
+        } if active_policy_hash else None,
+        "requested_mode": transition_data.get("requested_mode"),
+        "effective_turn_mode": transition_data.get("effective_turn_mode"),
+        "launch_mode": transition_data.get("launch_mode"),
+        "kaveman_applies_at": transition_data.get("kaveman_applies_at"),
+        "mode_applies_at": transition_data.get("mode_applies_at"),
+        "policy_drift": drift,
+        "restart_required": bool(transition_data.get("restart_required")),
+        "mode_restart_required": bool(transition_data.get("mode_restart_required")),
+        "local_restart_required": bool(transition_data.get("local_restart_required")),
+        "aggregate_status_is_not_session_truth": not per_launch,
+    }
 
 
 def status_file_state_db(payload: Any) -> str:
@@ -4597,9 +5087,13 @@ def codex_status_payload(config: Mapping[str, Any], *, write_path: Path | None =
         selected_mode = current_manager_mode(config, conn)
         mode = selected_mode
         kaveman_enabled = current_kaveman_enabled(config, conn)
-        agent_policy = resolve_agent_policy(config, selected_manager_mode=selected_mode, kaveman_enabled=kaveman_enabled)
-        if agent_policy["source"] not in {"default", "manager-mode"}:
-            mode = str(agent_policy["mode"])
+        requested_agent_policy = resolve_agent_policy(
+            config,
+            selected_manager_mode=selected_mode,
+            kaveman_enabled=kaveman_enabled,
+        )
+        if requested_agent_policy["source"] not in {"default", "manager-mode"}:
+            mode = str(requested_agent_policy["mode"])
         stale_after = mode_stale_after_minutes(config, mode)
         reconcile_stale_manager_sessions(
             conn,
@@ -4609,12 +5103,9 @@ def codex_status_payload(config: Mapping[str, Any], *, write_path: Path | None =
         )
         local_enabled = current_local_enabled(config, conn)
         local_status = local_subagent_status(config, enabled=local_enabled, env=os.environ, probe=True)
-        agent_policy = attach_local_routing_snapshot(
-            agent_policy,
-            config,
-            enabled=local_enabled,
-        )
-        agent_policy = attach_native_proactive_source(agent_policy)
+        agent_policy, policy_transition = session_turn_policy_projection(config, conn)
+        session_state = manager_session_control_state(config, conn) or {}
+        accepted_turn = session_state.get("accepted_turn") if isinstance(session_state, Mapping) else {}
     base_hook_status = hook_status_for_codex_home(
         codex_home_from_env(os.environ),
         write_gating=False,
@@ -4625,10 +5116,18 @@ def codex_status_payload(config: Mapping[str, Any], *, write_path: Path | None =
     hook_status["override_reason"] = None
     manager_preflight_required = str(agent_policy.get("mode") or "") != "off"
     profile = manager_mode_profile(config, mode)
+    effective_profile = manager_mode_profile(
+        config,
+        str(policy_transition.get("effective_turn_mode") or mode),
+    )
+    status_label = profile["label"]
+    if policy_transition.get("mode_restart_required"):
+        status_label = f"Requested {profile['label']} → active {effective_profile['label']} (restart)"
     text = manager_status_surface_text(
-        profile["label"],
+        status_label,
         str(local_status.get("local_state") or "unknown"),
         kaveman_enabled,
+        local_restart_required=bool(policy_transition.get("local_restart_required")),
     )
     data = {
         "text": text,
@@ -4640,12 +5139,24 @@ def codex_status_payload(config: Mapping[str, Any], *, write_path: Path | None =
         "agent_policy": agent_policy,
         "agent_policy_hash": agent_policy["policy_hash"],
         "agent_policy_source": agent_policy["source"],
+        "requested_agent_policy": requested_agent_policy,
+        "requested_agent_policy_hash": requested_agent_policy["policy_hash"],
+        "effective_turn_mode": policy_transition["effective_turn_mode"],
+        "runtime_launch_mode": policy_transition["launch_mode"],
+        "policy_transition": policy_transition,
         "output_policy": agent_policy.get("output_policy", {}),
+        "control_state": manager_control_state_metadata(),
+        "status_authority": status_authority_payload(
+            agent_policy,
+            transition=policy_transition,
+            accepted_turn=accepted_turn if isinstance(accepted_turn, Mapping) else None,
+        ),
         "kaveman": "Y" if kaveman_enabled else "N",
         "kaveman_enabled": kaveman_enabled,
         "kaveman_directive": kaveman_directive(config) if kaveman_enabled else "",
         "local": "Y" if local_status.get("enabled") else "N",
         "local_enabled": bool(local_status.get("enabled")),
+        "effective_local_enabled": bool(policy_transition["effective_local_enabled"]),
         "local_available": local_status.get("available"),
         "local_usable": bool(local_status.get("usable")),
         "local_state": local_status.get("local_state"),
@@ -4720,7 +5231,7 @@ def sync_codex_status_or_restore_setting(
             "state_restored": False,
         }
     except OSError as exc:
-        set_manager_setting(conn, setting_key, previous_value)
+        set_current_manager_control_setting(config, conn, setting_key, previous_value)
         conn.commit()
         restore_error = ""
         try:
@@ -7960,9 +8471,6 @@ def agent_output_policy_context(agent_policy: Mapping[str, Any], config: Mapping
     if isinstance(output_policy, Mapping) and output_policy.get("kaveman_enabled"):
         directive = str(output_policy.get("directive") or "")
         return f"Qwendex output policy: Kaveman enabled. Kaveman directive: {directive}" if directive else "Qwendex output policy: Kaveman enabled."
-    if config is not None:
-        if kaveman := kaveman_context(config):
-            return f"Qwendex output policy: Kaveman enabled. {kaveman}"
     return ""
 
 
@@ -10671,11 +11179,10 @@ def managed_hook_runtime_env(
     ledger_db = str(source.get("QWENDEX_LEDGER_DB") or dev_paths.get("ledger_db") or "").strip()
     if ledger_db:
         values["QWENDEX_LEDGER_DB"] = ledger_db
-    status_file = str(source.get("QWENDEX_CODEX_STATUS_FILE") or "").strip()
-    if not status_file and work_root is not None and work_root.name == ".qwendex-dev":
-        status_file = str(work_root / "codex_status.json")
-    if status_file:
-        values["QWENDEX_CODEX_STATUS_FILE"] = status_file
+    # The Qdex process owns this value. Do not bake a status-file path into a
+    # generated hook command: a static `env` assignment would make concurrent
+    # TUIs read one last-writer-wins compatibility file instead of the private
+    # status file inherited from their own launch.
     dev_root = str(source.get("QWENDEX_DEV_ROOT") or "").strip()
     if not dev_root and work_root is not None and work_root.name == ".qwendex-dev":
         dev_root = str(work_root.parent)
@@ -10936,6 +11443,14 @@ def hook_status_for_codex_home(
         for event in managed_events
         if not any(runtime_env.get("QWENDEX_STATE_DB") for runtime_env in runtime_env_by_event.get(event, []))
     )
+    status_file_override_events = sorted(
+        event
+        for event in managed_events
+        if any(
+            "QWENDEX_CODEX_STATUS_FILE" in runtime_env
+            for runtime_env in runtime_env_by_event.get(event, [])
+        )
+    )
     expected_runtime_env = managed_hook_runtime_env(codex_home=codex_home)
     expected_runtime_base = managed_agent_hook_command_base("", expected_runtime_env)
     expected_dev_root = str(expected_runtime_env.get("QWENDEX_DEV_ROOT") or "").strip()
@@ -10956,6 +11471,7 @@ def hook_status_for_codex_home(
         and not missing_events
         and not incompatible_events
         and not missing_runtime_env_events
+        and not status_file_override_events
         and not runtime_command_mismatch_events
         and not parse_error
     )
@@ -10972,6 +11488,7 @@ def hook_status_for_codex_home(
         "missing_events": missing_events,
         "incompatible_events": incompatible_events,
         "missing_runtime_env_events": missing_runtime_env_events,
+        "status_file_override_events": status_file_override_events,
         "runtime_command_mismatch_events": runtime_command_mismatch_events,
         "runtime_env_keys_by_event": runtime_env_keys_by_event,
         "runtime_env_state_db_by_event": runtime_env_state_db_by_event,
@@ -12534,7 +13051,14 @@ def manager_root_cleanup_identity_for_event(
     actual_home = str(decision.get("codex_home_digest_or_path_policy") or "")
     if actual_home and actual_home != expected_home:
         return "", decision, "Qwendex root lock cleanup skipped: Codex home metadata differs."
-    expected_policy = str(agent_policy.get("policy_hash") or "")
+    # Output-policy changes are accepted at the root-turn boundary and do not
+    # alter the immutable launch identity that owns writer leases.
+    launch_policy = manager_launch_policy_snapshot(config)
+    expected_policy = str(
+        (launch_policy or {}).get("policy_hash")
+        or agent_policy.get("policy_hash")
+        or ""
+    )
     actual_policy = str(decision.get("policy_hash") or "")
     if expected_policy and actual_policy and expected_policy != actual_policy:
         return "", decision, "Qwendex root lock cleanup skipped: policy snapshot differs."
@@ -13261,6 +13785,11 @@ def command_agent(args: argparse.Namespace, config: dict[str, Any]) -> dict[str,
             errors=override_errors,
         )
     action = args.action or "status"
+    event: dict[str, Any] = {}
+    hook_event_name = ""
+    if action == "hook":
+        event = read_hook_event(args)
+        hook_event_name = args.target or str(event.get("hookEventName") or event.get("event") or "")
     launch_policy_active = bool(
         action == "hook"
         and os.environ.get("QWENDEX_MANAGER_LEDGER_ID")
@@ -13288,7 +13817,41 @@ def command_agent(args: argparse.Namespace, config: dict[str, Any]) -> dict[str,
         kaveman_enabled=launch_kaveman,
         selector_source_override=launch_policy_source,
     )
-    if launch_policy_active:
+    policy_transition: dict[str, Any] | None = None
+    accepted_turn_policy: dict[str, Any] | None = None
+    if action == "hook" and manager_session_state_path() is not None:
+        try:
+            with connect_state(config) as conn:
+                projected_policy, policy_transition = session_turn_policy_projection(config, conn)
+                if hook_event_name == "UserPromptSubmit" and not (
+                    event.get("agent_id") or event.get("agent_type")
+                ):
+                    accepted_turn_policy = manager_session_accept_turn_policy(
+                        config,
+                        conn,
+                        event=event,
+                        agent_policy=projected_policy,
+                    )
+                    agent_policy = accepted_turn_policy or projected_policy
+                else:
+                    accepted_turn_policy = manager_session_active_turn_policy(
+                        config,
+                        conn,
+                        event=event,
+                    )
+                    agent_policy = accepted_turn_policy or projected_policy
+        except Exception as exc:
+            agent_policy = {
+                **agent_policy,
+                "warnings": [
+                    *list(agent_policy.get("warnings") or []),
+                    (
+                        "Per-launch session policy state is unavailable; continuing with the resolved advisory policy: "
+                        f"{redact_text(str(exc) or exc.__class__.__name__)}"
+                    ),
+                ],
+            }
+    elif launch_policy_active:
         recorded_policy = manager_launch_policy_snapshot(config)
         if recorded_policy is None:
             agent_policy = {
@@ -13325,8 +13888,6 @@ def command_agent(args: argparse.Namespace, config: dict[str, Any]) -> dict[str,
         return stable_envelope(command="agent", status="blocked", summary="Invalid Qwendex agent policy.", errors=list(agent_policy["errors"]), data={"agent_policy": agent_policy})
     apply_agent_policy_env(agent_policy)
     if action == "hook":
-        event = read_hook_event(args)
-        hook_event_name = args.target or str(event.get("hookEventName") or event.get("event") or "")
         status, hook_result, extra = evaluate_agent_hook(
             config,
             event_name=hook_event_name,
@@ -13350,6 +13911,12 @@ def command_agent(args: argparse.Namespace, config: dict[str, Any]) -> dict[str,
             "hook_result": hook_result,
             "event": event,
             "agent_policy": agent_policy,
+            "policy_transition": policy_transition,
+            "accepted_turn_policy_hash": (
+                str(accepted_turn_policy.get("policy_hash") or "")
+                if accepted_turn_policy is not None
+                else None
+            ),
             "performance_capture": performance_capture,
             **extra,
         }
@@ -13393,6 +13960,8 @@ def command_agent(args: argparse.Namespace, config: dict[str, Any]) -> dict[str,
                 errors=[] if status["verified"] else [
                     f"missing managed hook events: {', '.join(status['missing_events']) or 'none detected'}",
                     f"missing runtime env events: {', '.join(status.get('missing_runtime_env_events', [])) or 'none detected'}",
+                    "hook commands with a static status-file override: "
+                    f"{', '.join(status.get('status_file_override_events', [])) or 'none detected'}",
                     "managed hook runtime mismatch events: "
                     f"{', '.join(status.get('runtime_command_mismatch_events', [])) or 'none detected'}",
                 ],
@@ -13744,23 +14313,28 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
             if args.toggle:
                 index = MANAGER_MODE_ORDER.index(mode) if mode in MANAGER_MODE_ORDER else 0
                 mode = MANAGER_MODE_ORDER[(index + 1) % len(MANAGER_MODE_ORDER)]
-                set_manager_setting(conn, "selected_mode", mode)
+                set_current_manager_control_setting(config, conn, "selected_mode", mode)
                 conn.commit()
             elif args.cycle:
                 index = MANAGER_MODE_ORDER.index(mode) if mode in MANAGER_MODE_ORDER else 0
                 mode = MANAGER_MODE_ORDER[(index + 1) % len(MANAGER_MODE_ORDER)]
-                set_manager_setting(conn, "selected_mode", mode)
+                set_current_manager_control_setting(config, conn, "selected_mode", mode)
                 conn.commit()
             elif args.set:
                 requested = normalize_manager_mode(args.set)
                 if requested not in MANAGER_MODE_ORDER:
                     return stable_envelope(command="manager", status="blocked", summary=f"Unknown manager mode: {args.set}", errors=[args.set])
                 mode = requested
-                set_manager_setting(conn, "selected_mode", mode)
+                set_current_manager_control_setting(config, conn, "selected_mode", mode)
                 conn.commit()
-            agent_policy = resolve_agent_policy(config, cli_agent_use=getattr(args, "agent_use", ""), selected_manager_mode=mode)
-            if agent_policy["errors"]:
-                return stable_envelope(command="manager", status="blocked", summary="Invalid Qwendex agent policy.", errors=list(agent_policy["errors"]), data={"agent_policy": agent_policy})
+            requested_agent_policy, effective_agent_policy, policy_transition, accepted_turn = manager_session_policy_surface(
+                config,
+                conn,
+                selected_manager_mode=mode,
+                cli_agent_use=getattr(args, "agent_use", ""),
+            )
+            if requested_agent_policy["errors"]:
+                return stable_envelope(command="manager", status="blocked", summary="Invalid Qwendex agent policy.", errors=list(requested_agent_policy["errors"]), data={"agent_policy": requested_agent_policy})
             stale_after = mode_stale_after_minutes(config, mode, args.stale_after_minutes)
             reconciliation = reconcile_stale_manager_sessions(
                 conn,
@@ -13781,10 +14355,17 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
                 stale_after_minutes=mode_stale_after_minutes(config, mode, args.stale_after_minutes),
                 kaveman_enabled=kaveman_enabled,
                 sessions=sessions,
-                agent_policy=agent_policy,
+                agent_policy=requested_agent_policy,
                 scope_sessions=scope_sessions,
                 ledger_sessions=ledger_sessions,
                 repo_root=repo_root,
+            )
+            data = apply_manager_session_policy_surface(
+                data,
+                requested_policy=requested_agent_policy,
+                effective_policy=effective_agent_policy,
+                transition=policy_transition,
+                accepted_turn=accepted_turn,
             )
             data["state_db"] = str(state_db_path(config))
             status_sync = sync_codex_status_or_restore_setting(
@@ -13828,10 +14409,18 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
                 if parsed is None:
                     return stable_envelope(command="manager", status="blocked", summary=f"Unknown Kaveman toggle: {args.set}", errors=[args.set])
                 enabled = parsed
-            set_manager_setting(conn, "kaveman_enabled", enabled)
+            set_current_manager_control_setting(config, conn, "kaveman_enabled", enabled)
             conn.commit()
             kaveman_enabled = enabled
-            agent_policy = resolve_agent_policy(config, cli_agent_use=getattr(args, "agent_use", ""), selected_manager_mode=mode, kaveman_enabled=kaveman_enabled)
+            requested_agent_policy, effective_agent_policy, policy_transition, accepted_turn = manager_session_policy_surface(
+                config,
+                conn,
+                selected_manager_mode=mode,
+                cli_agent_use=getattr(args, "agent_use", ""),
+                kaveman_enabled=kaveman_enabled,
+            )
+            if requested_agent_policy["errors"]:
+                return stable_envelope(command="manager", status="blocked", summary="Invalid Qwendex agent policy.", errors=list(requested_agent_policy["errors"]), data={"agent_policy": requested_agent_policy})
             sessions, scope_sessions, ledger_sessions = load_manager_session_views(
                 conn,
                 limit=args.limit,
@@ -13845,10 +14434,17 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
                 stale_after_minutes=stale_after,
                 kaveman_enabled=kaveman_enabled,
                 sessions=sessions,
-                agent_policy=agent_policy,
+                agent_policy=requested_agent_policy,
                 scope_sessions=scope_sessions,
                 ledger_sessions=ledger_sessions,
                 repo_root=repo_root,
+            )
+            data = apply_manager_session_policy_surface(
+                data,
+                requested_policy=requested_agent_policy,
+                effective_policy=effective_agent_policy,
+                transition=policy_transition,
+                accepted_turn=accepted_turn,
             )
             data["state_db"] = str(state_db_path(config))
             status_sync = sync_codex_status_or_restore_setting(
@@ -13885,9 +14481,18 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
                 if parsed is None:
                     return stable_envelope(command="manager", status="blocked", summary=f"Unknown local toggle: {args.set}", errors=[args.set])
                 enabled = parsed
-            set_manager_setting(conn, "local_subagents_enabled", enabled)
+            set_current_manager_control_setting(config, conn, "local_subagents_enabled", enabled)
             conn.commit()
             local_status = local_subagent_status(config, enabled=enabled, env=os.environ, probe=True)
+            requested_agent_policy, effective_agent_policy, policy_transition, accepted_turn = manager_session_policy_surface(
+                config,
+                conn,
+                selected_manager_mode=mode,
+                cli_agent_use=getattr(args, "agent_use", ""),
+                kaveman_enabled=kaveman_enabled,
+            )
+            if requested_agent_policy["errors"]:
+                return stable_envelope(command="manager", status="blocked", summary="Invalid Qwendex agent policy.", errors=list(requested_agent_policy["errors"]), data={"agent_policy": requested_agent_policy})
             sessions, scope_sessions, ledger_sessions = load_manager_session_views(
                 conn,
                 limit=args.limit,
@@ -13901,10 +14506,17 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
                 stale_after_minutes=stale_after,
                 kaveman_enabled=kaveman_enabled,
                 sessions=sessions,
-                agent_policy=agent_policy,
+                agent_policy=requested_agent_policy,
                 scope_sessions=scope_sessions,
                 ledger_sessions=ledger_sessions,
                 repo_root=repo_root,
+            )
+            data = apply_manager_session_policy_surface(
+                data,
+                requested_policy=requested_agent_policy,
+                effective_policy=effective_agent_policy,
+                transition=policy_transition,
+                accepted_turn=accepted_turn,
             )
             data["state_db"] = str(state_db_path(config))
             status_sync = sync_codex_status_or_restore_setting(
@@ -14029,6 +14641,15 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
                 },
             )
         if args.action == "status":
+            requested_agent_policy, effective_agent_policy, policy_transition, accepted_turn = manager_session_policy_surface(
+                config,
+                conn,
+                selected_manager_mode=mode,
+                cli_agent_use=getattr(args, "agent_use", ""),
+                kaveman_enabled=kaveman_enabled,
+            )
+            if requested_agent_policy["errors"]:
+                return stable_envelope(command="manager", status="blocked", summary="Invalid Qwendex agent policy.", errors=list(requested_agent_policy["errors"]), data={"agent_policy": requested_agent_policy})
             sessions, scope_sessions, ledger_sessions = load_manager_session_views(
                 conn,
                 limit=args.limit,
@@ -14042,10 +14663,17 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
                 stale_after_minutes=stale_after,
                 kaveman_enabled=kaveman_enabled,
                 sessions=sessions,
-                agent_policy=agent_policy,
+                agent_policy=requested_agent_policy,
                 scope_sessions=scope_sessions,
                 ledger_sessions=ledger_sessions,
                 repo_root=repo_root,
+            )
+            data = apply_manager_session_policy_surface(
+                data,
+                requested_policy=requested_agent_policy,
+                effective_policy=effective_agent_policy,
+                transition=policy_transition,
+                accepted_turn=accepted_turn,
             )
             data["agent_sessions"] = sessions
             data["state_db"] = str(state_db_path(config))

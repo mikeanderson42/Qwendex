@@ -261,6 +261,10 @@ if [[ ! -x "$QWENDEX_QWENDEX_COMMAND" ]]; then
   printf 'qdex: selected Qwendex command is not executable: %s\n' "$QWENDEX_QWENDEX_COMMAND" >&2
   exit 127
 fi
+# The patched TUI dispatches Alt+M/K/L through `qwendex` on PATH. Put this
+# launch's immutable runtime tree first so a source-tree wrapper cannot change
+# the policy or status authority of an already-pinned Qdex process.
+export PATH="$(dirname "$QWENDEX_QWENDEX_COMMAND"):$PATH"
 # Dynamic Manager identities belong to one qdex launch. Never let a caller's
 # stale child-process environment select or collide with a prior lease.
 unset \
@@ -276,6 +280,13 @@ unset \
   QWENDEX_MANAGER_RUNTIME_IDENTITY \
   QWENDEX_MANAGER_POLICY_HASH \
   QWENDEX_MANAGER_STOP_STATUS \
+  QWENDEX_MANAGER_SESSION_STATE_FILE \
+  QWENDEX_QDEX_LAUNCH_ID \
+  QWENDEX_QDEX_LAUNCH_POLICY_HASH \
+  QWENDEX_QDEX_LAUNCH_MODE \
+  QWENDEX_QDEX_LAUNCH_AGENT_USE \
+  QWENDEX_QDEX_LAUNCH_MAX_WORKERS \
+  QWENDEX_QDEX_LAUNCH_LOCAL_ENABLED \
   QWENDEX_NATIVE_PROACTIVE_SOURCE \
   QWENDEX_RUN_ID
 
@@ -505,6 +516,9 @@ PY
 )"
 qdex_launch_meta_root="$QWENDEX_META_ROOT/qdex/$QWENDEX_RUN_ID"
 mkdir -p "$qdex_launch_meta_root"
+export QWENDEX_QDEX_LAUNCH_ID="$QWENDEX_RUN_ID"
+export QWENDEX_MANAGER_SESSION_STATE_FILE="$qdex_launch_meta_root/manager_session_state.json"
+export QWENDEX_CODEX_STATUS_FILE="$qdex_launch_meta_root/codex_status.json"
 codex_status_write_file="$qdex_launch_meta_root/codex_status_write.json"
 codex_status_fields_file="$qdex_launch_meta_root/codex_status_fields.txt"
 
@@ -530,6 +544,7 @@ print(policy.get("native_max_concurrent_threads", ""))
 print(policy.get("wait_timeout_ms", ""))
 print("1" if data.get("manager_preflight_required") else "0")
 print(data.get("agent_policy_hash", policy.get("policy_hash", "")))
+print("1" if data.get("local_enabled") else "0")
 PY
 then
   mapfile -t qwendex_status_fields < "$codex_status_fields_file"
@@ -543,6 +558,8 @@ agent_policy_native_max_threads="${qwendex_status_fields[3]:-}"
 agent_policy_wait_timeout_ms="${qwendex_status_fields[4]:-}"
 manager_preflight_required="${qwendex_status_fields[5]:-0}"
 agent_policy_hash="${qwendex_status_fields[6]:-}"
+agent_policy_local_enabled="${qwendex_status_fields[7]:-0}"
+export QWENDEX_QDEX_LAUNCH_POLICY_HASH="$agent_policy_hash"
 
 if [[ -z "$agent_mode" ]]; then
   agent_mode="${agent_use,,}"
@@ -559,6 +576,10 @@ case "$agent_mode" in
     agent_mode="auto"
     ;;
 esac
+export QWENDEX_QDEX_LAUNCH_MODE="$agent_mode"
+export QWENDEX_QDEX_LAUNCH_AGENT_USE="$agent_use"
+export QWENDEX_QDEX_LAUNCH_MAX_WORKERS="$agent_policy_max_threads"
+export QWENDEX_QDEX_LAUNCH_LOCAL_ENABLED="$agent_policy_local_enabled"
 
 # Codex's V2 cap counts the root thread, while AgentPolicy max_threads counts
 # workers. Prefer the resolved native value, derive it from the worker cap when

@@ -18,7 +18,9 @@ ordinary root prompts, tools, publication, or final responses.
 
 Qwendex owns a stable runtime contract:
 
-- `QWENDEX_CODEX_STATUS_FILE` points at a tiny JSON status file.
+- `QWENDEX_CODEX_STATUS_FILE` points at a tiny JSON status file. Qdex assigns
+  a distinct file to each launch; a shared generation-level file is only a
+  compatibility/default surface, never per-session authority.
 - `QWENDEX_MODELS_CACHE_FILE` selects the model-cache filename for the patched
   runtime, allowing each supported Codex build to avoid mixed-version cache
   overwrites while retaining one isolated `CODEX_HOME`.
@@ -36,9 +38,11 @@ The intended footer text is:
 {Qwendex} Agent Manager: [Manager Mode] | Kaveman: [N] | Local: [Ready] (Alt+M/K/L)
 ```
 
-The launched Codex process, the toggle commands, and the status file must share
-the same `QWENDEX_STATE_DB`. If the footer shows defaults such as `Auto` or
-`Kaveman: [N]` after a toggle, run:
+The launched Codex process, toggle commands, private control record, and status
+file must share one launch environment. `codex-status --json` exposes
+`status_authority` so aggregate/default status is not mistaken for an open
+session. If the footer shows defaults such as `Auto` or `Kaveman: [N]` after a
+toggle, run:
 
 ```bash
 scripts/qwendex codex-status --json
@@ -100,10 +104,10 @@ and `Alt+L` for Local routing. They can be rebound through Codex
 and `qwendex_toggle_local`.
 
 Qwendex does not vendor the external Caveman package. Its Kaveman control is a
-small persisted state bit plus directive for terse output. The patched TUI reads
-the directive from `QWENDEX_CODEX_STATUS_FILE` and appends it to developer
-instructions for thread start, resume, and fork flows. Projects that want the
-upstream Git package can install it separately from
+session control bit plus directive for terse output. The patched TUI reads the
+directive from that launch's `QWENDEX_CODEX_STATUS_FILE` and appends it to the
+next root turn's developer instructions; the accepted root/child turn remains
+frozen. Projects that want the upstream Git package can install it separately from
 <https://github.com/juliusbrussee/caveman>.
 
 ## Source Locations

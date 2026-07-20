@@ -284,17 +284,17 @@ The selected mode profile's `max_subagents` also supplies
 one limit. Codex V2 counts the root thread separately, so Qdex supplies a
 native per-session ceiling of `max_subagents + 1`.
 
-The selected delegation policy is sealed into each non-Off Qdex launch. The
-snapshot covers native capacity, depth and wait limits, mode guidance, Kaveman,
-and Local routing. Current global state is retained separately as
-`desired_global_policy_hash`; changing it affects the next launch and can be
-reported as drift without blocking the current session. Lifecycle planning
-continues with the recorded launch availability and local-routing snapshot.
+Each Qdex launch has a private control record. Native capacity, depth, wait
+limits, mode guidance, and Local routing are sealed at launch; changing those
+controls shows requested versus active state and needs a restart when capacity
+or Local routing differs. Kaveman is accepted at the next root prompt and is
+then frozen for that root turn and its children. `status_authority` identifies
+the per-launch source, active-turn hash, next-turn hash, and any restart reason.
 
 `QWENDEX_MANAGER_MODE` and `QWENDEX_ORCHESTRATION_MODE` override the configured
-default mode for a fresh state DB. Once `scripts/qwendex manager mode ...` or
-`Alt+M` persists a selected mode, that local state is the active mode source
-until it is changed again.
+default mode for a fresh state DB. A Qdex session begins from that default, but
+`Alt+M`, `Alt+K`, and `Alt+L` update its private control record rather than
+another open session or the global default.
 
 Agent-use selectors are session-level runtime policy inputs. When no explicit
 selector is set, the selected Agent Manager mode is the backend `AgentPolicy`
