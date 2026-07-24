@@ -1032,3 +1032,20 @@ The supported Qdex surface therefore remains the existing AgentPolicy,
 root-only lifecycle patch, and bounded V2 capacity. This is a Qdex launch
 boundary only: direct stock-Codex use retains its own independent configuration
 and storage behavior.
+
+## Codex 0.145 Memory Feature Closure
+
+Decision: publish Qwendex `0.6.5` as a boundary-completion patch. In addition
+to the primary `memories` feature, Qdex now seals Codex 0.145's
+`external_agent_memory_import` and `chronicle` features in both the generated
+home and trailing launch configuration. The legacy `telepathy` alias and all
+equivalent caller feature/config activation attempts are rejected before the
+internal runtime starts.
+
+Reason: external-agent import can copy project-scoped memory, while Chronicle
+collects passive screen-context memory. Neither has the Qwendex retention,
+deletion, provenance, or receipt contract required for a supported launch.
+Leaving these default-off upstream features merely unmentioned would allow a
+caller to activate an unreviewed state path. The patch preserves the existing
+root-only V2 and deferred native-role boundary without changing direct
+stock-Codex behavior.

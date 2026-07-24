@@ -41,6 +41,8 @@ def assert_qdex_v2_policy_prefix(test: unittest.TestCase, command: list[str]) ->
     test.assertEqual(command[1], "--no-alt-screen")
     values = qdex_v2_config_values(command)
     test.assertIn("features.memories=false", values)
+    test.assertIn("features.external_agent_memory_import=false", values)
+    test.assertIn("features.chronicle=false", values)
     test.assertIn('history.persistence="none"', values)
     test.assertIn("memories.disable_on_external_context=true", values)
     test.assertIn("memories.generate_memories=false", values)

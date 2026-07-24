@@ -298,8 +298,8 @@ read-only and does not claim release acceptance by itself.
 
 This release applies delegation guidance through the Qwendex facade, manager
 ledger, Qdex V2 launch configuration, and supported patched Codex runtime. The
-patch provides exact SubagentStart task/parent identity, removes
-management tools from child V2 threads, and permits V2 to ignore a downstream
-legacy `agents.max_threads` setting while retaining Qwendex's V2 cap. Stock
+patch provides exact SubagentStart task/parent identity and removes management
+tools from child V2 threads. Qdex always supplies an explicit V2 cap, which
+takes precedence over Codex's legacy `[agents].max_threads` fallback. Stock
 Codex lacks those exact Qwendex patch guarantees. Managed hook installation
 remains explicit and operator-controlled rather than global or automatic.

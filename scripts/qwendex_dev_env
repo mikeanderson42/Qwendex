@@ -168,6 +168,8 @@ persistent_instructions = "Qwendex dev environment active. Act as the senior Qwe
 [features]
 multi_agent = true
 memories = false
+external_agent_memory_import = false
+chronicle = false
 
 [features.multi_agent_v2]
 enabled = true

@@ -442,10 +442,12 @@ reject_deferred_codex_controls() {
         feature_name=""
         ;;
     esac
-    if [[ "${feature_name,,}" == "memories" || "${feature_name,,}" == "memory_tool" ]]; then
-      printf 'qdex: experimental Codex memories are disabled by the Qwendex release policy.\n' >&2
-      exit 2
-    fi
+    case "${feature_name,,}" in
+      memories|memory_tool|external_agent_memory_import|chronicle|telepathy)
+        printf 'qdex: experimental Codex memories are disabled by the Qwendex release policy.\n' >&2
+        exit 2
+        ;;
+    esac
 
     config_override=""
     case "${codex_args[$arg_index]}" in
@@ -460,7 +462,7 @@ reject_deferred_codex_controls() {
     config_key="${config_override%%=*}"
     config_key="${config_key//[[:space:]]/}"
     case "$config_key" in
-      features.memories|features.memories.*|features.memory_tool|features.memory_tool.*)
+      features.memories|features.memories.*|features.memory_tool|features.memory_tool.*|features.external_agent_memory_import|features.external_agent_memory_import.*|features.chronicle|features.chronicle.*|features.telepathy|features.telepathy.*)
         printf 'qdex: experimental Codex memories are disabled by the Qwendex release policy.\n' >&2
         exit 2
         ;;
@@ -866,6 +868,8 @@ cmd=(
 codex_policy_args=(
   --config "suppress_unstable_features_warning=true"
   --config "features.memories=false"
+  --config "features.external_agent_memory_import=false"
+  --config "features.chronicle=false"
   --config "history.persistence=\"none\""
   --config "memories.disable_on_external_context=true"
   --config "memories.generate_memories=false"

@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## 0.6.5
+
+`v0.6.5` completes the Codex `0.145.0` Qdex memory boundary without enabling
+any experimental retained-state capability.
+
+- Disables `external_agent_memory_import` and `chronicle` in the generated
+  home and trailing launch policy. The legacy Chronicle feature alias
+  `telepathy` is covered by the same launch rejection.
+- Rejects feature and config activation attempts before the internal runtime
+  starts, alongside the existing history, memories, app-server, remote, and
+  native-role controls.
+- Clarifies that Qdex's explicit V2 session cap takes precedence over the
+  upstream legacy `[agents].max_threads` fallback. Root-only V2 governance and
+  the deferred native role contract are unchanged.
+
 ## 0.6.4
 
 `v0.6.4` refreshes the canonical patched-Codex compatibility contract for

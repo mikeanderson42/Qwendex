@@ -229,6 +229,8 @@ def test_qdex_dry_run_wires_agent_policy_into_supported_v2_config(
 
     assert overrides["suppress_unstable_features_warning"] is True
     assert overrides["features.memories"] is False
+    assert overrides["features.external_agent_memory_import"] is False
+    assert overrides["features.chronicle"] is False
     assert overrides["history.persistence"] == "none"
     assert overrides["memories.disable_on_external_context"] is True
     assert overrides["memories.generate_memories"] is False
@@ -329,6 +331,12 @@ def test_qdex_immutable_policy_follows_exec_local_config_and_wins(tmp_path: Path
         (("--config=features.memories=true",), "experimental Codex memories"),
         (("--enable", "memories"), "experimental Codex memories"),
         (("--enable=memory_tool",), "experimental Codex memories"),
+        (("--config=features.external_agent_memory_import=true",), "experimental Codex memories"),
+        (("-c", "features.chronicle=true"), "experimental Codex memories"),
+        (("--config=features.telepathy=true",), "experimental Codex memories"),
+        (("--enable", "external_agent_memory_import"), "experimental Codex memories"),
+        (("--enable=chronicle",), "experimental Codex memories"),
+        (("--enable", "telepathy"), "experimental Codex memories"),
         (("--profile", "operator"), "Codex --profile is unavailable"),
         (("--remote", "ws://127.0.0.1:8765"), "remote app-server connections"),
         (("app-server", "generate-json-schema"), "app-server access is unavailable"),
@@ -340,7 +348,7 @@ def test_qdex_rejects_deferred_native_role_and_memory_controls(
     args: tuple[str, ...],
     expected: str,
 ) -> None:
-    repo, env, _, _ = qdex_fixture(
+    repo, env, capture, _ = qdex_fixture(
         tmp_path,
         agent_use="Manager",
         policy={"mode": "manager", "max_threads": 4, "native_max_concurrent_threads": 5},
@@ -358,6 +366,7 @@ def test_qdex_rejects_deferred_native_role_and_memory_controls(
 
     assert result.returncode == 2
     assert expected in result.stderr
+    assert not capture.exists()
 
 
 @pytest.mark.parametrize("role_surface", ("config", "directory"))
