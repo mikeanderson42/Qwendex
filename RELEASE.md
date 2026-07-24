@@ -1,3 +1,16 @@
+# v0.6.5
+
+Codex `0.145.0` memory-boundary completion release.
+
+- Seals the upstream `external_agent_memory_import` and `chronicle` memory
+  features, including Chronicle's legacy `telepathy` alias, in the generated
+  home and immutable per-launch Qdex policy.
+- Rejects caller feature and config activation attempts before the internal
+  Codex runtime starts, preserving the existing no-retention lifecycle
+  boundary.
+- Clarifies that Qdex's explicit V2 cap takes precedence over Codex's legacy
+  `[agents].max_threads` fallback; the V2 root-governance contract is unchanged.
+
 # v0.6.4
 
 Codex `0.145.0` compatibility and privacy/lifecycle boundary release.

@@ -114,15 +114,16 @@ login continuity. Its version cache and installation identity are local copies,
 so Qdex version checks cannot rewrite the upstream Codex home's cache.
 
 For Codex 0.145, the generated home sets `history.persistence = "none"`,
-disables the `memories` feature, and disables memory generation, use, and
-dedicated tools. Qdex reasserts those values on every launch after caller
-options and rejects caller history/memory activation attempts. It keeps native
-role/profile configuration and role-driven model/reasoning overrides
-unavailable: project `.codex` role surfaces and app-server/remote access are
-rejected, and the canonical V2 patch makes children inherit the root's model,
-reasoning, and service tier. Qwendex AgentPolicy remains the supported
-delegation and lifecycle contract. This is a Qdex boundary; direct stock-Codex
-use remains independent.
+disables the `memories`, `external_agent_memory_import`, and `chronicle`
+features, and disables memory generation, use, and dedicated tools. Qdex
+reasserts those values on every launch after caller options and rejects caller
+history/memory activation attempts, including Chronicle's legacy `telepathy`
+alias. It keeps native role/profile configuration and role-driven
+model/reasoning overrides unavailable: project `.codex` role surfaces and
+app-server/remote access are rejected, and the canonical V2 patch makes
+children inherit the root's model, reasoning, and service tier. Qwendex
+AgentPolicy remains the supported delegation and lifecycle contract. This is a
+Qdex boundary; direct stock-Codex use remains independent.
 
 The generated environment also exports a Codex-versioned
 `QWENDEX_MODELS_CACHE_FILE`. The Qwendex source patch makes the active build use

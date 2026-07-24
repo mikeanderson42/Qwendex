@@ -75,11 +75,13 @@ mode and source for diagnostics; it does not grant or revoke permission.
 `qwendex-dev` bare-launch bypass mode is development-only. Stock Codex
 and its normal home remain independent and provide the Off-mode recovery path.
 
-For Qdex launches, Codex 0.145 history persistence and experimental memories
-are disabled at the generated-home and per-launch boundaries. Native role and
-profile configuration is deferred because it can load role-specific instructions
-or model settings outside the reviewed Manager lifecycle. Qdex rejects
-project-native role configuration, app-server/remote access, and caller
+For Qdex launches, Codex 0.145 history persistence, experimental memories,
+external-agent memory import, and passive-screen Chronicle memory are disabled
+at the generated-home and per-launch boundaries. Chronicle's legacy
+`telepathy` alias is rejected with the same feature policy. Native role and
+profile configuration is deferred because it can load role-specific
+instructions or model settings outside the reviewed Manager lifecycle. Qdex
+rejects project-native role configuration, app-server/remote access, and caller
 history/memory activation attempts; the canonical V2 patch also keeps child
 model, reasoning, and service-tier settings inherited from the root. These
 safeguards do not apply to direct stock-Codex invocation outside Qdex.

@@ -157,6 +157,8 @@ def assert_qdex_v2_policy_prefix(args, *, expected_native_threads=None):
     assert args[0] == "--no-alt-screen"
     values = qdex_v2_config_values(args)
     assert "features.memories=false" in values
+    assert "features.external_agent_memory_import=false" in values
+    assert "features.chronicle=false" in values
     assert 'history.persistence="none"' in values
     assert "memories.disable_on_external_context=true" in values
     assert "memories.generate_memories=false" in values
@@ -333,7 +335,7 @@ def test_qwendex_version_and_config_are_in_sync():
     sample_config = json.loads((ROOT / "config" / "qwendex" / "qwendex.sample.json").read_text(encoding="utf-8"))
     version = json_result("version", "--json")
 
-    assert qwendex.VERSION == "0.6.4"
+    assert qwendex.VERSION == "0.6.5"
     assert version["data"]["version"] == qwendex.VERSION
     assert project_config["version"] == qwendex.VERSION
     assert sample_config["version"] == qwendex.VERSION
@@ -1415,6 +1417,8 @@ def test_qwendex_dev_env_same_root_writes_one_parseable_project_table(tmp_path):
     assert config["model"] == "gpt-5.6-terra"
     assert config["model_reasoning_effort"] == "max"
     assert config["features"]["memories"] is False
+    assert config["features"]["external_agent_memory_import"] is False
+    assert config["features"]["chronicle"] is False
     assert config["features"]["multi_agent_v2"]["hide_spawn_agent_metadata"] is True
     assert config["features"]["multi_agent_v2"]["expose_spawn_agent_model_overrides"] is False
     assert config["history"] == {"persistence": "none"}
@@ -1908,7 +1912,7 @@ def assert_same_root_supports_quoted_path(tmp_path, path_fragment):
 
     assert config["projects"] == {str(checkout): {"trust_level": "trusted"}}
     assert qwendex.returncode == 0, qwendex.stderr or qwendex.stdout
-    assert json.loads(qwendex.stdout)["data"]["version"] == "0.6.4"
+    assert json.loads(qwendex.stdout)["data"]["version"] == "0.6.5"
     assert qwendex_dev.returncode == 0, qwendex_dev.stderr or qwendex_dev.stdout
     assert sourced_env.returncode == 0, sourced_env.stderr or sourced_env.stdout
     assert sourced_env.stdout.strip() == str(checkout)
