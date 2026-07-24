@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+## 0.6.4
+
+`v0.6.4` refreshes the canonical patched-Codex compatibility contract for
+Codex `0.145.0` and makes the release's privacy and role boundary explicit.
+
+- Pins `rust-v0.145.0`, its source commit, the full-index Qwendex patch digest,
+  and the normalized Cargo.lock digest as one reproducible build contract.
+- Keeps Qdex's explicit V2 session cap authoritative over Codex's legacy
+  `[agents].max_threads` fallback without retaining the obsolete upstream
+  configuration patch.
+- Sets `history.persistence = "none"`, disables the `memories` feature, and
+  disables memory generation, use, and dedicated tools in both generated and
+  per-launch Qdex configuration.
+- Does not activate native Codex role/profile configuration or role-driven
+  model/reasoning overrides. Qdex rejects project-native role surfaces and
+  app-server/remote access, and the canonical V2 patch keeps child settings
+  inherited from the root; the existing Qwendex AgentPolicy and root-only
+  lifecycle boundary remain the supported delegation surface.
+- Requires `@openai/codex@0.145.0` in the dependency helper while retaining
+  stock Codex for standalone Qwendex CLI and Off-mode recovery.
+
 ## 0.6.3
 
 `v0.6.3` validates the supported Codex TUI controls for Agent Manager, Kaveman,

@@ -1,3 +1,21 @@
+# v0.6.4
+
+Codex `0.145.0` compatibility and privacy/lifecycle boundary release.
+
+- Pins the official `rust-v0.145.0` source commit, canonical full-index
+  Qwendex patch digest, and normalized Cargo.lock digest as one reproducible
+  build contract.
+- Uses upstream's V2 legacy-thread-cap handling while retaining Qdex's explicit
+  per-session V2 ceiling as the authoritative launch limit.
+- Disables Codex history persistence and experimental memories in both the
+  generated home and the immutable Qdex launch policy.
+- Defers native role/profile configuration and role-driven model or reasoning
+  overrides. Qdex rejects project-native role surfaces and app-server access,
+  while the canonical V2 patch keeps child settings inherited from the root;
+  Qwendex AgentPolicy remains the supported delegation contract.
+- Retains stock Codex as the Off-mode recovery path and all prior release tags
+  as immutable history.
+
 # v0.6.3
 
 Agent Manager, Kaveman, and Local TUI toggle acceptance release.

@@ -33,10 +33,10 @@ CODEX_SOURCE_DIR="$WORK_ROOT/codex-source/codex"
 QWENDEX_CODEX_YOLO_FLAG="--dangerously-bypass-approvals-and-sandbox"
 QWENDEX_RELEASE_CODEX_SOURCE_REPO="https://github.com/openai/codex.git"
 QWENDEX_CODEX_SOURCE_REPO="${QWENDEX_CODEX_SOURCE_REPO:-$QWENDEX_RELEASE_CODEX_SOURCE_REPO}"
-QWENDEX_RELEASE_CODEX_VERSION="0.144.6"
-QWENDEX_RELEASE_CODEX_SOURCE_COMMIT="5d1fbf26c43abc65a203928b2e31561cb039e06d"
-QWENDEX_RELEASE_CODEX_PATCH_SHA256="26dbde50fe8e7c6d7863a5623ce89dbd18e1f3b0afc6c7a4f397ba33feef62c1"
-QWENDEX_RELEASE_CODEX_CARGO_LOCK_SHA256="5cc77d7dfcc2828d3d389daf5824998c445c01e1d30367b04885813242d53f11"
+QWENDEX_RELEASE_CODEX_VERSION="0.145.0"
+QWENDEX_RELEASE_CODEX_SOURCE_COMMIT="25af12f7e61572b0bc18ddb1008be543b91519b0"
+QWENDEX_RELEASE_CODEX_PATCH_SHA256="55d64671c47059d4d3e95666238d1fcaf2272fb57cb17d1799ced4f9214ae7a3"
+QWENDEX_RELEASE_CODEX_CARGO_LOCK_SHA256="ffa26a770e6bce911f93f2e170d8a76bf27abb4c4696bb81a9a65940de1f217e"
 QWENDEX_CODEX_SOURCE_REF="${QWENDEX_CODEX_SOURCE_REF:-rust-v$QWENDEX_RELEASE_CODEX_VERSION}"
 QWENDEX_MODELS_CACHE_FILE="models_cache.qwendex-$QWENDEX_RELEASE_CODEX_VERSION.json"
 
@@ -167,13 +167,25 @@ persistent_instructions = "Qwendex dev environment active. Act as the senior Qwe
 
 [features]
 multi_agent = true
+memories = false
 
 [features.multi_agent_v2]
 enabled = true
 max_concurrent_threads_per_session = 1
+hide_spawn_agent_metadata = true
+expose_spawn_agent_model_overrides = false
 multi_agent_mode_hint_text = "Qwendex uses explicit-only delegation until Qdex applies the immutable launch AgentPolicy. Do not proactively spawn workers; delegate only when the user, applicable AGENTS.md instructions, or an active skill explicitly requires it."
 root_agent_usage_hint_text = "You are the root Qwendex orchestrator. Keep the root as the default sole writer and integrator, and use bounded independent workers when they save context or improve quality. Qwendex planning and lifecycle records are advisory; follow the user instruction and Codex permissions. Do not ask workers to delegate recursively. Call wait_agent only while list_agents shows a running worker; after a timeout inspect once, and if none is running do not retry wait_agent."
 subagent_usage_hint_text = "You are a bounded Qwendex worker. Execute the assigned lane, do not spawn or manage subagents, and respect any explicitly read-only scope. Return a concise outcome with evidence, validation, blockers, and remaining risk when available; a structured FINAL_REPORT is optional."
+
+[history]
+persistence = "none"
+
+[memories]
+disable_on_external_context = true
+generate_memories = false
+use_memories = false
+dedicated_tools = false
 
 [projects.$dev_root_toml]
 trust_level = "trusted"
@@ -1356,7 +1368,10 @@ allowed_changes = {
     "codex-rs/core/src/config/config_tests.rs",
     "codex-rs/core/src/config/mod.rs",
     "codex-rs/core/src/hook_runtime.rs",
+    "codex-rs/core/src/tools/handlers/multi_agents_common.rs",
     "codex-rs/core/src/tools/handlers/multi_agents_spec.rs",
+    "codex-rs/core/src/tools/handlers/multi_agents_v2.rs",
+    "codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs",
     "codex-rs/core/src/tools/handlers/multi_agents_v2/wait.rs",
     "codex-rs/core/src/tools/spec_plan.rs",
     "codex-rs/hooks/src/events/session_start.rs",
@@ -1408,7 +1423,20 @@ changed_paths = sorted(
     if path
 )
 unexpected_changes = sorted(set(changed_paths) - allowed_changes)
-missing_patch_paths = sorted((allowed_changes - {"codex-rs/Cargo.lock"}) - set(changed_paths))
+required_patch_paths = allowed_changes - {"codex-rs/Cargo.lock"}
+if source_ref == "rust-v0.145.0":
+    # Codex 0.145.0 incorporates the legacy thread-cap behavior Qwendex
+    # formerly patched in this file, so its canonical patch intentionally
+    # leaves it untouched.
+    required_patch_paths -= {"codex-rs/core/src/config/mod.rs"}
+else:
+    # These role/default guards rely on the 0.145 V2 spawn implementation.
+    required_patch_paths -= {
+        "codex-rs/core/src/tools/handlers/multi_agents_common.rs",
+        "codex-rs/core/src/tools/handlers/multi_agents_v2.rs",
+        "codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs",
+    }
+missing_patch_paths = sorted(required_patch_paths - set(changed_paths))
 source_diff = run(
     "git", "-C", str(source_path), "diff", "HEAD", "--binary", "--full-index", "--no-ext-diff", binary=True
 )
