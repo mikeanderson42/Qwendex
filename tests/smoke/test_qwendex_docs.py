@@ -272,6 +272,45 @@ review_on = 2099-01-01
     assert expired["suppressed_count"] == 0
 
 
+def test_conflicting_authority_and_warning_rules_are_source_located(tmp_path):
+    repo = tmp_path / "repo"
+    init_repo(repo)
+    (repo / "docs").mkdir()
+    (repo / "results" / "private").mkdir(parents=True)
+    (repo / "README.md").write_text("# Home\n", encoding="utf-8")
+    (repo / "docs" / "first.md").write_text("# Shared Authority\n", encoding="utf-8")
+    (repo / "docs" / "second.md").write_text("# Shared Authority\n", encoding="utf-8")
+    (repo / "docs" / "orphan.md").write_text("# Orphan\n", encoding="utf-8")
+    (repo / "results" / "private" / "receipt.json").write_text("{}\n", encoding="utf-8")
+    policy = write_policy(repo)
+    policy.write_text(
+        policy.read_text(encoding="utf-8")
+        .replace(
+            'entrypoint = "README.md"',
+            'entrypoint = "README.md"\noperations = ["docs/first.md", "docs/second.md"]',
+        )
+        .replace(
+            "important_documents = []",
+            'important_documents = ["docs/orphan.md"]',
+        )
+        .replace(
+            "[verification]\n",
+            '[verification."README.md"]\nreviewed_on = 2020-01-01\ninterval_days = 1\n',
+        ),
+        encoding="utf-8",
+    )
+    commit_all(repo)
+
+    payload = audit(repo, policy)
+    findings = {item["rule_id"]: item for item in payload["findings"]}
+
+    assert {"DOC005", "DOC008", "DOC009", "DOC010", "DOC011"} <= set(findings)
+    assert findings["DOC008"]["path"] == "docs/orphan.md"
+    assert findings["DOC009"]["path"] == "README.md"
+    assert findings["DOC010"]["path"] == "docs/first.md"
+    assert findings["DOC011"]["path"] == "results/private/receipt.json"
+
+
 def test_publish_ready_generated_manifest_requires_evidence(tmp_path):
     repo = tmp_path / "repo"
     init_repo(repo)
@@ -439,6 +478,25 @@ def test_hub_rejects_duplicate_ids_and_requires_ignored_output(tmp_path):
     hub = write_hub(repo)
     with pytest.raises(docs.PolicyError, match="must be ignored"):
         docs.audit_hub(hub, tool_version="test")
+
+
+def test_serve_rejects_non_loopback_and_invalid_port_before_build():
+    docs = load_docs()
+
+    with pytest.raises(docs.PolicyError, match="loopback"):
+        docs.serve_hub(
+            Path("not-read.toml"),
+            tool_version="test",
+            bind="0.0.0.0",
+            port=8000,
+        )
+    with pytest.raises(docs.PolicyError, match="between 1 and 65535"):
+        docs.serve_hub(
+            Path("not-read.toml"),
+            tool_version="test",
+            bind="127.0.0.1",
+            port=0,
+        )
 
 
 def test_audit_does_not_need_mkdocs_and_strict_build_uses_optional_binary(
