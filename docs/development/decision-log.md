@@ -1020,6 +1020,9 @@ surfaces and app-server/remote access. The canonical V2 patch omits native
 role/model/reasoning/service-tier spawn inputs and ignores native `[agents]`
 model/reasoning defaults, while the two legacy thread-cap aliases stay accepted
 because Qdex always supplies the authoritative explicit V2 cap.
+The release validator records this as a version-aware canonical patch footprint:
+the upstream-owned `config/mod.rs` compatibility path is not required for
+`0.145.0`, while the three Qwendex V2 role/default hardening paths are.
 
 Reason: Codex's default history and memories settings can retain model-visible
 state outside Qwendex receipts, and role files can add instructions or alter
