@@ -1006,3 +1006,29 @@ source tag, source commit, patch footprint, binary pair, validation receipts,
 and public claims to one tested version. A patch release keeps the stable
 Qwendex API while preventing an upgraded stock CLI from silently running
 against an unsupported patched-runtime contract.
+
+## Codex 0.145 Privacy And Native-Role Boundary
+
+Decision: publish the Codex `0.145.0` compatibility refresh as Qwendex
+`0.6.4`, but keep its experimental retained-history and memories facilities
+disabled for every Qdex launch. The generated isolated Codex home and the
+trailing immutable Qdex configuration both set `history.persistence = "none"`,
+disable the `memories` feature, and disable memory generation, use, and
+dedicated tools. Qdex rejects memory feature activation, Codex profiles, and
+native `[agents]` role/default controls; it also rejects project-native role
+surfaces and app-server/remote access. The canonical V2 patch omits native
+role/model/reasoning/service-tier spawn inputs and ignores native `[agents]`
+model/reasoning defaults, while the two legacy thread-cap aliases stay accepted
+because Qdex always supplies the authoritative explicit V2 cap.
+The release validator records this as a version-aware canonical patch footprint:
+the upstream-owned `config/mod.rs` compatibility path is not required for
+`0.145.0`, while the three Qwendex V2 role/default hardening paths are.
+
+Reason: Codex's default history and memories settings can retain model-visible
+state outside Qwendex receipts, and role files can add instructions or alter
+subagent model/reasoning configuration outside the reviewed Manager lifecycle.
+Neither has a Qwendex retention, deletion, provenance, or receipt contract.
+The supported Qdex surface therefore remains the existing AgentPolicy,
+root-only lifecycle patch, and bounded V2 capacity. This is a Qdex launch
+boundary only: direct stock-Codex use retains its own independent configuration
+and storage behavior.

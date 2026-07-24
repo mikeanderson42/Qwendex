@@ -9,7 +9,7 @@ instead of mutating the binary in place.
 
 With stock Codex, the standalone Qwendex CLI, checks, routing, receipts, and
 offline evals remain supported. Native patched behavior requires the canonical
-Linux/Codex `0.144.6` patch, its matching `codex-code-mode-host`, and one
+Linux/Codex `0.145.0` patch, its matching `codex-code-mode-host`, and one
 validated runtime generation. Managed hooks remain optional observability.
 Unknown versions or anchor drift fail closed for patch/build claims, not for
 ordinary root prompts, tools, publication, or final responses.
@@ -112,9 +112,9 @@ frozen. Projects that want the upstream Git package can install it separately fr
 
 ## Source Locations
 
-For the current Codex `0.144.6` target (`rust-v0.144.6`), the patch touches
-these source areas (the retained `0.143.0` compatibility manifest uses the same
-locations):
+For the current Codex `0.145.0` target (`rust-v0.145.0`), the patch touches
+these source areas. Earlier compatibility manifests retain their own
+version-specific anchor sets:
 
 - `codex-rs/tui/src/bottom_pane/status_line_setup.rs`
 - `codex-rs/tui/src/chatwidget/status_surfaces.rs`
@@ -128,7 +128,11 @@ locations):
 - `codex-rs/hooks/src/schema.rs`
 - `codex-rs/core/src/hook_runtime.rs`
 - `codex-rs/core/src/tools/spec_plan.rs`
-- `codex-rs/core/src/config/mod.rs`
+- `codex-rs/core/src/tools/handlers/multi_agents_v2.rs`
+- `codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs`
+- `codex-rs/core/src/tools/handlers/multi_agents_common.rs`
+- `codex-rs/core/src/tools/handlers/multi_agents_v2/wait.rs`
+- `codex-rs/core/src/tools/handlers/multi_agents_spec.rs`
 - `codex-rs/core/src/config/config_tests.rs`
 - `codex-rs/models-manager/src/manager.rs`
 
@@ -140,9 +144,13 @@ scripts/qwendex codex-patch locations --json
 
 The Manager-specific edits add canonical `task_name` and parent identity to
 `SubagentStart`, remove collaboration-management tools from child V2 threads,
-and let V2 ignore a downstream legacy `agents.max_threads` value while using
-its own per-session ceiling. Stock Codex remains a valid Off-mode recovery
-binary, but it does not provide those exact Qwendex guarantees.
+make V2 return immediately when no child is running, and prove that Qdex's
+explicit V2 session cap takes precedence over the legacy
+`[agents].max_threads` alias. For the deferred 0.145 role boundary, the V2
+spawn schema omits native role/model/reasoning/service-tier overrides and V2
+children ignore native `[agents]` model/reasoning defaults. Stock Codex remains
+a valid Off-mode recovery binary, but it does not provide those exact Qwendex
+guarantees.
 
 The canonical development workflow is `qwendex-dev codex-patch apply`, focused
 Rust tests, `cargo fmt --check`, `codex-patch preflight --require-applied`, and

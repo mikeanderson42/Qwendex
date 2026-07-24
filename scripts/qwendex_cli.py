@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.6.3"
+VERSION = "0.6.4"
 CONFIG_DIR = ROOT / "config" / "qwendex"
 DEFAULT_PROJECT_CONFIG = CONFIG_DIR / "qwendex.json"
 DEFAULT_USER_CONFIG = Path.home() / ".config" / "qwendex" / "config.json"
@@ -651,6 +651,58 @@ CODEX_PATCH_MANIFESTS["0.144.4"] = {
 CODEX_PATCH_MANIFESTS["0.144.6"] = {
     **CODEX_PATCH_MANIFESTS["0.144.4"],
     "codex_tag": "rust-v0.144.6",
+}
+CODEX_PATCH_MANIFESTS["0.145.0"] = {
+    **CODEX_PATCH_MANIFESTS["0.144.6"],
+    "codex_tag": "rust-v0.145.0",
+    # Codex 0.145.0 natively accepts the legacy agent thread setting and
+    # resolves it into the V2 concurrency cap, so these former Qwendex
+    # transformations are no longer needed (or safe to reapply).
+    "source_anchors": [
+        spec
+        for spec in CODEX_PATCH_MANIFESTS["0.144.6"]["source_anchors"]
+        if spec["path"]
+        not in {
+            "codex-rs/core/src/config/mod.rs",
+            "codex-rs/core/src/config/config_tests.rs",
+        }
+    ]
+    + [
+        {
+            "path": "codex-rs/core/src/config/config_tests.rs",
+            "anchors": [
+                "multi_agent_v2_config_from_feature_table",
+                "multi_agent_v2_uses_agents_max_concurrent_threads_per_session",
+            ],
+        },
+        {
+            "path": "codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs",
+            "anchors": ["struct SpawnAgentArgs", "apply_requested_spawn_agent_model_overrides"],
+        },
+        {
+            "path": "codex-rs/core/src/tools/handlers/multi_agents_v2.rs",
+            "anchors": ["use codex_protocol::openai_models::ReasoningEffort;"],
+        },
+        {
+            "path": "codex-rs/core/src/tools/handlers/multi_agents_common.rs",
+            "anchors": [
+                "pub(crate) async fn apply_requested_spawn_agent_model_overrides",
+                "agent_default_subagent_model",
+            ],
+        },
+    ],
+    "required_source_edits": [
+        edit
+        for edit in CODEX_PATCH_MANIFESTS["0.144.6"]["required_source_edits"]
+        if edit
+        != "Allow V2 to ignore a legacy agents.max_threads value while retaining its own per-session cap."
+    ]
+    + [
+        "Verify the explicit Qwendex V2 session cap takes precedence over the legacy [agents].max_threads alias.",
+        "Keep Qwendex V2 spawn input free of native role, model, reasoning, and service-tier overrides.",
+        "Prevent V2 children from inheriting native [agents] default model or reasoning controls.",
+        "Remove the V2-only reasoning override import that becomes unused under the fixed Qwendex worker contract.",
+    ],
 }
 
 DEFAULT_CONFIG: dict[str, Any] = {
@@ -5331,7 +5383,10 @@ def codex_source_patch_specs(version: str) -> list[dict[str, Any]]:
     marker = f"// {QWENDEX_CODEX_PATCH_MARKER}"
     if version not in CODEX_PATCH_MANIFESTS:
         return []
-    return [
+    listed_agent_legacy_field = (
+        "            last_task_message: None,\n" if version != "0.145.0" else ""
+    )
+    specs = [
         {
             "path": "codex-rs/tui/src/bottom_pane/status_line_setup.rs",
             "replacements": [
@@ -6047,8 +6102,7 @@ mod tests {
         ListedAgent {
             agent_name: name.to_string(),
             agent_status: status,
-            last_task_message: None,
-        }
+{listed_agent_legacy_field}        }
     }
 
     #[test]
@@ -6074,7 +6128,9 @@ mod tests {
         assert!(result.message.contains("followup_task"));
     }
 }
-""".replace("/ROOT/", "/" + "root" + "/"),
+""".replace("{listed_agent_legacy_field}", listed_agent_legacy_field).replace(
+                        "/ROOT/", "/" + "root" + "/"
+                    ),
                 ),
             ],
         },
@@ -6204,6 +6260,210 @@ max_threads = 2
             ],
         },
     ]
+    if version == "0.145.0":
+        redundant_v2_config_paths = {
+            "codex-rs/core/src/config/mod.rs",
+            "codex-rs/core/src/config/config_tests.rs",
+        }
+        specs = [spec for spec in specs if spec["path"] not in redundant_v2_config_paths]
+        specs.append(
+            {
+                "path": "codex-rs/core/src/config/config_tests.rs",
+                "replacements": [
+                    (
+                        """#[tokio::test]
+async fn multi_agent_v2_uses_agents_max_concurrent_threads_per_session() -> std::io::Result<()> {
+""",
+                        f"""#[tokio::test]
+async fn qwendex_v2_cap_precedes_legacy_agents_max_threads_alias() -> std::io::Result<()> {{
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features.multi_agent_v2]
+enabled = true
+max_concurrent_threads_per_session = 5
+
+[agents]
+max_threads = 2
+"#,
+    )?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    // {QWENDEX_CODEX_PATCH_MARKER}
+    assert_eq!(config.agent_max_threads, Some(2));
+    assert_eq!(config.multi_agent_v2.max_concurrent_threads_per_session, 5);
+    assert_eq!(
+        config.effective_agent_max_threads(MultiAgentVersion::V2),
+        Some(4)
+    );
+
+    Ok(())
+}}
+
+#[tokio::test]
+async fn multi_agent_v2_uses_agents_max_concurrent_threads_per_session() -> std::io::Result<()> {{
+""",
+                    ),
+                ],
+            }
+        )
+        specs.extend(
+            [
+                {
+                    "path": "codex-rs/core/src/tools/spec_plan.rs",
+                    "replacements": [
+                        (
+                            """                        expose_agent_type: !turn_context.config.agent_roles.is_empty(),
+                        hide_agent_type_model_reasoning: hide_spawn_agent_metadata,
+""",
+                            f"""                        {marker}
+                        // Qdex owns the worker contract and never exposes native user-defined roles.
+                        expose_agent_type: false,
+                        hide_agent_type_model_reasoning: true,
+""",
+                        ),
+                        (
+                            """            let hide_spawn_agent_metadata =
+                turn_context.config.multi_agent_v2.hide_spawn_agent_metadata;
+""",
+                            f"""            // {QWENDEX_CODEX_PATCH_MARKER}: role/model metadata remains hidden.
+""",
+                        ),
+                    ],
+                },
+                {
+                    "path": "codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs",
+                    "replacements": [
+                        (
+                            """struct SpawnAgentArgs {
+    message: String,
+    task_name: String,
+    agent_type: Option<String>,
+    model: Option<String>,
+    reasoning_effort: Option<ReasoningEffort>,
+    service_tier: Option<String>,
+    fork_turns: Option<String>,
+    fork_context: Option<bool>,
+}
+""",
+                            f"""struct SpawnAgentArgs {{
+    message: String,
+    task_name: String,
+    {marker}
+    // Qwendex V2 children inherit the root policy; native role and per-child
+    // model, reasoning, and service-tier controls are intentionally absent.
+    fork_turns: Option<String>,
+    fork_context: Option<bool>,
+}}
+""",
+                        ),
+                        (
+                            """    let args: SpawnAgentArgs = parse_arguments(&arguments)?;
+    let fork_mode = args.fork_mode()?;
+    let role_name = args
+        .agent_type
+        .as_deref()
+        .map(str::trim)
+        .filter(|role| !role.is_empty());
+
+    let message = message_content(args.message)?;
+    let session_source = turn.session_source.clone();
+    let child_depth = next_thread_spawn_depth(&session_source);
+    let mut config =
+        build_agent_spawn_config(&session.get_base_instructions().await, turn.as_ref())?;
+    if let Some(service_tier) = args.service_tier.as_ref() {
+        config.service_tier = Some(service_tier.clone());
+    }
+    let is_full_history_fork = matches!(fork_mode, Some(SpawnAgentForkMode::FullHistory));
+    if is_full_history_fork {
+        reject_full_fork_agent_type_override(role_name)?;
+    }
+    apply_requested_spawn_agent_model_overrides(
+        &session,
+        turn.as_ref(),
+        &mut config,
+        args.model.as_deref(),
+        args.reasoning_effort.clone(),
+    )
+    .await?;
+    if !is_full_history_fork {
+        apply_spawn_agent_role(&session, &mut config, role_name).await?;
+    }
+    apply_spawn_agent_service_tier(
+        &session,
+        &mut config,
+        turn.config.service_tier.as_deref(),
+        args.service_tier.as_deref(),
+    )
+    .await?;
+""",
+                            f"""    let args: SpawnAgentArgs = parse_arguments(&arguments)?;
+    let fork_mode = args.fork_mode()?;
+    {marker}
+    let role_name: Option<&str> = None;
+
+    let message = message_content(args.message)?;
+    let session_source = turn.session_source.clone();
+    let child_depth = next_thread_spawn_depth(&session_source);
+    let mut config =
+        build_agent_spawn_config(&session.get_base_instructions().await, turn.as_ref())?;
+    apply_requested_spawn_agent_model_overrides(&session, turn.as_ref(), &mut config, None, None)
+        .await?;
+    apply_spawn_agent_service_tier(
+        &session,
+        &mut config,
+        turn.config.service_tier.as_deref(),
+        None,
+    )
+    .await?;
+""",
+                        ),
+                    ],
+                },
+                {
+                    "path": "codex-rs/core/src/tools/handlers/multi_agents_v2.rs",
+                    "replacements": [
+                        (
+                            """use codex_protocol::openai_models::ReasoningEffort;
+""",
+                            f"""// {QWENDEX_CODEX_PATCH_MARKER}: removed use codex_protocol::openai_models::ReasoningEffort; because SpawnAgentArgs no longer accepts reasoning overrides.
+""",
+                        ),
+                    ],
+                },
+                {
+                    "path": "codex-rs/core/src/tools/handlers/multi_agents_common.rs",
+                    "replacements": [
+                        (
+                            """    let requested_model = requested_model.or(turn.config.agent_default_subagent_model.as_deref());
+    let requested_reasoning_effort = requested_reasoning_effort
+        .or_else(|| turn.config.agent_default_subagent_reasoning_effort.clone());
+""",
+                            f"""    {marker}
+    // Native [agents] defaults remain available to V1, but Qdex V2 children
+    // inherit the root's live model and reasoning rather than role-specific defaults.
+    let (requested_model, requested_reasoning_effort) =
+        if turn.multi_agent_version == MultiAgentVersion::V2 {{
+            (requested_model, requested_reasoning_effort)
+        }} else {{
+            (
+                requested_model.or(turn.config.agent_default_subagent_model.as_deref()),
+                requested_reasoning_effort
+                    .or_else(|| turn.config.agent_default_subagent_reasoning_effort.clone()),
+            )
+        }};
+""",
+                        ),
+                    ],
+                },
+            ]
+        )
+    return specs
 
 
 def apply_codex_source_patch(source: Path, version: str, *, dry_run: bool = False) -> dict[str, Any]:

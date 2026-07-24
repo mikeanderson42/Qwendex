@@ -408,6 +408,138 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+# Codex 0.145 introduces memory persistence and configurable agent roles.
+# Qdex owns an isolated runtime boundary, so it keeps those stateful or
+# role-specific controls out of ordinary Qwendex launches until a dedicated
+# retention and lifecycle contract exists.  Keep the legacy thread-cap aliases
+# available: the explicit V2 ceiling appended below remains authoritative.
+reject_deferred_codex_controls() {
+  local arg_index
+  local config_override
+  local config_key
+  local feature_name
+  for ((arg_index = 0; arg_index < ${#codex_args[@]}; arg_index++)); do
+    case "${codex_args[$arg_index]}" in
+      --)
+        break
+        ;;
+      -p|--profile|--profile=*)
+        printf 'qdex: Codex --profile is unavailable while Qwendex defers native role configuration.\n' >&2
+        exit 2
+        ;;
+      --remote|--remote=*)
+        printf 'qdex: Codex remote app-server connections are unavailable while Qwendex defers history and memory lifecycle controls.\n' >&2
+        exit 2
+        ;;
+      --enable)
+        feature_name="${codex_args[$((arg_index + 1))]:-}"
+        ;;
+      --enable=*)
+        feature_name="${codex_args[$arg_index]#--enable=}"
+        ;;
+      *)
+        feature_name=""
+        ;;
+    esac
+    if [[ "${feature_name,,}" == "memories" || "${feature_name,,}" == "memory_tool" ]]; then
+      printf 'qdex: experimental Codex memories are disabled by the Qwendex release policy.\n' >&2
+      exit 2
+    fi
+
+    config_override=""
+    case "${codex_args[$arg_index]}" in
+      -c|--config)
+        config_override="${codex_args[$((arg_index + 1))]:-}"
+        ;;
+      --config=*)
+        config_override="${codex_args[$arg_index]#--config=}"
+        ;;
+    esac
+    [[ "$config_override" == *=* ]] || continue
+    config_key="${config_override%%=*}"
+    config_key="${config_key//[[:space:]]/}"
+    case "$config_key" in
+      features.memories|features.memories.*|features.memory_tool|features.memory_tool.*)
+        printf 'qdex: experimental Codex memories are disabled by the Qwendex release policy.\n' >&2
+        exit 2
+        ;;
+      memories|memories.*|history|history.*)
+        printf 'qdex: experimental Codex history and memory controls are disabled by the Qwendex release policy.\n' >&2
+        exit 2
+        ;;
+      features.multi_agent_v2.expose_spawn_agent_model_overrides|features.multi_agent_v2.hide_spawn_agent_metadata)
+        printf 'qdex: native role-driven model and reasoning controls are deferred by the Qwendex release policy.\n' >&2
+        exit 2
+        ;;
+      agents|agents.*)
+        case "$config_key" in
+          agents.max_threads|agents.max_concurrent_threads_per_session)
+            ;;
+          *)
+            printf 'qdex: native [agents] role and default controls are deferred by the Qwendex release policy.\n' >&2
+            exit 2
+            ;;
+        esac
+        ;;
+    esac
+  done
+}
+
+reject_deferred_app_server_command() {
+  local arg_index=0
+  local arg
+  # Find only the top-level Codex subcommand.  Once an ordinary command or
+  # interactive prompt starts, later words are its arguments and must retain
+  # their normal meaning (for example, `qdex exec app-server`).
+  while (( arg_index < ${#codex_args[@]} )); do
+    arg="${codex_args[$arg_index]}"
+    case "$arg" in
+      --)
+        return
+        ;;
+      app-server|remote-control)
+        printf 'qdex: Codex app-server access is unavailable while Qwendex defers history and memory lifecycle controls.\n' >&2
+        exit 2
+        ;;
+      -c|--config|--enable|--disable|--remote|--remote-auth-token-env|-i|--image|-m|--model|-p|--profile|-s|--sandbox|-C|--cd|--add-dir|-a|--ask-for-approval)
+        arg_index=$((arg_index + 2))
+        continue
+        ;;
+      --config=*|--enable=*|--disable=*|--remote=*|--remote-auth-token-env=*|--image=*|--model=*|--profile=*|--sandbox=*|--cd=*|--add-dir=*|--ask-for-approval=*)
+        arg_index=$((arg_index + 1))
+        continue
+        ;;
+      -*)
+        arg_index=$((arg_index + 1))
+        continue
+        ;;
+      *)
+        return
+        ;;
+    esac
+  done
+}
+
+# Metadata/help calls are Codex CLI inspection, not agent sessions. Keep them
+# byte-for-byte compatible and free of Qwendex policy checks, status writes, or
+# manager ledger mutations.
+informational_only=0
+if [[ "${codex_args[0]:-}" == "help" ]]; then
+  informational_only=1
+fi
+for arg in "${codex_args[@]}"; do
+  case "$arg" in
+    -h|--help|-V|--version)
+      informational_only=1
+      break
+      ;;
+  esac
+done
+if [[ "$informational_only" != "1" ]]; then
+  reject_deferred_codex_controls
+  reject_deferred_app_server_command
+fi
 permission_resolution="$(resolve_qdex_permission_mode "$cli_permission_mode")" || exit $?
 mapfile -t permission_fields <<< "$permission_resolution"
 permission_mode="${permission_fields[0]:-}"
@@ -457,6 +589,63 @@ if [[ -z "$target_repo" ]]; then
 fi
 
 target_repo="$(cd "$target_repo" && pwd)"
+
+reject_deferred_project_role_controls() {
+  local project_root="$1"
+  # The 0.145 role loader discovers roles in every trusted project config
+  # layer, including a plain .codex/agents directory with no matching table in
+  # config.toml. Qdex deliberately has no native-role lifecycle contract, so
+  # reject those project-local surfaces before a Qwendex launch can trust them.
+  # Only the generic reason is emitted: do not copy repository paths or config
+  # contents into terminal output, launch metadata, or receipts.
+  if ! python3 - "$project_root" <<'PY'
+import subprocess
+import sys
+import tomllib
+from pathlib import Path
+
+
+target = Path(sys.argv[1]).resolve()
+try:
+    git_root = subprocess.run(
+        ["git", "-C", str(target), "rev-parse", "--show-toplevel"],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=5,
+    ).stdout.strip()
+    root = Path(git_root).resolve()
+    target.relative_to(root)
+except (OSError, subprocess.SubprocessError, ValueError):
+    root = target
+
+current = target
+while True:
+    dot_codex = current / ".codex"
+    config_path = dot_codex / "config.toml"
+    if config_path.is_file():
+        try:
+            config = tomllib.loads(config_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+            # A malformed trusted project config is rejected later by Codex;
+            # it cannot contribute a parsed native role declaration here.
+            config = {}
+        if isinstance(config, dict) and "agents" in config:
+            raise SystemExit(1)
+    if (dot_codex / "agents").is_dir():
+        raise SystemExit(1)
+    if current == root:
+        break
+    parent = current.parent
+    if parent == current:
+        break
+    current = parent
+PY
+  then
+    printf 'qdex: project-native Codex role configuration is unavailable while Qwendex defers role lifecycle controls.\n' >&2
+    exit 2
+  fi
+}
 target_repo_toml="$(python3 - "$target_repo" <<'PY'
 import json
 import sys
@@ -482,21 +671,6 @@ if [[ ! -x "$QWENDEX_CODEX_RUNTIME" ]]; then
   exit 127
 fi
 
-# Metadata/help calls are Codex CLI inspection, not agent sessions. Keep them
-# byte-for-byte compatible and free of Qwendex status writes or manager ledger
-# mutations.
-informational_only=0
-if [[ "${codex_args[0]:-}" == "help" ]]; then
-  informational_only=1
-fi
-for arg in "${codex_args[@]}"; do
-  case "$arg" in
-    -h|--help|-V|--version)
-      informational_only=1
-      break
-      ;;
-  esac
-done
 if [[ "$informational_only" == "1" ]]; then
   if [[ "$codex_sets_cwd" == "1" ]]; then
     cd "$caller_cwd"
@@ -505,6 +679,8 @@ if [[ "$informational_only" == "1" ]]; then
   fi
   exec "$QWENDEX_CODEX_RUNTIME" "${codex_args[@]}"
 fi
+
+reject_deferred_project_role_controls "$target_repo"
 
 # A run id is an opaque per-launch correlation value. Performance hooks HMAC it
 # locally before persistence; never create it for help/version inspection.
@@ -689,11 +865,19 @@ cmd=(
 )
 codex_policy_args=(
   --config "suppress_unstable_features_warning=true"
+  --config "features.memories=false"
+  --config "history.persistence=\"none\""
+  --config "memories.disable_on_external_context=true"
+  --config "memories.generate_memories=false"
+  --config "memories.use_memories=false"
+  --config "memories.dedicated_tools=false"
   --config "features.multi_agent_v2.enabled=true"
   --config "features.multi_agent_v2.max_concurrent_threads_per_session=$codex_native_max_threads"
   --config "features.multi_agent_v2.min_wait_timeout_ms=$codex_wait_min_timeout_ms"
   --config "features.multi_agent_v2.max_wait_timeout_ms=$codex_wait_timeout_ms"
   --config "features.multi_agent_v2.default_wait_timeout_ms=$codex_wait_default_timeout_ms"
+  --config "features.multi_agent_v2.hide_spawn_agent_metadata=true"
+  --config "features.multi_agent_v2.expose_spawn_agent_model_overrides=false"
   --config "features.multi_agent_v2.root_agent_usage_hint_text=$(toml_string "$root_agent_usage_hint")"
   --config "features.multi_agent_v2.subagent_usage_hint_text=$(toml_string "$subagent_usage_hint")"
 )

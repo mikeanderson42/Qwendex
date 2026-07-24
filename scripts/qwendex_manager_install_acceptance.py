@@ -575,8 +575,8 @@ def run_acceptance(run_id: str, output_root: Path) -> dict[str, Any]:
         timeout=30,
         check=False,
     )
-    if stock_version.returncode or "0.144.6" not in (stock_version.stdout + stock_version.stderr):
-        raise InstallAcceptanceError("stock Codex does not match the supported 0.144.6 build contract")
+    if stock_version.returncode or "0.145.0" not in (stock_version.stdout + stock_version.stderr):
+        raise InstallAcceptanceError("stock Codex does not match the supported 0.145.0 build contract")
     auth_source = Path.home() / ".codex" / "auth.json"
     actual_normal_before = LIVE.static_normal_home_snapshot(Path.home())
     commands: list[dict[str, Any]] = []
@@ -1247,7 +1247,7 @@ def run_acceptance(run_id: str, output_root: Path) -> dict[str, Any]:
             "normal_home_unchanged": normal_unchanged,
             "stock_codex_version": stock_version.stdout.strip(),
             "claim_scope": (
-                "tested Linux and Codex 0.144.6 stable-control-file plus "
+                "tested Linux and Codex 0.145.0 stable-control-file plus "
                 "full-decoy-home isolation only"
             ),
             "result": "pass",

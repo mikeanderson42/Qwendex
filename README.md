@@ -67,7 +67,7 @@ Manager routing is per lane. The main Codex session keeps the user's selected
 model and reasoning. Low-risk bounded lanes may use local Qwen; high-risk lanes
 escalate to GPT/Codex authority.
 
-Qwendex `0.6.3` installs validated runtime generations side by side. Each
+Qwendex `0.6.4` installs validated runtime generations side by side. Each
 Qdex process is pinned to one immutable source/binary/config contract;
 activation affects only new sessions, and shell recovery can restore the prior
 known-good generation without invoking Qdex. Stock Codex supports Qwendex's
@@ -103,7 +103,7 @@ git fetch --tags origin
 git switch --detach <published-release-tag>
 ```
 
-The annotated `v0.6.3` tag is the publication boundary for this stable
+The annotated `v0.6.4` tag is the publication boundary for this stable
 release; untagged source remains candidate material until the release gates
 create and push that tag.
 
@@ -125,7 +125,7 @@ scripts/qwendex_install_deps --check --json
 The supported runtime baseline is Bash 4+ and Python 3.11+; the dependency
 receipt blocks older interpreters instead of failing later in Qwendex startup.
 
-The installer requires `@openai/codex@0.144.6`, matching this release's
+The installer requires `@openai/codex@0.145.0`, matching this release's
 native-patch compatibility contract. For intentional compatibility testing,
 override both `QWENDEX_CODEX_NPM_SPEC` and
 `QWENDEX_CODEX_REQUIRED_VERSION`.
@@ -354,7 +354,7 @@ claims require GPT/Codex review and the appropriate Qwendex verification tier.
 
 ## Current Release / Known Limits
 
-This checkout is seeded as `v0.6.3` and supports Codex `0.144.6`.
+This checkout is seeded as `v0.6.4` and supports Codex `0.145.0`.
 It includes the supported-Codex update,
 state-schema/runtime isolation fixes, advisory Agent Management boundary, and
 validated Agent Manager/Kaveman/Local TUI controls described in the release
@@ -376,6 +376,10 @@ Known limits:
 - Patched Codex footer and hotkeys depend on a supported source checkout and a
   rebuilt Codex binary.
 - Native Manager delegation integration is certified only on the tested Linux /
-  Codex `0.144.6` canonical patch combination. Stock Codex remains supported for
+  Codex `0.145.0` canonical patch combination. Stock Codex remains supported for
   standalone Qwendex CLI functions without that patched capacity, depth, wait,
   child-tool-surface, or lifecycle-observability integration.
+- Qdex keeps Codex 0.145 history persistence and memories disabled, rejects
+  app-server/remote and project-native role configuration, and does not
+  activate role-driven child controls. Qwendex AgentPolicy remains the
+  supported delegation contract.

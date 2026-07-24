@@ -113,7 +113,10 @@ CODEX_ALLOWED_BUILD_PATHS = {
     "codex-rs/core/src/config/config_tests.rs",
     "codex-rs/core/src/config/mod.rs",
     "codex-rs/core/src/hook_runtime.rs",
+    "codex-rs/core/src/tools/handlers/multi_agents_common.rs",
     "codex-rs/core/src/tools/handlers/multi_agents_spec.rs",
+    "codex-rs/core/src/tools/handlers/multi_agents_v2.rs",
+    "codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs",
     "codex-rs/core/src/tools/handlers/multi_agents_v2/wait.rs",
     "codex-rs/core/src/tools/spec_plan.rs",
     "codex-rs/hooks/src/events/session_start.rs",
@@ -128,6 +131,12 @@ CODEX_ALLOWED_BUILD_PATHS = {
     "codex-rs/tui/src/terminal_visualization_instructions.rs",
 }
 CODEX_REQUIRED_PATCH_PATHS = CODEX_ALLOWED_BUILD_PATHS - {"codex-rs/Cargo.lock"}
+CODEX_145_ONLY_PATCH_PATHS = {
+    "codex-rs/core/src/tools/handlers/multi_agents_common.rs",
+    "codex-rs/core/src/tools/handlers/multi_agents_v2.rs",
+    "codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs",
+}
+CODEX_145_UPSTREAM_PATCH_PATHS = {"codex-rs/core/src/config/mod.rs"}
 GUARD_MARKERS = (
     "LOCAL_MODEL_TOOL_CALL_TOO_LARGE",
     "LOCAL_MODEL_TOOL_CALL_TRUNCATED",
@@ -1271,6 +1280,18 @@ def validate_receipt_binding(
     return result, blockers
 
 
+def codex_required_patch_paths(version: str) -> set[str]:
+    """Return the fail-closed source-patch footprint for a supported Codex version."""
+    required = set(CODEX_REQUIRED_PATCH_PATHS)
+    if version == "0.145.0":
+        # Upstream 0.145 incorporates the config/mod.rs compatibility behavior,
+        # while Qwendex adds the V2 role/default hardening files.
+        required -= CODEX_145_UPSTREAM_PATCH_PATHS
+    else:
+        required -= CODEX_145_ONLY_PATCH_PATHS
+    return required
+
+
 def validate_codex_build_receipt(
     payload: dict[str, Any],
     expected_codex_version: str,
@@ -1287,6 +1308,7 @@ def validate_codex_build_receipt(
         source_ref.removeprefix("rust-v") if source_ref.startswith("rust-v") else ""
     )
     required_version = expected_codex_version or derived_version
+    required_patch_paths = codex_required_patch_paths(required_version)
     binary_path = Path(str(payload.get("binary") or "")).expanduser()
     binary_exists = binary_path.exists()
     binary_is_symlink = binary_path.is_symlink()
@@ -1441,7 +1463,7 @@ def validate_codex_build_receipt(
         "canonical_source_origin_matches": canonical_source_origin_matches,
         "changed_paths_allowlisted": isinstance(changed_paths, list)
         and len(changed_paths) == len(set(changed_paths))
-        and CODEX_REQUIRED_PATCH_PATHS
+        and required_patch_paths
         <= set(changed_paths)
         <= CODEX_ALLOWED_BUILD_PATHS,
         "source_patch_nonempty": isinstance(nested.get("source_patch_bytes"), int)

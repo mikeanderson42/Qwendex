@@ -44,6 +44,19 @@ def test_codex_build_contract_requires_the_current_canonical_patch_surface():
     assert "codex-rs/Cargo.lock" in release_gate.CODEX_ALLOWED_BUILD_PATHS
     assert "codex-rs/Cargo.lock" not in release_gate.CODEX_REQUIRED_PATCH_PATHS
 
+    codex_145_required = release_gate.codex_required_patch_paths("0.145.0")
+    codex_145_v2_paths = {
+        "codex-rs/core/src/tools/handlers/multi_agents_common.rs",
+        "codex-rs/core/src/tools/handlers/multi_agents_v2.rs",
+        "codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs",
+    }
+    assert codex_145_v2_paths <= release_gate.CODEX_ALLOWED_BUILD_PATHS
+    assert codex_145_v2_paths <= codex_145_required
+    assert "codex-rs/core/src/config/mod.rs" not in codex_145_required
+    assert codex_145_v2_paths.isdisjoint(
+        release_gate.codex_required_patch_paths("0.144.4")
+    )
+
 
 def run(*args: str, cwd: Path) -> str:
     result = subprocess.run(args, cwd=cwd, text=True, capture_output=True, check=True)

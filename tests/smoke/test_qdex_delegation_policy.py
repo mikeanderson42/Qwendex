@@ -228,7 +228,15 @@ def test_qdex_dry_run_wires_agent_policy_into_supported_v2_config(
     overrides = command_config(command)
 
     assert overrides["suppress_unstable_features_warning"] is True
+    assert overrides["features.memories"] is False
+    assert overrides["history.persistence"] == "none"
+    assert overrides["memories.disable_on_external_context"] is True
+    assert overrides["memories.generate_memories"] is False
+    assert overrides["memories.use_memories"] is False
+    assert overrides["memories.dedicated_tools"] is False
     assert overrides["features.multi_agent_v2.enabled"] is True
+    assert overrides["features.multi_agent_v2.hide_spawn_agent_metadata"] is True
+    assert overrides["features.multi_agent_v2.expose_spawn_agent_model_overrides"] is False
     assert (
         overrides["features.multi_agent_v2.max_concurrent_threads_per_session"]
         == expected_native_threads
@@ -307,6 +315,113 @@ def test_qdex_immutable_policy_follows_exec_local_config_and_wins(tmp_path: Path
     ]
     assert wait_matching[0][0] < wait_matching[1][0]
     assert command_config(command)["features.multi_agent_v2.max_wait_timeout_ms"] == 60000
+
+
+@pytest.mark.parametrize(
+    ("args", "expected"),
+    [
+        (("-c", 'agents.reviewer.description="review"'), "native [agents] role and default controls"),
+        (("--config", 'agents.default_subagent_model="gpt-5.6"'), "native [agents] role and default controls"),
+        (("-c", "features.multi_agent_v2.expose_spawn_agent_model_overrides=true"), "role-driven model and reasoning"),
+        (("--config=features.multi_agent_v2.hide_spawn_agent_metadata=false",), "role-driven model and reasoning"),
+        (("-c", 'history.persistence="save-all"'), "history and memory controls"),
+        (("--config", "memories.generate_memories=true"), "history and memory controls"),
+        (("--config=features.memories=true",), "experimental Codex memories"),
+        (("--enable", "memories"), "experimental Codex memories"),
+        (("--enable=memory_tool",), "experimental Codex memories"),
+        (("--profile", "operator"), "Codex --profile is unavailable"),
+        (("--remote", "ws://127.0.0.1:8765"), "remote app-server connections"),
+        (("app-server", "generate-json-schema"), "app-server access is unavailable"),
+        (("remote-control",), "app-server access is unavailable"),
+    ],
+)
+def test_qdex_rejects_deferred_native_role_and_memory_controls(
+    tmp_path: Path,
+    args: tuple[str, ...],
+    expected: str,
+) -> None:
+    repo, env, _, _ = qdex_fixture(
+        tmp_path,
+        agent_use="Manager",
+        policy={"mode": "manager", "max_threads": 4, "native_max_concurrent_threads": 5},
+    )
+
+    result = subprocess.run(
+        [str(QDEX), "--qdex-json", "-C", str(repo), *args],
+        cwd=repo,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=30,
+    )
+
+    assert result.returncode == 2
+    assert expected in result.stderr
+
+
+@pytest.mark.parametrize("role_surface", ("config", "directory"))
+def test_qdex_rejects_project_native_role_surfaces_without_disclosing_paths(
+    tmp_path: Path,
+    role_surface: str,
+) -> None:
+    repo, env, capture, _ = qdex_fixture(
+        tmp_path,
+        agent_use="Manager",
+        policy={"mode": "manager", "max_threads": 4, "native_max_concurrent_threads": 5},
+    )
+    child = repo / "nested"
+    child.mkdir()
+    subprocess.run(
+        ["git", "init", "--quiet", str(repo)],
+        text=True,
+        capture_output=True,
+        check=True,
+        timeout=30,
+    )
+    dot_codex = repo / ".codex"
+    dot_codex.mkdir()
+    if role_surface == "config":
+        (dot_codex / "config.toml").write_text(
+            "[agents.reviewer]\ndescription = \"review\"\n",
+            encoding="utf-8",
+        )
+    else:
+        (dot_codex / "agents").mkdir()
+
+    result = subprocess.run(
+        [str(QDEX), "--qdex-json", "-C", str(child)],
+        cwd=child,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=30,
+    )
+
+    assert result.returncode == 2
+    assert "project-native Codex role configuration" in result.stderr
+    assert str(repo) not in result.stderr
+    assert not capture.exists()
+
+
+def test_qdex_keeps_legacy_thread_cap_alias_compatible_and_overridden(tmp_path: Path) -> None:
+    repo, env, _, _ = qdex_fixture(
+        tmp_path,
+        agent_use="Manager",
+        policy={"mode": "manager", "max_threads": 4, "native_max_concurrent_threads": 5},
+    )
+
+    command = qdex_dry_run(
+        repo,
+        env,
+        "exec",
+        "-c",
+        "agents.max_threads=1",
+        "Inspect the repository",
+    )["command"]
+    assert isinstance(command, list)
+    assert command_config(command)["features.multi_agent_v2.max_concurrent_threads_per_session"] == 5
 
 
 def test_qdex_caps_policy_wait_at_product_ceiling(tmp_path: Path) -> None:
