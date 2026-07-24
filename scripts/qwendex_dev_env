@@ -2047,6 +2047,7 @@ cmd_test() {
   if [[ "$scope" == "quick" ]]; then
     python3 -m pytest -q \
       tests/smoke/test_qwendex_cli.py \
+      tests/smoke/test_qwendex_docs.py \
       tests/smoke/test_qwendex_performance.py
   else
     python3 -m pytest -q tests/smoke
@@ -2123,12 +2124,23 @@ cmd_verify() {
   else
     run_logged_gate "$run_meta_root/test_gate.json" tests_full "$run_id" cmd_test --all
   fi
+  run_logged_gate \
+    "$run_meta_root/docs_audit_gate.json" \
+    docs_audit \
+    "$run_id" \
+    scripts/qwendex docs audit \
+      --repo "$DEV_ROOT" \
+      --policy "$DEV_ROOT/config/qwendex/docs-policy.toml" \
+      --json
   if [[ "$tier" == "release" ]]; then
     bind_release_receipt \
       "$run_meta_root/static_gate.json" "$run_id" static_gate qwendex.static.full \
       "$release_source_commit" "$release_source_tree"
     bind_release_receipt \
       "$run_meta_root/test_gate.json" "$run_id" test_gate qwendex.tests.full \
+      "$release_source_commit" "$release_source_tree"
+    bind_release_receipt \
+      "$run_meta_root/docs_audit_gate.json" "$run_id" docs_audit_gate qwendex.docs.audit \
       "$release_source_commit" "$release_source_tree"
   fi
   # shellcheck disable=SC1090

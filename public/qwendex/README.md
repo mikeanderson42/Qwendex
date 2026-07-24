@@ -42,6 +42,7 @@ seat for a run with `exec --seat <name>` or `exec --seat auto`.
 - [Manager Mode](manager-mode.md)
 - [Codex TUI Patching](codex-patching.md)
 - [Dev Environment](dev-environment.md)
+- [Documentation Quality](documentation-quality.md)
 - [Test Bench](testbench.md)
 - [Tool Server](tool-server.md)
 - [Security](security.md)

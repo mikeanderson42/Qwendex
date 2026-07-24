@@ -61,9 +61,10 @@ qwendex-dev verify --tier full
 qwendex-dev verify --tier release
 ```
 
-`quick` runs the dev lint and smoke-test path, then records Qwendex `check`,
-`doctor`, Codex status writing, and Codex patch preflight receipts under the
-dev results tree. `full` adds public JSON syntax plus Draft 2020-12 schema and
+`quick` runs the dev lint and smoke-test path, audits the tracked documentation
+policy, then records Qwendex `check`, `doctor`, Codex status writing, and Codex
+patch preflight receipts under the dev results tree. The documentation audit
+does not require MkDocs. `full` adds public JSON syntax plus Draft 2020-12 schema and
 version-parity validation, the offline Qwendex eval suite, harness gate, and
 local harness eval receipts. `release` uses strict checks with an isolated
 release state DB and writes both the release summary and a run-scoped Codex

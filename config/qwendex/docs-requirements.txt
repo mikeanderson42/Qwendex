@@ -1,0 +1,3 @@
+# Optional local documentation-site environment. Routine audits do not need it.
+mkdocs==1.6.1
+mkdocs-material==9.6.20

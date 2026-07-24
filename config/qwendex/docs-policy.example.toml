@@ -1,0 +1,39 @@
+# Public-safe example. Downstream repositories should replace paths and
+# configured boundary strings with their own repository-local authority.
+schema_version = "qwendex.docs.policy.v1"
+repository_id = "example-project"
+documentation_roots = ["README.md", "docs"]
+required_authority_documents = ["README.md", "docs/operations.md"]
+index_documents = ["README.md"]
+startup_documents = ["README.md"]
+public_documentation_roots = ["README.md", "docs/public"]
+local_documentation_roots = ["docs/local"]
+include = ["*.md", "**/*.md"]
+exclude = ["docs/archive/**"]
+important_documents = ["docs/operations.md"]
+generated_private_patterns = ["build/**", "results/**", ".runtime/**"]
+generated_inputs = []
+deliverable_manifest_roots = []
+forbidden_public_content_patterns = ["/srv/example-private/"]
+
+[responsibilities]
+operations = "docs/operations.md"
+
+[responsibility_hierarchy]
+
+[verification."docs/operations.md"]
+reviewed_on = 2026-07-01
+interval_days = 180
+
+[severity_overrides]
+
+[deliverable_evidence]
+publish_states = ["publish_ready", "published", "sale_verified"]
+required_fields = [
+  "evidence.inventory",
+  "evidence.checksums",
+  "evidence.qa",
+  "human_approval.present",
+]
+state_field = "lifecycle_state"
+products_field = "products"

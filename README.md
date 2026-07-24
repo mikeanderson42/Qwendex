@@ -303,7 +303,8 @@ bridge/parser behavior, shared contracts, or release-adjacent changes. Use
 `qwendex-dev verify --tier release` before making release-readiness claims.
 
 `qwendex-dev verify --tier quick` runs lint, smoke tests, `scripts/qwendex
-check`, `scripts/qwendex doctor`, Codex status writing, and Codex patch
+check`, `scripts/qwendex doctor`, the tracked-document audit, Codex status
+writing, and Codex patch
 preflight. `full` adds JSON syntax plus published Draft 2020-12 schema and
 version-parity validation, the offline Qwendex eval suite, and local harness
 eval/gate receipts. `release` uses strict checks with an
@@ -345,12 +346,14 @@ claims require GPT/Codex review and the appropriate Qwendex verification tier.
 - [Manager Mode](public/qwendex/manager-mode.md)
 - [Codex TUI Patching](public/qwendex/codex-patching.md)
 - [Dev Environment](public/qwendex/dev-environment.md)
+- [Documentation Quality](public/qwendex/documentation-quality.md)
 - [Test Bench](public/qwendex/testbench.md)
 - [Security](public/qwendex/security.md)
 - [Verification](public/qwendex/verification.md)
 - [Troubleshooting](public/qwendex/troubleshooting.md)
 - [Release Notes](public/qwendex/release-notes.md)
 - [0.6.0-rc.1 Manager production evidence](docs/validation/0.6.0-rc.1-manager-production-summary.md)
+- [Development decision log](docs/development/decision-log.md)
 
 ## Current Release / Known Limits
 

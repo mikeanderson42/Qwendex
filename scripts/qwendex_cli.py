@@ -48,6 +48,7 @@ PUBLIC_DOC_FILES = (
     "manager-mode.md",
     "codex-patching.md",
     "dev-environment.md",
+    "documentation-quality.md",
     "testbench.md",
     "tool-server.md",
     "security.md",
@@ -62,6 +63,7 @@ REQUIRED_SURFACE_FILES = (
     "scripts/qdex",
     "scripts/qwendex",
     "scripts/qwendex_cli.py",
+    "scripts/qwendex_docs.py",
     "scripts/qwendex_release_gate.py",
     "scripts/qwendex_install_deps",
     "scripts/qwendex_dev_env",
@@ -85,6 +87,9 @@ REQUIRED_SURFACE_FILES = (
     "scripts/local_qwen_skillopt_wrapper.py",
     "config/qwendex/qwendex.schema.json",
     "config/qwendex/qwendex.json",
+    "config/qwendex/docs-policy.toml",
+    "config/qwendex/docs-policy.example.toml",
+    "config/qwendex/docs-requirements.txt",
     "config/qwendex/dependencies.json",
     "config/qwendex/profiles.json",
     "config/qwendex/model-catalog.json",
@@ -9207,38 +9212,13 @@ def required_surface_check() -> dict[str, Any]:
 
 
 def public_docs_audit(doc_root: Path = PUBLIC_DOC_DIR) -> dict[str, Any]:
-    missing = [name for name in PUBLIC_DOC_FILES if not (doc_root / name).exists()]
-    files = [name for name in PUBLIC_DOC_FILES if (doc_root / name).exists()]
-    dead_links: list[str] = []
-    secret_hits: list[str] = []
-    naming_hits: list[str] = []
-    for name in files:
-        path = doc_root / name
-        text = path.read_text(encoding="utf-8")
-        for line_no, line in enumerate(text.splitlines(), start=1):
-            if SECRET_RE.search(line):
-                secret_hits.append(f"{name}:{line_no}")
-            for pattern, message in PUBLIC_NAMING_PATTERNS:
-                if pattern.search(line):
-                    naming_hits.append(f"{name}:{line_no}: {message}")
-        for match in re.finditer(r"\[[^\]]+\]\(([^)]+)\)", text):
-            target = match.group(1).strip()
-            if not target or target.startswith(("#", "http://", "https://", "mailto:")):
-                continue
-            target_path = target.split("#", 1)[0]
-            resolved = (path.parent / target_path).resolve()
-            if not resolved.exists():
-                dead_links.append(f"{name}: {target}")
-    status = "pass" if not (missing or dead_links or secret_hits or naming_hits) else "fail"
-    return {
-        "status": status,
-        "root": str(doc_root),
-        "files": files,
-        "missing": missing,
-        "dead_links": dead_links,
-        "secret_hits": secret_hits,
-        "naming_hits": naming_hits,
-    }
+    module = script_module("qwendex_docs")
+    return module.compat_public_docs_audit(
+        doc_root,
+        PUBLIC_DOC_FILES,
+        secret_pattern=SECRET_RE,
+        naming_patterns=PUBLIC_NAMING_PATTERNS,
+    )
 
 
 def json_file_status(path: Path) -> dict[str, Any]:
@@ -18275,6 +18255,54 @@ def command_runtime(args: argparse.Namespace) -> dict[str, Any]:
     return module.command(args)
 
 
+def command_docs(args: argparse.Namespace) -> dict[str, Any]:
+    module = script_module("qwendex_docs")
+    payload = module.command(args, tool_version=VERSION)
+    payload_status = str(payload.get("status") or "error")
+    status = (
+        "pass"
+        if payload_status == "pass"
+        else "blocked"
+        if payload_status == "blocked"
+        else "fail"
+    )
+    artifacts = [
+        str(path)
+        for path in (payload.get("receipt_path"), payload.get("output_path"))
+        if path
+    ]
+    if args.action == "audit":
+        summary = (
+            "Documentation audit passed."
+            if status == "pass"
+            else "Documentation audit found blocking findings."
+            if status == "blocked"
+            else "Documentation audit could not complete."
+        )
+    elif args.action == "build":
+        summary = (
+            "Documentation hub built successfully."
+            if status == "pass"
+            else "Documentation hub build was blocked by audit findings."
+            if status == "blocked"
+            else "Documentation hub build failed."
+        )
+    else:
+        summary = (
+            "Local documentation server stopped normally."
+            if status == "pass"
+            else "Local documentation server could not start."
+        )
+    return stable_envelope(
+        command="docs",
+        status=status,
+        summary=summary,
+        artifacts=artifacts,
+        errors=[str(payload.get("error"))] if payload.get("error") else [],
+        data=payload,
+    )
+
+
 def command_manager_accept(args: argparse.Namespace) -> dict[str, Any]:
     module = script_module("qwendex_manager_acceptance")
     return module.command(args)
@@ -18470,6 +18498,24 @@ def command_line() -> argparse.ArgumentParser:
     search_paths.add_argument("--page-size", type=int, default=100)
     search_paths.add_argument("--page-token", default="")
     search_paths.add_argument("--json", action="store_true")
+
+    docs = sub.add_parser("docs")
+    docs_sub = docs.add_subparsers(dest="action", required=True)
+    docs_audit = docs_sub.add_parser("audit")
+    docs_audit.add_argument("--repo", type=Path)
+    docs_audit.add_argument("--policy", type=Path)
+    docs_audit.add_argument("--hub", type=Path)
+    docs_audit.add_argument("--output", type=Path)
+    docs_audit.add_argument("--json", action="store_true")
+    docs_build = docs_sub.add_parser("build")
+    docs_build.add_argument("--hub", type=Path, required=True)
+    docs_build.add_argument("--strict", action="store_true")
+    docs_build.add_argument("--json", action="store_true")
+    docs_serve = docs_sub.add_parser("serve")
+    docs_serve.add_argument("--hub", type=Path, required=True)
+    docs_serve.add_argument("--bind", default="127.0.0.1")
+    docs_serve.add_argument("--port", type=int, default=8000)
+    docs_serve.add_argument("--json", action="store_true")
 
     agent = sub.add_parser("agent")
     agent.add_argument(
@@ -18680,6 +18726,10 @@ def human_print(data: dict[str, Any]) -> None:
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
+    # Documentation audit/build is repository-policy driven and deliberately
+    # remains usable without Manager state or the Qwendex project JSON.
+    if args.command == "docs":
+        return command_docs(args)
     config = load_qwendex_config(project_config=args.config)
     # Performance telemetry is deliberately outside the Manager data plane.
     # Keep its status, summary, purge, and isolated benchmark commands from
@@ -18783,6 +18833,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def exit_code(data: Mapping[str, Any]) -> int:
+    if data.get("command") == "docs":
+        if data.get("status") == "blocked":
+            return 1
+        if data.get("status") not in {"pass", "ready", "standby", "warning"}:
+            return 2
     return 0 if data.get("status") in {"pass", "ready", "standby", "warning"} else 1
 
 
@@ -18804,6 +18859,10 @@ def main(argv: list[str] | None = None) -> int:
         print(data.get("data", {}).get("text", data["summary"]))
     elif getattr(args, "json", False):
         print_json(data)
+    elif args.command == "docs":
+        module = script_module("qwendex_docs")
+        for line in module.human_lines(data.get("data", {})):
+            print(line)
     else:
         human_print(data)
     return exit_code(data)

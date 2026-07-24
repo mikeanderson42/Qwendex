@@ -1174,3 +1174,20 @@ Reason: source pins alone cannot prove a safe compatibility update when
 upstream moves implementation or test fixtures. A version-specific
 fail-closed patch, measured provenance, and a newly built immutable generation
 preserve the supported Qdex boundary without changing direct stock-Codex use.
+## Repository-Owned Documentation Quality And Generated Hub
+
+Decision: Qwendex owns a standard-library, Git-tracked documentation audit with
+repository TOML policies and stable JSON findings. Jarvis owns any private
+multi-workspace manifest and generated local site output. Domain repositories
+retain their own quality commands and state authority; Qwendex may consume
+their read-only receipts but does not duplicate or mutate domain logic. MkDocs
+Material is an explicit, isolated optional dependency used only for manual
+build and loopback serve commands. Generated staging Markdown and HTML are
+never authority and remain ignored.
+
+Reason: link integrity, authority reachability, public/private boundaries, and
+deliverable evidence benefit from one reusable deterministic gate. Keeping
+policies and manifests with their owners avoids a second documentation
+hierarchy, while the optional generated view improves discovery without making
+routine verification depend on a site generator, daemon, database, or private
+workspace layout.
