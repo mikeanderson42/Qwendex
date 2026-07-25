@@ -81,17 +81,23 @@ at the generated-home and per-launch boundaries. Chronicle's legacy
 `telepathy` alias is rejected with the same feature policy. Native role and
 profile configuration is deferred because it can load role-specific
 instructions or model settings outside the reviewed Manager lifecycle. Qdex
-rejects project-native role configuration, app-server/remote access, and caller
-history/memory activation attempts; the canonical V2 patch also keeps child
-model, reasoning, and service-tier settings inherited from the root. These
-safeguards do not apply to direct stock-Codex invocation outside Qdex.
+rejects explicit role/profile activation, app-server/remote access, and caller
+history/memory activation attempts. It tolerates passive role definitions
+discovered in a trusted project so their mere presence cannot block launch;
+the canonical V2 patch omits the role/model/reasoning/service-tier spawn inputs
+that would activate them and keeps child settings inherited from the root.
+These safeguards do not apply to direct stock-Codex invocation outside Qdex.
 Qwendex shares the operator's authentication file intentionally, but keeps a
 generation-local copy of Codex's volatile `version.json` cache and installation
 identity. Acceptance compares the normal home's stable config, hooks, and
 installation identity and separately compares complete isolated decoy homes.
 
-Runtime source, patch identity, binary pair, config/schema, and state
-schema are bound into one validated generation for each Qdex process. Mutable
+Runtime source, patch identity, binary pair, immutable Codex config baseline,
+config/schema, and state schema are bound into one validated generation for
+each Qdex process. The baseline digest and canonical Qwendex TUI status line
+are checked before activation and again by the stable selector before each new
+launch. Codex's separate live config remains writable for its supported
+persisted UI choices, while Qdex reasserts its immutable launch policy. Mutable
 agent reports are written outside the sealed tree. Child threads lack root
 collaboration tools in the canonical patch, recursively managed children are
 disabled, and explicitly read-only lanes remain constrained. These controls do

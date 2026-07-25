@@ -1049,3 +1049,36 @@ Leaving these default-off upstream features merely unmentioned would allow a
 caller to activate an unreviewed state path. The patch preserves the existing
 root-only V2 and deferred native-role boundary without changing direct
 stock-Codex behavior.
+
+## Codex 0.145 Qdex Launch And TUI Compatibility
+
+Decision: make an immutable baseline of the generated Codex `config.toml` an
+explicit input to each runtime generation, canonicalize the `qwendex-manager`
+item into its `[tui].status_line`, bind the baseline digest into the generation
+contract, and reject candidates whose baseline drifts or omits the item. Keep
+the live `config.toml` as a separate writable copy because Codex legitimately
+persists notice, model-selection, and TUI edits there. Qdex appends the
+canonical status-line value after caller options so neither those edits nor a
+trusted project's config can silently hide the supported footer.
+
+Codex 0.145 project-role discovery is now treated as passive input rather than
+a launch blocker. Trusted repositories may contain `[agents]` declarations or
+`.codex/agents` files, but Qdex still rejects explicit role/profile activation
+and the canonical V2 patch still omits role/model/reasoning/service-tier spawn
+inputs and ignores native V2 child defaults. Qwendex AgentPolicy therefore
+remains the active lifecycle contract.
+
+Reason: the 0.145 release generation copied a seed config created before the
+patched binary existed, so its Rust status item was present but unreachable in
+the live TUI. The same release rejected whole repositories merely because the
+new upstream loader discovered role definitions, even though Qwendex's V2
+schema could not select those roles. Binding and validating the actual Codex
+config closes the first connectedness gap; tolerating inert project metadata
+restores pre-upgrade launch behavior without expanding the reviewed child
+lifecycle or weakening the retained-state boundary.
+
+The stable selector rechecks the immutable baseline and its digest, plus the
+live config's basic TOML safety, before each new launch. During migration,
+activation retains the newest older generation that still passes the current
+validator as `known_good`; an invalid current generation remains recorded as
+`previous` for diagnosis but cannot replace a usable rollback target.

@@ -31,6 +31,13 @@ Qwendex owns a stable runtime contract:
 - `qwendex manager local --toggle --json` toggles local intent between
   `Local: [Ready]`/`[Unavailable]` and `Local: [Off]`.
 - The Codex status-line item ID is `qwendex-manager`.
+- Runtime generation construction canonicalizes this item into
+  `[tui].status_line`, includes an immutable config-baseline digest in the
+  sealed contract, and rejects a candidate if the item is absent or the
+  baseline drifts. The stable selector repeats that check before each new
+  launch. Codex keeps a separate writable live config for its normal persisted
+  UI choices, while Qdex supplies the canonical status line as a trailing
+  launch override.
 
 The intended footer text is:
 
@@ -148,9 +155,11 @@ make V2 return immediately when no child is running, and prove that Qdex's
 explicit V2 session cap takes precedence over the legacy
 `[agents].max_threads` alias. For the deferred 0.145 role boundary, the V2
 spawn schema omits native role/model/reasoning/service-tier overrides and V2
-children ignore native `[agents]` model/reasoning defaults. Stock Codex remains
-a valid Off-mode recovery binary, but it does not provide those exact Qwendex
-guarantees.
+children ignore native `[agents]` model/reasoning defaults. Passive role files
+in a trusted project are therefore tolerated for launch compatibility but are
+not selectable through the canonical Qwendex V2 spawn schema. Stock Codex
+remains a valid Off-mode recovery binary, but it does not provide those exact
+Qwendex guarantees.
 
 The canonical development workflow is `qwendex-dev codex-patch apply`, focused
 Rust tests, `cargo fmt --check`, `codex-patch preflight --require-applied`, and

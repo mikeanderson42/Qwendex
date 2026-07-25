@@ -21,6 +21,7 @@ import stat
 import subprocess
 import tempfile
 import time
+import tomllib
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -48,6 +49,14 @@ RUNTIME_SNAPSHOT_PATHS = (
     "tests",
 )
 MANAGER_TERMINAL_STATES = {"blocked", "closed", "failed", "tombstoned"}
+QWENDEX_TUI_STATUS_LINE = (
+    "model-with-reasoning",
+    "current-dir",
+    "qwendex-manager",
+)
+QWENDEX_TUI_STATUS_LINE_TOML = (
+    'status_line = ["model-with-reasoning", "current-dir", "qwendex-manager"]'
+)
 
 
 class RuntimeContractError(RuntimeError):
@@ -416,16 +425,100 @@ def link_identity_files(codex_home: Path) -> None:
             shutil.copy2(source, target)
 
 
-def write_generation_codex_config(dev_root: Path, codex_home: Path) -> None:
+def generation_codex_config_text(dev_root: Path) -> str:
     seed = dev_root / ".qwendex-dev" / "codex_home" / "config.toml"
     if seed.is_file():
-        shutil.copy2(seed, codex_home / "config.toml")
-        return
-    (codex_home / "config.toml").write_text(
-        'approval_policy = "never"\nsandbox_mode = "workspace-write"\n'
-        'suppress_unstable_features_warning = true\n',
-        encoding="utf-8",
-    )
+        text = seed.read_text(encoding="utf-8")
+    else:
+        text = (
+            'approval_policy = "never"\nsandbox_mode = "workspace-write"\n'
+            'suppress_unstable_features_warning = true\n'
+        )
+
+    try:
+        parsed = tomllib.loads(text)
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+        raise RuntimeContractError("generated Codex seed config is invalid TOML") from exc
+
+    tui = parsed.get("tui")
+    if isinstance(tui, Mapping) and tui.get("status_line") == list(QWENDEX_TUI_STATUS_LINE):
+        return text
+
+    lines = text.splitlines(keepends=True)
+    section_start: int | None = None
+    section_end = len(lines)
+    for index, line in enumerate(lines):
+        match = re.match(r"^\s*\[([^\]]+)\]\s*(?:#.*)?$", line)
+        if not match:
+            continue
+        section = match.group(1).strip()
+        if section_start is None and section == "tui":
+            section_start = index
+            continue
+        if section_start is not None:
+            section_end = index
+            break
+
+    assignment = QWENDEX_TUI_STATUS_LINE_TOML + "\n"
+    if section_start is None:
+        if text and not text.endswith("\n"):
+            lines.append("\n")
+        if lines and lines[-1].strip():
+            lines.append("\n")
+        lines.extend(("[tui]\n", assignment))
+    else:
+        assignment_index = next(
+            (
+                index
+                for index in range(section_start + 1, section_end)
+                if re.match(r"""^\s*(?:status_line|"status_line"|'status_line')\s*=""", lines[index])
+            ),
+            None,
+        )
+        if assignment_index is None:
+            lines.insert(section_start + 1, assignment)
+        else:
+            for assignment_end in range(assignment_index + 1, section_end + 1):
+                candidate = "".join(
+                    [
+                        *lines[:assignment_index],
+                        assignment,
+                        *lines[assignment_end:],
+                    ]
+                )
+                try:
+                    candidate_tui = tomllib.loads(candidate).get("tui")
+                except tomllib.TOMLDecodeError:
+                    continue
+                if isinstance(candidate_tui, Mapping) and candidate_tui.get(
+                    "status_line"
+                ) == list(QWENDEX_TUI_STATUS_LINE):
+                    return candidate
+            raise RuntimeContractError(
+                "generated Codex seed config has an unsupported tui.status_line assignment"
+            )
+
+    updated = "".join(lines)
+    try:
+        updated_tui = tomllib.loads(updated).get("tui")
+    except tomllib.TOMLDecodeError as exc:
+        raise RuntimeContractError(
+            "generated Codex seed config has an unsupported tui.status_line assignment"
+        ) from exc
+    if not isinstance(updated_tui, Mapping) or updated_tui.get("status_line") != list(
+        QWENDEX_TUI_STATUS_LINE
+    ):
+        raise RuntimeContractError("generated Codex config is missing the Qwendex TUI status line")
+    return updated
+
+
+def write_generation_codex_config(codex_home: Path, text: str) -> tuple[Path, Path]:
+    payload = text.encode("utf-8")
+    baseline = codex_home / "qwendex-config-baseline.toml"
+    live = codex_home / "config.toml"
+    atomic_write_bytes(baseline, payload, mode=0o444)
+    atomic_write_bytes(live, payload, mode=0o600)
+    return live, baseline
 
 
 def generation_runtime_env(
@@ -569,6 +662,46 @@ def validate_generation(
     contract = manifest.get("contract") if isinstance(manifest.get("contract"), Mapping) else {}
     if digest_json(contract) != str(manifest.get("contract_sha256") or ""):
         errors.append("runtime generation contract digest mismatch")
+    codex_config_path = directory / "codex_home" / "config.toml"
+    codex_config: Mapping[str, Any] | None = None
+    if not codex_config_path.is_file() or codex_config_path.is_symlink():
+        errors.append("runtime Codex config is missing or unsafe")
+    else:
+        try:
+            codex_config = tomllib.loads(codex_config_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+            errors.append("runtime Codex config is invalid")
+    expected_baseline_sha = str(contract.get("codex_home_config_baseline_sha256") or "")
+    if expected_baseline_sha:
+        baseline_path = directory / "codex_home" / "qwendex-config-baseline.toml"
+        if not baseline_path.is_file() or baseline_path.is_symlink():
+            errors.append("runtime Codex config baseline is missing or unsafe")
+        else:
+            if baseline_path.stat().st_mode & (stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH):
+                errors.append("runtime Codex config baseline is writable")
+            if sha256_file(baseline_path) != expected_baseline_sha:
+                errors.append("runtime Codex config baseline digest mismatch")
+            try:
+                baseline_config = tomllib.loads(baseline_path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+                errors.append("runtime Codex config baseline is invalid")
+            else:
+                baseline_tui = baseline_config.get("tui")
+                if not isinstance(baseline_tui, Mapping) or baseline_tui.get(
+                    "status_line"
+                ) != list(QWENDEX_TUI_STATUS_LINE):
+                    errors.append(
+                        "runtime Codex config baseline is missing the Qwendex TUI status line"
+                    )
+    elif codex_config is not None:
+        # Legacy generations predate the separate immutable baseline. Keep a
+        # valid rollback path only when their live config still proves the
+        # canonical Qwendex status item.
+        tui = codex_config.get("tui")
+        if not isinstance(tui, Mapping) or tui.get("status_line") != list(
+            QWENDEX_TUI_STATUS_LINE
+        ):
+            errors.append("runtime Codex config is missing the Qwendex TUI status line")
     if execute_smoke and not errors:
         environment = os.environ.copy()
         environment.update({key: str(value) for key, value in (manifest.get("runtime_env") or {}).items()})
@@ -652,6 +785,8 @@ def build_generation(
         codex_bin=codex_bin,
         code_mode_host=code_mode_host,
     )
+    codex_config_text = generation_codex_config_text(dev_root)
+    codex_config_sha = hashlib.sha256(codex_config_text.encode("utf-8")).hexdigest()
     files = runtime_source_files(source_root)
     staging = Path(tempfile.mkdtemp(prefix=".runtime-tree-", dir=runtime_root))
     try:
@@ -676,6 +811,7 @@ def build_generation(
             "patched_binary_sha256": codex["binary_sha256"],
             "code_mode_host_sha256": codex["code_mode_host_sha256"],
             "config_sha256": config_digest,
+            "codex_home_config_baseline_sha256": codex_config_sha,
             "schema_sha256": schema_digest,
             "state_schema_version": 3,
         }
@@ -699,7 +835,10 @@ def build_generation(
         write_codex_runtime(directory / "bin" / "codex-runtime")
         codex_home = directory / "codex_home"
         codex_home.mkdir()
-        write_generation_codex_config(dev_root, codex_home)
+        _, codex_config_baseline_path = write_generation_codex_config(
+            codex_home,
+            codex_config_text,
+        )
         link_identity_files(codex_home)
         runtime_env = generation_runtime_env(
             dev_root=dev_root,
@@ -737,6 +876,7 @@ def build_generation(
                 "codex_build_receipt": codex["receipt_sha256"],
                 "runtime_tree": tree_digest,
                 "hook_config": hooks["sha256"],
+                "codex_home_config_baseline": sha256_file(codex_config_baseline_path),
             },
             "validation": {},
         }
@@ -846,12 +986,35 @@ def activate_generation(runtime_root: Path, generation_id: str) -> dict[str, Any
         now = utc_now()
         history = list(selection.get("history") or [])
         history.append({"operation": "activate", "from": current, "to": generation_id, "at": now})
+        known_good = generation_id
+        rollback_candidates = [
+            current,
+            str(selection.get("known_good") or ""),
+            str(selection.get("previous") or ""),
+        ]
+        for candidate in rollback_candidates:
+            if not candidate or candidate == generation_id:
+                continue
+            try:
+                rollback_validation = validate_generation(
+                    runtime_root,
+                    candidate,
+                    execute_smoke=False,
+                )
+            except RuntimeContractError:
+                continue
+            if (
+                rollback_validation["valid"]
+                and rollback_validation["manifest"].get("status") == "validated"
+            ):
+                known_good = candidate
+                break
         updated = {
             "schema_version": SELECTION_SCHEMA,
             "state_schema_version": RUNTIME_STATE_SCHEMA_VERSION,
             "current": generation_id,
             "previous": current,
-            "known_good": current or generation_id,
+            "known_good": known_good,
             "updated_at": now,
             "history": history[-100:],
             "last_operation": {"operation": "activate", "from": current, "to": generation_id, "at": now},

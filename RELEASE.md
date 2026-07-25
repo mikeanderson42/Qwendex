@@ -1,5 +1,22 @@
 # v0.6.5
 
+## Pending compatibility repair
+
+Codex `0.145.0` Qdex launch and TUI compatibility repair.
+
+- Makes an immutable baseline of the runtime's Codex config part of the
+  generation digest, requires the canonical `qwendex-manager` status line
+  during validation, and reasserts that status line at Qdex launch while
+  leaving Codex's live config copy writable.
+- Restores launch compatibility for trusted repositories that contain passive
+  Codex native-role definitions. Explicit role/profile activation remains
+  unavailable, and the canonical V2 patch still keeps role/model/reasoning/
+  service-tier inputs outside the Qwendex child contract.
+- Adds regression coverage for both sealed config-baseline drift and project role
+  surfaces without changing the Codex `0.145.0` Rust patch or memory boundary.
+
+## Release baseline
+
 Codex `0.145.0` memory-boundary completion release.
 
 - Seals the upstream `external_agent_memory_import` and `chronicle` memory

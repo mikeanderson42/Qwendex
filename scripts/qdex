@@ -7,6 +7,7 @@ QWENDEX_YOLO_FLAG="${QWENDEX_YOLO_FLAG:---dangerously-bypass-approvals-and-sandb
 QWENDEX_HOOK_TRUST_FLAG="${QWENDEX_HOOK_TRUST_FLAG:---dangerously-bypass-hook-trust}"
 QWENDEX_CODEX_MAX_CONCURRENT_THREADS=9
 QWENDEX_CODEX_MAX_WAIT_TIMEOUT_MS=120000
+QWENDEX_CODEX_STATUS_LINE='["model-with-reasoning","current-dir","qwendex-manager"]'
 caller_cwd="$PWD"
 
 # A generation pin is valid only after the stable selector has transferred
@@ -45,6 +46,7 @@ if [[ "${QWENDEX_RUNTIME_PINNED:-0}" != "1" ]]; then
 import json
 import hashlib
 import sys
+import tomllib
 from pathlib import Path
 
 
@@ -88,6 +90,7 @@ try:
         generation / "tree" / "scripts" / "qdex",
         generation / "tree" / "scripts" / "qwendex",
         generation / "bin" / "codex-runtime",
+        generation / "codex_home" / "config.toml",
         generation / "codex_home" / "hooks.json",
     )
     if not all(path.is_file() for path in required):
@@ -99,6 +102,30 @@ try:
     contract = manifest.get("contract") or {}
     if canonical_digest(contract) != str(manifest.get("contract_sha256") or ""):
         raise ValueError("selected generation contract digest is invalid")
+    codex_config = generation / "codex_home" / "config.toml"
+    if codex_config.is_symlink():
+        raise ValueError("selected generation Codex config is unsafe")
+    parsed_codex_config = tomllib.loads(codex_config.read_text(encoding="utf-8"))
+    expected_baseline_sha = str(contract.get("codex_home_config_baseline_sha256") or "")
+    baseline_config = parsed_codex_config
+    if expected_baseline_sha:
+        baseline = generation / "codex_home" / "qwendex-config-baseline.toml"
+        if not baseline.is_file() or baseline.is_symlink():
+            raise ValueError("selected generation Codex config baseline is missing or unsafe")
+        if baseline.stat().st_mode & 0o222:
+            raise ValueError("selected generation Codex config baseline is writable")
+        if sha256_file(baseline) != expected_baseline_sha:
+            raise ValueError("selected generation Codex config baseline digest drifted")
+        baseline_config = tomllib.loads(baseline.read_text(encoding="utf-8"))
+    tui_config = baseline_config.get("tui")
+    if not isinstance(tui_config, dict) or tui_config.get("status_line") != [
+        "model-with-reasoning",
+        "current-dir",
+        "qwendex-manager",
+    ]:
+        raise ValueError(
+            "selected generation Codex config baseline is missing the Qwendex TUI status line"
+        )
     tree_contract = {
         str(item.get("path") or ""): item
         for item in manifest.get("tree_manifest") or []
@@ -591,63 +618,11 @@ if [[ -z "$target_repo" ]]; then
 fi
 
 target_repo="$(cd "$target_repo" && pwd)"
-
-reject_deferred_project_role_controls() {
-  local project_root="$1"
-  # The 0.145 role loader discovers roles in every trusted project config
-  # layer, including a plain .codex/agents directory with no matching table in
-  # config.toml. Qdex deliberately has no native-role lifecycle contract, so
-  # reject those project-local surfaces before a Qwendex launch can trust them.
-  # Only the generic reason is emitted: do not copy repository paths or config
-  # contents into terminal output, launch metadata, or receipts.
-  if ! python3 - "$project_root" <<'PY'
-import subprocess
-import sys
-import tomllib
-from pathlib import Path
-
-
-target = Path(sys.argv[1]).resolve()
-try:
-    git_root = subprocess.run(
-        ["git", "-C", str(target), "rev-parse", "--show-toplevel"],
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=5,
-    ).stdout.strip()
-    root = Path(git_root).resolve()
-    target.relative_to(root)
-except (OSError, subprocess.SubprocessError, ValueError):
-    root = target
-
-current = target
-while True:
-    dot_codex = current / ".codex"
-    config_path = dot_codex / "config.toml"
-    if config_path.is_file():
-        try:
-            config = tomllib.loads(config_path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
-            # A malformed trusted project config is rejected later by Codex;
-            # it cannot contribute a parsed native role declaration here.
-            config = {}
-        if isinstance(config, dict) and "agents" in config:
-            raise SystemExit(1)
-    if (dot_codex / "agents").is_dir():
-        raise SystemExit(1)
-    if current == root:
-        break
-    parent = current.parent
-    if parent == current:
-        break
-    current = parent
-PY
-  then
-    printf 'qdex: project-native Codex role configuration is unavailable while Qwendex defers role lifecycle controls.\n' >&2
-    exit 2
-  fi
-}
+# Codex 0.145 discovers trusted project role files automatically. Tolerate
+# those passive project surfaces so existing repositories still launch. The
+# canonical Qwendex V2 patch keeps them outside the active lifecycle contract
+# by omitting role/model/reasoning/service-tier spawn inputs and inheriting
+# child settings from the root.
 target_repo_toml="$(python3 - "$target_repo" <<'PY'
 import json
 import sys
@@ -681,8 +656,6 @@ if [[ "$informational_only" == "1" ]]; then
   fi
   exec "$QWENDEX_CODEX_RUNTIME" "${codex_args[@]}"
 fi
-
-reject_deferred_project_role_controls "$target_repo"
 
 # A run id is an opaque per-launch correlation value. Performance hooks HMAC it
 # locally before persistence; never create it for help/version inspection.
@@ -867,6 +840,7 @@ cmd=(
 )
 codex_policy_args=(
   --config "suppress_unstable_features_warning=true"
+  --config "tui.status_line=$QWENDEX_CODEX_STATUS_LINE"
   --config "features.memories=false"
   --config "features.external_agent_memory_import=false"
   --config "features.chronicle=false"

@@ -381,6 +381,7 @@ Known limits:
   child-tool-surface, or lifecycle-observability integration.
 - Qdex keeps Codex 0.145 history persistence, memories, external-agent memory
   import, and passive-screen Chronicle memory disabled; it rejects app-server,
-  remote, and project-native role configuration and does not activate
-  role-driven child controls. Qwendex AgentPolicy remains the supported
-  delegation contract.
+  remote, profiles, and caller-supplied role activation. Trusted projects may
+  contain passive native role definitions without blocking launch, but the
+  canonical V2 spawn schema does not activate their role-driven child controls.
+  Qwendex AgentPolicy remains the supported delegation contract.

@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Fixed the Codex `0.145.0` runtime-generation gap that could ship a patched
+  TUI with no `qwendex-manager` item in its generated `config.toml`. An
+  immutable config baseline is now canonicalized, digested, and validated;
+  Codex retains a writable live copy, and a trailing Qdex override reinforces
+  the status line on every launch.
+- Restored Qdex launch compatibility for trusted projects containing passive
+  `.codex` native-role definitions. Qdex still rejects explicit role/profile
+  activation, and its canonical V2 patch still omits role/model/reasoning/
+  service-tier spawn inputs, so Qwendex AgentPolicy remains authoritative.
+- Added regressions for config-baseline drift and project role surfaces while
+  retaining the existing Codex `0.145.0` binary patch and memory boundary.
+
 ## 0.6.5
 
 `v0.6.5` completes the Codex `0.145.0` Qdex memory boundary without enabling
