@@ -7171,7 +7171,7 @@ async fn multi_agent_v2_spawn_partial_fork_turns_allows_agent_type_override() {
     let (content, _) = expect_text_output(output);
     let result: serde_json::Value =
         serde_json::from_str(&content).expect("spawn_agent result should be json");
-    assert_eq!(result["task_name"], "/root/partial_fork");
+    assert_eq!(result["task_name"], "/QWENDEX_TEST_ROOT/partial_fork");
     let agent_id = manager
         .captured_ops()
         .into_iter()
@@ -7189,7 +7189,7 @@ async fn multi_agent_v2_spawn_partial_fork_turns_allows_agent_type_override() {
     assert_eq!(snapshot.model_provider_id, "ollama");
     assert_eq!(snapshot.reasoning_effort, Some(ReasoningEffort::Minimal));
 }
-""",
+""".replace("QWENDEX_TEST_ROOT", "root"),
                             """#[tokio::test]
 async fn multi_agent_v2_rejects_explicit_service_tier() {
     let (session, mut turn) = make_session_and_context().await;
