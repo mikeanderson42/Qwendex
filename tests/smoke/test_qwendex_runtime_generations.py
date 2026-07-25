@@ -7,6 +7,7 @@ import os
 import shutil
 import sqlite3
 import subprocess
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -139,8 +140,48 @@ def test_runtime_generations_are_immutable_atomic_and_recoverable(tmp_path, monk
     first_hook = (first_dir / "codex_home" / "hooks.json").read_text(encoding="utf-8")
     assert first["status"] == "validated"
     assert first["contract"]["state_schema_version"] == 3
+    first_config_path = first_dir / "codex_home" / "config.toml"
+    first_config_bytes = first_config_path.read_bytes()
+    first_config = tomllib.loads(first_config_bytes.decode("utf-8"))
+    assert first_config["tui"]["status_line"] == [
+        "model-with-reasoning",
+        "current-dir",
+        "qwendex-manager",
+    ]
+    first_baseline_path = first_dir / "codex_home" / "qwendex-config-baseline.toml"
+    first_baseline_bytes = first_baseline_path.read_bytes()
+    assert (
+        first["contract"]["codex_home_config_baseline_sha256"]
+        == sha256_file(first_baseline_path)
+    )
+    assert first["artifact_digests"]["codex_home_config_baseline"] == sha256_file(
+        first_baseline_path
+    )
     assert first_id in first_hook
     assert RUNTIME.validate_generation(runtime_root, first_id)["valid"] is True
+
+    first_baseline_path.chmod(0o644)
+    first_baseline_path.write_text(
+        'approval_policy = "never"\nsandbox_mode = "workspace-write"\n',
+        encoding="utf-8",
+    )
+    invalid_config = RUNTIME.validate_generation(runtime_root, first_id)
+    assert invalid_config["valid"] is False
+    assert "runtime Codex config baseline is writable" in invalid_config["errors"]
+    assert "runtime Codex config baseline digest mismatch" in invalid_config["errors"]
+    assert (
+        "runtime Codex config baseline is missing the Qwendex TUI status line"
+        in invalid_config["errors"]
+    )
+    first_baseline_path.write_bytes(first_baseline_bytes)
+    first_baseline_path.chmod(0o444)
+    assert RUNTIME.validate_generation(runtime_root, first_id)["valid"] is True
+    first_config_path.write_text(
+        'approval_policy = "never"\nsandbox_mode = "workspace-write"\n',
+        encoding="utf-8",
+    )
+    assert RUNTIME.validate_generation(runtime_root, first_id)["valid"] is True
+    first_config_path.write_bytes(first_config_bytes)
 
     selected = RUNTIME.activate_generation(runtime_root, first_id)
     assert selected["current"] == first_id
@@ -184,6 +225,76 @@ def test_runtime_generations_are_immutable_atomic_and_recoverable(tmp_path, monk
     assert first_id in pruned["retained"]
     assert second_id in pruned["retained"]
     assert not (runtime_root / "generations" / third_id).exists()
+
+
+def test_generation_codex_config_replaces_a_stale_status_line(tmp_path):
+    dev_root = tmp_path / "dev"
+    seed = dev_root / ".qwendex-dev" / "codex_home" / "config.toml"
+    seed.parent.mkdir(parents=True)
+    seed.write_text(
+        'approval_policy = "never"\n'
+        "\n[tui]\n"
+        'status_line = ["model", "current-dir"]\n'
+        "\n[tui.keymap.global]\n"
+        'qwendex_toggle_manager = "alt-m"\n',
+        encoding="utf-8",
+    )
+
+    text = RUNTIME.generation_codex_config_text(dev_root)
+    config = tomllib.loads(text)
+
+    assert config["tui"]["status_line"] == [
+        "model-with-reasoning",
+        "current-dir",
+        "qwendex-manager",
+    ]
+    assert config["tui"]["keymap"]["global"]["qwendex_toggle_manager"] == "alt-m"
+
+
+def test_generation_codex_config_replaces_a_multiline_status_line(tmp_path):
+    dev_root = tmp_path / "dev"
+    seed = dev_root / ".qwendex-dev" / "codex_home" / "config.toml"
+    seed.parent.mkdir(parents=True)
+    seed.write_text(
+        'approval_policy = "never"\n'
+        "\n[tui]\n"
+        '"status_line" = [\n'
+        '  "model",\n'
+        '  "current-dir", # stale fixture\n'
+        "]\n"
+        'notifications = "native"\n',
+        encoding="utf-8",
+    )
+
+    text = RUNTIME.generation_codex_config_text(dev_root)
+    config = tomllib.loads(text)
+
+    assert config["tui"]["status_line"] == [
+        "model-with-reasoning",
+        "current-dir",
+        "qwendex-manager",
+    ]
+    assert config["tui"]["notifications"] == "native"
+
+
+def test_generation_codex_config_adds_status_line_before_a_patched_binary_exists(tmp_path):
+    dev_root = tmp_path / "dev"
+    seed = dev_root / ".qwendex-dev" / "codex_home" / "config.toml"
+    seed.parent.mkdir(parents=True)
+    seed.write_text(
+        'approval_policy = "never"\n'
+        'sandbox_mode = "workspace-write"\n',
+        encoding="utf-8",
+    )
+
+    assert not (dev_root / ".qwendex-dev" / "codex-build").exists()
+    config = tomllib.loads(RUNTIME.generation_codex_config_text(dev_root))
+
+    assert config["tui"]["status_line"] == [
+        "model-with-reasoning",
+        "current-dir",
+        "qwendex-manager",
+    ]
 
 
 def test_runtime_generation_excludes_operator_qdex_permission_config(tmp_path, monkeypatch):
@@ -234,19 +345,20 @@ def test_qdex_top_level_discards_an_inherited_stale_runtime_pin(tmp_path, monkey
     RUNTIME.activate_generation(runtime_root, generation["generation_id"])
 
     stale_tree = tmp_path / "stale-runtime" / "tree"
+    environment = {
+        **os.environ,
+        "QWENDEX_DEV_ROOT": str(source),
+        "QWENDEX_RUNTIME_PINNED": "1",
+        "QWENDEX_RUNTIME_TREE": str(stale_tree),
+        "QWENDEX_RUNTIME_GENERATION_ID": "rtg-stale",
+        "QWENDEX_CODEX_HOME": str(tmp_path / "stale-home"),
+        "QWENDEX_CODEX_RUNTIME": str(tmp_path / "stale-codex"),
+        "QDEX_SELECTOR_TEST": "1",
+    }
     result = subprocess.run(
         [str(ROOT / "scripts" / "qdex")],
         cwd=source,
-        env={
-            **os.environ,
-            "QWENDEX_DEV_ROOT": str(source),
-            "QWENDEX_RUNTIME_PINNED": "1",
-            "QWENDEX_RUNTIME_TREE": str(stale_tree),
-            "QWENDEX_RUNTIME_GENERATION_ID": "rtg-stale",
-            "QWENDEX_CODEX_HOME": str(tmp_path / "stale-home"),
-            "QWENDEX_CODEX_RUNTIME": str(tmp_path / "stale-codex"),
-            "QDEX_SELECTOR_TEST": "1",
-        },
+        env=environment,
         text=True,
         capture_output=True,
         check=False,
@@ -255,6 +367,89 @@ def test_qdex_top_level_discards_an_inherited_stale_runtime_pin(tmp_path, monkey
 
     assert result.returncode == 0, result.stderr or result.stdout
     assert result.stdout.strip() == generation["generation_id"]
+
+    generation_dir = runtime_root / "generations" / generation["generation_id"]
+    live_config = generation_dir / "codex_home" / "config.toml"
+    live_config.write_text(
+        'approval_policy = "never"\nsandbox_mode = "workspace-write"\n',
+        encoding="utf-8",
+    )
+    after_normal_live_edit = subprocess.run(
+        [str(ROOT / "scripts" / "qdex")],
+        cwd=source,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=30,
+    )
+    assert after_normal_live_edit.returncode == 0, (
+        after_normal_live_edit.stderr or after_normal_live_edit.stdout
+    )
+    assert after_normal_live_edit.stdout.strip() == generation["generation_id"]
+
+    baseline = generation_dir / "codex_home" / "qwendex-config-baseline.toml"
+    baseline.chmod(0o644)
+    baseline.write_text(
+        'approval_policy = "never"\n',
+        encoding="utf-8",
+    )
+    baseline.chmod(0o444)
+    rejected = subprocess.run(
+        [str(ROOT / "scripts" / "qdex")],
+        cwd=source,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=30,
+    )
+
+    assert rejected.returncode == 127
+    assert "Codex config baseline digest drifted" in rejected.stderr
+
+
+def test_activation_preserves_an_older_valid_rollback_when_current_is_invalid(
+    tmp_path,
+    monkeypatch,
+):
+    source = tmp_path / "candidate"
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    copy_candidate_source(source)
+    codex, host = write_pinned_codex_fixture(source)
+    runtime_root = source / ".qwendex-dev" / "runtime"
+
+    first = build_candidate(source, runtime_root, codex, host)
+    RUNTIME.activate_generation(runtime_root, first["generation_id"])
+    with (source / "README.md").open("a", encoding="utf-8") as handle:
+        handle.write("\nSecond rollback fixture.\n")
+    second = build_candidate(source, runtime_root, codex, host)
+    RUNTIME.activate_generation(runtime_root, second["generation_id"])
+    second_baseline = (
+        runtime_root
+        / "generations"
+        / second["generation_id"]
+        / "codex_home"
+        / "qwendex-config-baseline.toml"
+    )
+    second_baseline.chmod(0o644)
+    second_baseline.write_text(
+        'approval_policy = "never"\nsandbox_mode = "workspace-write"\n',
+        encoding="utf-8",
+    )
+    assert RUNTIME.validate_generation(runtime_root, second["generation_id"])["valid"] is False
+
+    with (source / "README.md").open("a", encoding="utf-8") as handle:
+        handle.write("\nThird rollback fixture.\n")
+    third = build_candidate(source, runtime_root, codex, host)
+    selected = RUNTIME.activate_generation(runtime_root, third["generation_id"])
+
+    assert selected["current"] == third["generation_id"]
+    assert selected["previous"] == second["generation_id"]
+    assert selected["known_good"] == first["generation_id"]
+    assert RUNTIME.rollback_generation(runtime_root)["current"] == first["generation_id"]
 
 
 def test_safe_prune_reads_live_decision_and_child_generation_refs(tmp_path):

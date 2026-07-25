@@ -17,33 +17,11 @@ QWENDEX = ROOT / "scripts" / "qwendex"
 QWENDEX_MODULE = ROOT / "scripts" / "qwendex_cli.py"
 
 
-_AMBIENT_QWENDEX_RUNTIME_KEYS = {
-    "CODEX_AGENT_USE",
-    "QWENDEX_EFFECTIVE_AGENT_USE",
-    "QWENDEX_KAVEMAN_ENABLED",
-    "QWENDEX_KAVEMAN_DIRECTIVE",
-    "QWENDEX_LOCAL_SUBAGENTS",
-    "QWENDEX_ORCHESTRATION_MODE",
-    "QWENDEX_OUTPUT_POLICY",
-    "QWENDEX_QDEX_PERMISSION_MODE",
-    "QWENDEX_QDEX_PERMISSION_SOURCE",
-    "QWENDEX_QDEX_LAUNCH_ID",
-    "QWENDEX_QDEX_LAUNCH_POLICY_HASH",
-    "QWENDEX_QDEX_LAUNCH_MODE",
-    "QWENDEX_QDEX_LAUNCH_AGENT_USE",
-    "QWENDEX_QDEX_LAUNCH_MAX_WORKERS",
-    "QWENDEX_QDEX_LAUNCH_LOCAL_ENABLED",
-    "QWENDEX_RUN_ID",
-}
-
-
 def isolated_qwendex_runtime_env(overrides=None):
     """Keep a parent managed Qdex launch out of direct CLI fixtures."""
     environment = dict(os.environ)
     for key in tuple(environment):
-        if key in _AMBIENT_QWENDEX_RUNTIME_KEYS or key.startswith(
-            ("QWENDEX_AGENT_", "QWENDEX_MANAGER_")
-        ):
+        if key == "CODEX_AGENT_USE" or key.startswith("QWENDEX_"):
             environment.pop(key)
     environment.update(overrides or {})
     return environment
@@ -335,7 +313,7 @@ def test_qwendex_version_and_config_are_in_sync():
     sample_config = json.loads((ROOT / "config" / "qwendex" / "qwendex.sample.json").read_text(encoding="utf-8"))
     version = json_result("version", "--json")
 
-    assert qwendex.VERSION == "0.6.5"
+    assert qwendex.VERSION == "0.6.6"
     assert version["data"]["version"] == qwendex.VERSION
     assert project_config["version"] == qwendex.VERSION
     assert sample_config["version"] == qwendex.VERSION
@@ -1912,7 +1890,7 @@ def assert_same_root_supports_quoted_path(tmp_path, path_fragment):
 
     assert config["projects"] == {str(checkout): {"trust_level": "trusted"}}
     assert qwendex.returncode == 0, qwendex.stderr or qwendex.stdout
-    assert json.loads(qwendex.stdout)["data"]["version"] == "0.6.5"
+    assert json.loads(qwendex.stdout)["data"]["version"] == "0.6.6"
     assert qwendex_dev.returncode == 0, qwendex_dev.stderr or qwendex_dev.stdout
     assert sourced_env.returncode == 0, sourced_env.stderr or sourced_env.stdout
     assert sourced_env.stdout.strip() == str(checkout)
@@ -2860,10 +2838,29 @@ def test_qwendex_codex_145_manifest_uses_upstream_v2_thread_cap_compatibility():
     assert "codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs" in anchor_paths
     assert "codex-rs/core/src/tools/handlers/multi_agents_v2.rs" in anchor_paths
     assert "codex-rs/core/src/tools/handlers/multi_agents_common.rs" in anchor_paths
+    assert "codex-rs/core/tests/suite/spawn_agent_description.rs" in anchor_paths
+    reconciled_test_paths = {
+        "codex-rs/core/config.schema.json",
+        "codex-rs/core/src/tools/handlers/multi_agents_spec_tests.rs",
+        "codex-rs/core/src/tools/handlers/multi_agents_tests.rs",
+        "codex-rs/core/src/tools/spec_plan_tests.rs",
+        "codex-rs/core/tests/suite/agent_execution.rs",
+        "codex-rs/core/tests/suite/multi_agent_resume.rs",
+        "codex-rs/core/tests/suite/pending_input.rs",
+        "codex-rs/core/tests/suite/subagent_notifications.rs",
+    }
+    assert reconciled_test_paths <= anchor_paths
     assert "codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs" in patch_paths
     assert "codex-rs/core/src/tools/handlers/multi_agents_v2.rs" in patch_paths
     assert "codex-rs/core/src/tools/handlers/multi_agents_common.rs" in patch_paths
+    assert "codex-rs/core/tests/suite/spawn_agent_description.rs" in patch_paths
+    assert reconciled_test_paths <= patch_paths
     assert any("legacy [agents].max_threads alias" in edit for edit in manifest["required_source_edits"])
+    assert any(
+        "configured native roles remain passive input but hidden" in edit
+        for edit in manifest["required_source_edits"]
+    )
+    assert any("native Qwendex V2 schema and handler aligned" in edit for edit in manifest["required_source_edits"])
     config_test_spec = next(
         spec
         for spec in qwendex.codex_source_patch_specs("0.145.0")
@@ -2890,6 +2887,44 @@ def test_qwendex_codex_145_manifest_uses_upstream_v2_thread_cap_compatibility():
     assert "agent_type: Option<String>" not in v2_spawn_patch_text
     assert "model: Option<String>" not in v2_spawn_patch_text
     assert "turn.config.service_tier.as_deref(),\n        None" in v2_spawn_patch_text
+    assert "let role_tag = DEFAULT_ROLE_NAME;" in v2_spawn_patch_text
+
+    role_test_spec = next(
+        spec
+        for spec in qwendex.codex_source_patch_specs("0.145.0")
+        if spec["path"] == "codex-rs/core/tests/suite/spawn_agent_description.rs"
+    )
+    role_test_patch_text = "\n".join(new for _old, new in role_test_spec["replacements"])
+    assert "v2 hides agent type with a role" in role_test_patch_text
+    assert "!spawn_agent_exposes_agent_type" in role_test_patch_text
+
+    integration_expectations = {
+        "codex-rs/core/tests/suite/agent_execution.rs": [
+            "v2_nested_spawn_is_rejected_for_non_root_agent",
+            'second_output.contains("spawn_agent")',
+        ],
+        "codex-rs/core/tests/suite/multi_agent_resume.rs": [
+            "cold_root_resume_restores_agent_identity_and_inherited_policy_on_followup",
+            "initial_worker_inherited_policy",
+            "initial_root_body",
+        ],
+        "codex-rs/core/tests/suite/pending_input.rs": [
+            "wait_agent_without_running_child_returns_immediately",
+            "No child agent is running",
+        ],
+        "codex-rs/core/tests/suite/subagent_notifications.rs": [
+            "spawned_full_history_v2_child_inherits_root_policy_without_dropping_context",
+            "expected_reasoning_effort",
+        ],
+    }
+    patch_specs = {
+        str(spec["path"]): spec
+        for spec in qwendex.codex_source_patch_specs("0.145.0")
+    }
+    for path, expected_fragments in integration_expectations.items():
+        patch_text = "\n".join(new for _old, new in patch_specs[path]["replacements"])
+        for fragment in expected_fragments:
+            assert fragment in patch_text
 
     v2_handler_spec = next(
         spec
@@ -2918,6 +2953,38 @@ def test_qwendex_codex_145_manifest_uses_upstream_v2_thread_cap_compatibility():
     assert "hide_agent_type_model_reasoning: true" in "\n".join(
         new for _old, new in role_schema_spec["replacements"]
     )
+    assert "expose_spawn_agent_model_overrides: false" in "\n".join(
+        new for _old, new in role_schema_spec["replacements"]
+    )
+
+    v2_tests_spec = next(
+        spec
+        for spec in qwendex.codex_source_patch_specs("0.145.0")
+        if spec["path"] == "codex-rs/core/src/tools/handlers/multi_agents_tests.rs"
+    )
+    v2_tests_patch_text = "\n".join(new for _old, new in v2_tests_spec["replacements"])
+    assert "multi_agent_v2_spawn_rejects_model_override" in v2_tests_patch_text
+    assert "v2_wait_session_with_running_worker" in v2_tests_patch_text
+    assert "returns_immediately_without_running_children" in v2_tests_patch_text
+
+    schema_spec = next(
+        spec
+        for spec in qwendex.codex_source_patch_specs("0.145.0")
+        if spec["path"] == "codex-rs/core/config.schema.json"
+    )
+    schema_patch_text = "\n".join(new for _old, new in schema_spec["replacements"])
+    schema_manifest = next(
+        spec
+        for spec in manifest["source_anchors"]
+        if spec["path"] == "codex-rs/core/config.schema.json"
+    )
+    for action in [
+        "qwendex_toggle_kaveman",
+        "qwendex_toggle_local",
+        "qwendex_toggle_manager",
+    ]:
+        assert action in schema_patch_text
+        assert action in schema_manifest["patch_anchors"]
 
 
 def test_qwendex_codex_patch_apply_updates_supported_source_checkout(tmp_path):
@@ -2989,6 +3056,9 @@ def test_qwendex_codex_patch_apply_updates_supported_source_checkout(tmp_path):
     assert "Qwendex Kaveman directive" in terminal_instructions
     assert "if !visualization_enabled && kaveman_directive.is_none()" in terminal_instructions
     assert "return control_instructions;" in terminal_instructions
+    assert ".and_then(serde_json::Value::as_bool)" in terminal_instructions
+    assert ".and_then(serde_json::Value::as_str)" in terminal_instructions
+    assert "if let Some(existing) = existing_instructions\n        &&" in terminal_instructions
     models_manager = (
         source / "codex-rs/models-manager/src/manager.rs"
     ).read_text(encoding="utf-8")

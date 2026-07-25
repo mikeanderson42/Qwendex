@@ -228,6 +228,11 @@ def test_qdex_dry_run_wires_agent_policy_into_supported_v2_config(
     overrides = command_config(command)
 
     assert overrides["suppress_unstable_features_warning"] is True
+    assert overrides["tui.status_line"] == [
+        "model-with-reasoning",
+        "current-dir",
+        "qwendex-manager",
+    ]
     assert overrides["features.memories"] is False
     assert overrides["features.external_agent_memory_import"] is False
     assert overrides["features.chronicle"] is False
@@ -292,6 +297,8 @@ def test_qdex_immutable_policy_follows_exec_local_config_and_wins(tmp_path: Path
         "features.multi_agent_v2.max_wait_timeout_ms=3600000",
         "-c",
         'model_reasoning_effort="medium"',
+        "-c",
+        'tui.status_line=["model"]',
         "Inspect the repository",
     )["command"]
     assert isinstance(command, list)
@@ -317,6 +324,21 @@ def test_qdex_immutable_policy_follows_exec_local_config_and_wins(tmp_path: Path
     ]
     assert wait_matching[0][0] < wait_matching[1][0]
     assert command_config(command)["features.multi_agent_v2.max_wait_timeout_ms"] == 60000
+    status_line_matching = [
+        (index, value)
+        for index, value in enumerate(command)
+        if value.startswith("tui.status_line=")
+    ]
+    assert [value for _, value in status_line_matching] == [
+        'tui.status_line=["model"]',
+        'tui.status_line=["model-with-reasoning","current-dir","qwendex-manager"]',
+    ]
+    assert status_line_matching[0][0] < status_line_matching[1][0]
+    assert command_config(command)["tui.status_line"] == [
+        "model-with-reasoning",
+        "current-dir",
+        "qwendex-manager",
+    ]
 
 
 @pytest.mark.parametrize(
@@ -370,11 +392,13 @@ def test_qdex_rejects_deferred_native_role_and_memory_controls(
 
 
 @pytest.mark.parametrize("role_surface", ("config", "directory"))
-def test_qdex_rejects_project_native_role_surfaces_without_disclosing_paths(
+@pytest.mark.parametrize("target_form", ("physical", "symlink"))
+def test_qdex_tolerates_passive_project_role_surfaces_under_qwendex_v2_policy(
     tmp_path: Path,
     role_surface: str,
+    target_form: str,
 ) -> None:
-    repo, env, capture, _ = qdex_fixture(
+    repo, env, _, _ = qdex_fixture(
         tmp_path,
         agent_use="Manager",
         policy={"mode": "manager", "max_threads": 4, "native_max_concurrent_threads": 5},
@@ -392,26 +416,45 @@ def test_qdex_rejects_project_native_role_surfaces_without_disclosing_paths(
     dot_codex.mkdir()
     if role_surface == "config":
         (dot_codex / "config.toml").write_text(
-            "[agents.reviewer]\ndescription = \"review\"\n",
+            "[agents.reviewer]\n"
+            'description = "native-role-marker"\n'
+            'config_file = "agents/reviewer.toml"\n',
+            encoding="utf-8",
+        )
+        agents_dir = dot_codex / "agents"
+        agents_dir.mkdir()
+        (agents_dir / "reviewer.toml").write_text(
+            'name = "reviewer"\n'
+            'description = "native-role-marker"\n'
+            'sandbox_mode = "read-only"\n',
             encoding="utf-8",
         )
     else:
-        (dot_codex / "agents").mkdir()
+        agents_dir = dot_codex / "agents"
+        agents_dir.mkdir()
+        (agents_dir / "reviewer.toml").write_text(
+            'name = "reviewer"\n'
+            'description = "native-role-marker"\n'
+            'sandbox_mode = "read-only"\n',
+            encoding="utf-8",
+        )
 
-    result = subprocess.run(
-        [str(QDEX), "--qdex-json", "-C", str(child)],
-        cwd=child,
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
-        timeout=30,
-    )
+    target = child
+    if target_form == "symlink":
+        alias = tmp_path / "repo-alias"
+        alias.symlink_to(repo, target_is_directory=True)
+        target = alias / child.name
 
-    assert result.returncode == 2
-    assert "project-native Codex role configuration" in result.stderr
-    assert str(repo) not in result.stderr
-    assert not capture.exists()
+    payload = qdex_dry_run(target, env)
+    command = payload["command"]
+    assert isinstance(command, list)
+    overrides = command_config(command)
+    assert Path(payload["target_repo"]).resolve() == child.resolve()
+    assert "native-role-marker" not in json.dumps(command)
+    assert overrides["features.multi_agent_v2.hide_spawn_agent_metadata"] is True
+    assert overrides["features.multi_agent_v2.expose_spawn_agent_model_overrides"] is False
+    assert overrides["features.multi_agent_v2.max_concurrent_threads_per_session"] == 5
+    assert overrides["tui.status_line"][-1] == "qwendex-manager"
 
 
 def test_qdex_keeps_legacy_thread_cap_alias_compatible_and_overridden(tmp_path: Path) -> None:

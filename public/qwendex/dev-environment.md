@@ -119,11 +119,13 @@ features, and disables memory generation, use, and dedicated tools. Qdex
 reasserts those values on every launch after caller options and rejects caller
 history/memory activation attempts, including Chronicle's legacy `telepathy`
 alias. It keeps native role/profile configuration and role-driven
-model/reasoning overrides unavailable: project `.codex` role surfaces and
-app-server/remote access are rejected, and the canonical V2 patch makes
-children inherit the root's model, reasoning, and service tier. Qwendex
-AgentPolicy remains the supported delegation and lifecycle contract. This is a
-Qdex boundary; direct stock-Codex use remains independent.
+model/reasoning overrides unavailable: explicit role/profile controls and
+app-server/remote access are rejected, while passive project `.codex` role
+definitions are tolerated so existing repositories still launch. The canonical
+V2 patch does not expose those roles to `spawn_agent` and makes children inherit
+the root's model, reasoning, and service tier. Qwendex AgentPolicy remains the
+supported delegation and lifecycle contract. This is a Qdex boundary; direct
+stock-Codex use remains independent.
 
 The generated environment also exports a Codex-versioned
 `QWENDEX_MODELS_CACHE_FILE`. The Qwendex source patch makes the active build use
@@ -145,7 +147,11 @@ TUI keymaps are written to `patched-tui.example.toml` as copy-only reference
 config; they are appended to active config only when launching or syncing with
 `QWENDEX_DEV_ENABLE_PATCHED_TUI_CONFIG=1` after selecting a patched Codex build.
 The stock-compatible `[tui] status_line` entry remains in active config when a
-dev Codex binary path is configured.
+dev Codex binary path is configured. A sealed runtime generation always
+canonicalizes and digests that status line in an immutable baseline, retains a
+separate writable live config for normal Codex UI persistence, and reasserts
+the status line as a trailing Qdex launch override so config edits cannot
+silently hide the Qwendex footer.
 
 ## Developer Lifecycle
 

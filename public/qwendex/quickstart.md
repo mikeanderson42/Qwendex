@@ -14,7 +14,7 @@ git switch --detach <published-release-tag>
 git status --short
 ```
 
-The annotated `v0.6.5` tag is the publication boundary for this stable
+The annotated `v0.6.6` tag is the publication boundary for this stable
 release. Untagged source is candidate material until the release operation
 creates and pushes that tag.
 
@@ -69,6 +69,13 @@ upstream Codex remains available for recovery; `codex-main` is an explicit
 captured-upstream alias. The release tag pins the Qwendex source. Patched Codex
 footer/hotkey support and native delegation capacity, depth, wait, and child
 tool-surface behavior remain a separately built, version-checked integration.
+For the supported Codex `0.145.0` runtime, Qdex canonicalizes and validates the
+`qwendex-manager` status-line item in an immutable config baseline, keeps
+Codex's live config writable, and repeats the status item as a trailing launch
+override.
+Trusted project `.codex` role definitions no longer block startup merely by
+existing, but Qdex does not expose them through its canonical V2 spawn schema;
+explicit role/profile activation remains outside the supported lifecycle.
 
 Qdex resolves permission mode in this order: CLI option, environment,
 operator-local config, published config, then the hard fallback
