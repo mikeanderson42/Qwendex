@@ -1117,3 +1117,20 @@ Release: Qwendex `v0.6.7` extends the canonical Codex patch and isolated build
 allowlist with the MCP connection manager and deterministic event-level tests.
 The public contract explicitly states that Qwendex does not prevent or repair
 hosted outages, and uncached or unrelated MCP failures remain fail-visible.
+
+## Immutable Runtime Eval Output Boundary
+
+Decision: `scripts/qwendex eval` resolves its default receipt destination
+through the same merged Qwendex configuration used by other receipt-producing
+commands. An explicit `--results-root` remains authoritative; otherwise the
+configured `receipts.dir`, including `QWENDEX_RESULTS_ROOT`, is used.
+
+Reason: runtime generation trees are deliberately sealed read-only while their
+launcher exports writable state, ledger, and results paths under
+`.qwendex-dev`. Eval previously bypassed that connected configuration and used
+the harness module's source-tree default, causing a permission failure only
+after activation. A sealed-generation smoke test now proves a no-flag eval
+receipt lands outside the immutable tree.
+
+Release: Qwendex `v0.6.8` publishes this CLI-only hotfix while retaining the
+v0.6.7 Codex Apps patch and Codex `0.145.0` binary contract unchanged.

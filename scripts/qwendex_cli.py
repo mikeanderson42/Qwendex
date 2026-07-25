@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.6.7"
+VERSION = "0.6.8"
 CONFIG_DIR = ROOT / "config" / "qwendex"
 DEFAULT_PROJECT_CONFIG = CONFIG_DIR / "qwendex.json"
 DEFAULT_USER_CONFIG = Path.home() / ".config" / "qwendex" / "config.json"
@@ -9168,9 +9168,10 @@ def command_eval(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, 
     configured_case = args.case or config["eval"]["default_case"]
     run_all = args.all or configured_case in {"", "all"}
     case_id = "" if run_all else configured_case
+    eval_results_root = args.results_root or results_root(config)
     result = module.run_harness_eval(
         repo_root=ROOT,
-        results_root=args.results_root or module.DEFAULT_RESULTS_ROOT,
+        results_root=eval_results_root,
         ledger_db_path=configured_ledger_path(config),
         case_id=case_id,
         run_all=run_all,

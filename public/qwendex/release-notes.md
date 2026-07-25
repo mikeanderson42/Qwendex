@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## 0.6.8
+
+- Fixed no-flag `scripts/qwendex eval` execution from sealed runtime
+  generations. Eval receipts now use the configured receipts directory,
+  including the generation's writable `QWENDEX_RESULTS_ROOT`, instead of
+  attempting to create `tree/results` inside immutable source.
+- Preserved explicit `--results-root` precedence and added both unit and
+  sealed-generation regression coverage.
+- Isolated performance CLI smoke subprocesses from inherited `QWENDEX_*`,
+  `CODEX_HOME`, and `CODEX_AGENT_USE` state so repository-scoped telemetry
+  assertions remain deterministic inside an active managed session.
+- Carried forward the v0.6.7 Codex Apps cached degraded-startup behavior and
+  unchanged Codex `0.145.0` binary contract.
+
 ## 0.6.7
 
 - Made transient hosted Codex Apps refresh failures degrade cleanly when the

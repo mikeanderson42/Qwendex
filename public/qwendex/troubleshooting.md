@@ -2,7 +2,7 @@
 
 ## Codex Apps Live Refresh Is Unavailable
 
-Qwendex `0.6.7` treats the reserved hosted `codex_apps` server as
+Qwendex `0.6.7` and later treat the reserved hosted `codex_apps` server as
 degraded-ready only when its account-scoped cache already contains tool
 definitions. A warning explains that cached definitions are loaded and that
 app actions may be unavailable while Codex reconnects in the background.

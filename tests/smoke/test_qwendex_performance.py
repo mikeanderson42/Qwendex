@@ -15,32 +15,11 @@ ROOT = Path(__file__).resolve().parents[2]
 QWENDEX = ROOT / "scripts" / "qwendex"
 
 
-_AMBIENT_QWENDEX_ENV_KEYS = {
-    "CODEX_AGENT_USE",
-    "CODEX_HOME",
-    "QWENDEX_CODEX_STATUS_FILE",
-    "QWENDEX_EFFECTIVE_AGENT_USE",
-    "QWENDEX_KAVEMAN_ENABLED",
-    "QWENDEX_KAVEMAN_DIRECTIVE",
-    "QWENDEX_LEDGER_DB",
-    "QWENDEX_LOCAL_SUBAGENTS",
-    "QWENDEX_ORCHESTRATION_MODE",
-    "QWENDEX_OUTPUT_POLICY",
-    "QWENDEX_PERFORMANCE_CAPTURE",
-    "QWENDEX_PERFORMANCE_DB",
-    "QWENDEX_RESULTS_ROOT",
-    "QWENDEX_RUN_ID",
-    "QWENDEX_STATE_DB",
-}
-
-
 def isolated_qwendex_env(overrides: dict[str, str]) -> dict[str, str]:
     """Do not let a parent Qdex Manager launch affect direct CLI fixtures."""
     environment = dict(os.environ)
     for key in tuple(environment):
-        if key in _AMBIENT_QWENDEX_ENV_KEYS or key.startswith(
-            ("QWENDEX_AGENT_", "QWENDEX_MANAGER_")
-        ):
+        if key in {"CODEX_AGENT_USE", "CODEX_HOME"} or key.startswith("QWENDEX_"):
             environment.pop(key)
     environment.update(overrides)
     return environment
@@ -72,6 +51,21 @@ def run_qwendex(*args: str, env: dict[str, str]) -> tuple[subprocess.CompletedPr
 
 def repository_scope(path: Path) -> str:
     return "sha256:" + hashlib.sha256(str(path.resolve()).encode("utf-8")).hexdigest()
+
+
+def test_direct_cli_environment_discards_parent_qdex_runtime(monkeypatch) -> None:
+    monkeypatch.setenv("CODEX_HOME", "/parent/codex-home")
+    monkeypatch.setenv("QWENDEX_EXEC_CWD", "/parent/repository")
+    monkeypatch.setenv("QWENDEX_RUNTIME_TREE", "/parent/runtime-tree")
+
+    environment = isolated_qwendex_env(
+        {"QWENDEX_MANAGER_TARGET_REPO": "/fixture/repository"}
+    )
+
+    assert "CODEX_HOME" not in environment
+    assert "QWENDEX_EXEC_CWD" not in environment
+    assert "QWENDEX_RUNTIME_TREE" not in environment
+    assert environment["QWENDEX_MANAGER_TARGET_REPO"] == "/fixture/repository"
 
 
 def database_bytes(path: Path) -> bytes:

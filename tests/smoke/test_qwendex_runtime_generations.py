@@ -227,6 +227,60 @@ def test_runtime_generations_are_immutable_atomic_and_recoverable(tmp_path, monk
     assert not (runtime_root / "generations" / third_id).exists()
 
 
+def test_runtime_generation_eval_uses_writable_results_root(tmp_path, monkeypatch):
+    source = tmp_path / "candidate"
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    copy_candidate_source(source)
+    codex, host = write_pinned_codex_fixture(source)
+    runtime_root = source / ".qwendex-dev" / "runtime"
+    generation = build_candidate(source, runtime_root, codex, host)
+    generation_dir = runtime_root / "generations" / generation["generation_id"]
+    tree = generation_dir / "tree"
+    writable_root = tmp_path / "writable"
+    results_root = writable_root / "results"
+
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if key != "CODEX_AGENT_USE" and not key.startswith("QWENDEX_")
+    }
+    environment.update(generation["runtime_env"])
+    environment.update(
+        {
+            "QWENDEX_STATE_DB": str(writable_root / "state.sqlite"),
+            "QWENDEX_LEDGER_DB": str(writable_root / "ledger.sqlite"),
+            "QWENDEX_RESULTS_ROOT": str(results_root),
+        }
+    )
+    result = subprocess.run(
+        [
+            str(tree / "scripts" / "qwendex"),
+            "eval",
+            "--case",
+            "exact_marker",
+            "--json",
+        ],
+        cwd=tree,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "pass"
+    assert payload["data"]["metrics"]["total_cases"] == 1
+    receipts = [Path(path) for path in payload["artifacts"]]
+    assert len(receipts) == 1
+    assert receipts[0].is_relative_to(results_root)
+    assert receipts[0].is_file()
+    assert not (tree / "results").exists()
+
+
 def test_generation_codex_config_replaces_a_stale_status_line(tmp_path):
     dev_root = tmp_path / "dev"
     seed = dev_root / ".qwendex-dev" / "codex_home" / "config.toml"
