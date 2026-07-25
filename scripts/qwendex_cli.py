@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.6.6"
+VERSION = "0.6.7"
 CONFIG_DIR = ROOT / "config" / "qwendex"
 DEFAULT_PROJECT_CONFIG = CONFIG_DIR / "qwendex.json"
 DEFAULT_USER_CONFIG = Path.home() / ".config" / "qwendex" / "config.json"
@@ -745,6 +745,20 @@ CODEX_PATCH_MANIFESTS["0.145.0"] = {
             ],
         },
         {
+            "path": "codex-rs/codex-mcp/src/connection_manager.rs",
+            "anchors": [
+                "McpStartupStatus::Ready",
+                "summary.failed.push(McpStartupFailure",
+            ],
+        },
+        {
+            "path": "codex-rs/codex-mcp/src/connection_manager_tests.rs",
+            "anchors": [
+                "create_test_manager_with_failed_apps_startup",
+                "list_all_tools_uses_shared_codex_apps_cache_when_client_startup_fails",
+            ],
+        },
+        {
             "path": "codex-rs/core/src/tools/handlers/multi_agents_spec_tests.rs",
             "anchors": ["wait_agent_tool_v2_uses_timeout_only_summary_output"],
         },
@@ -767,6 +781,7 @@ CODEX_PATCH_MANIFESTS["0.145.0"] = {
         "Prove configured native roles remain passive input but hidden from the Qwendex V2 spawn schema.",
         "Keep the native Qwendex V2 schema and handler aligned by sealing every per-child override field.",
         "Reconcile Codex unit and integration tests plus the generated config schema with the Qwendex V2 and TUI keymap contracts.",
+        "Treat a failed hosted Codex Apps refresh with a non-empty shared tool cache as degraded-ready, warn clearly, and keep reconnecting without reporting a hard MCP startup failure.",
     ],
 }
 
@@ -7550,6 +7565,307 @@ async fn wait_agent_returns_not_found_for_missing_agents() {
             "qwendex_toggle_local": null,
             "qwendex_toggle_manager": null,
             "submit": null,
+""",
+                        ),
+                    ],
+                },
+                {
+                    "path": "codex-rs/codex-mcp/src/connection_manager.rs",
+                    "replacements": [
+                        (
+                            """use codex_protocol::protocol::McpStartupUpdateEvent;
+""",
+                            """use codex_protocol::protocol::McpStartupUpdateEvent;
+use codex_protocol::protocol::WarningEvent;
+""",
+                        ),
+                        (
+                            """                    if cancel_token.is_cancelled() {
+                        outcome = Err(StartupOutcomeError::Cancelled);
+                    }
+                    let status = match &outcome {
+                        Ok(_) => McpStartupStatus::Ready,
+                        Err(StartupOutcomeError::Cancelled) => McpStartupStatus::Cancelled,
+                        Err(error) => {
+""",
+                            f"""                    if cancel_token.is_cancelled() {{
+                        outcome = Err(StartupOutcomeError::Cancelled);
+                    }}
+                    let startup_uses_cached_codex_apps_tools =
+                        startup_failure_uses_cached_codex_apps_tools(
+                            &async_managed_client,
+                            &outcome,
+                        );
+                    if startup_uses_cached_codex_apps_tools {{
+                        // {QWENDEX_CODEX_PATCH_MARKER}
+                        let _ = tx_event
+                            .send(Event {{
+                                id: submit_id.clone(),
+                                msg: EventMsg::Warning(WarningEvent {{
+                                    message: "Codex Apps live refresh failed. Cached tool definitions are loaded and Codex is reconnecting in the background; app actions may be unavailable until reconnect succeeds.".to_string(),
+                                }}),
+                            }})
+                            .await;
+                    }}
+                    let status = match &outcome {{
+                        Ok(_) => McpStartupStatus::Ready,
+                        Err(StartupOutcomeError::Cancelled) => McpStartupStatus::Cancelled,
+                        Err(_) if startup_uses_cached_codex_apps_tools => McpStartupStatus::Ready,
+                        Err(error) => {{
+""",
+                        ),
+                        (
+                            """                if cancel_token.is_cancelled() {
+                    outcome = Err(StartupOutcomeError::Cancelled);
+                }
+
+                if matches!(&outcome, Err(StartupOutcomeError::Failed { .. })) {
+                    async_managed_client.reconnect_failed_startup().await;
+                }
+
+                (server_name, outcome)
+""",
+                            """                if cancel_token.is_cancelled() {
+                    outcome = Err(StartupOutcomeError::Cancelled);
+                }
+                let startup_uses_cached_codex_apps_tools =
+                    startup_failure_uses_cached_codex_apps_tools(
+                        &async_managed_client,
+                        &outcome,
+                    );
+
+                if matches!(&outcome, Err(StartupOutcomeError::Failed { .. })) {
+                    async_managed_client.reconnect_failed_startup().await;
+                }
+
+                (server_name, outcome, startup_uses_cached_codex_apps_tools)
+""",
+                        ),
+                        (
+                            """                for (server_name, outcome) in outcomes {
+                    match outcome {
+                        Ok(_) => summary.ready.push(server_name),
+                        Err(StartupOutcomeError::Cancelled) => summary.cancelled.push(server_name),
+                        Err(StartupOutcomeError::Failed { error, .. }) => {
+""",
+                            """                for (server_name, outcome, startup_uses_cached_codex_apps_tools) in outcomes {
+                    match outcome {
+                        Ok(_) => summary.ready.push(server_name),
+                        Err(StartupOutcomeError::Cancelled) => summary.cancelled.push(server_name),
+                        Err(StartupOutcomeError::Failed { .. })
+                            if startup_uses_cached_codex_apps_tools =>
+                        {
+                            summary.ready.push(server_name)
+                        }
+                        Err(StartupOutcomeError::Failed { error, .. }) => {
+""",
+                        ),
+                        (
+                            """fn should_share_codex_apps_tools_cache(server_name: &str, uses_env_bearer_token: bool) -> bool {
+    server_name == CODEX_APPS_MCP_SERVER_NAME && !uses_env_bearer_token
+}
+""",
+                            f"""// {QWENDEX_CODEX_PATCH_MARKER}
+fn startup_failure_uses_cached_codex_apps_tools(
+    client: &AsyncManagedClient,
+    outcome: &std::result::Result<ManagedClient, StartupOutcomeError>,
+) -> bool {{
+    client.is_codex_apps_mcp_server
+        && matches!(
+            outcome,
+            Err(StartupOutcomeError::Failed {{
+                is_authentication_required: false,
+                ..
+            }})
+        )
+        && client.has_cached_tools()
+}}
+
+fn should_share_codex_apps_tools_cache(server_name: &str, uses_env_bearer_token: bool) -> bool {{
+    server_name == CODEX_APPS_MCP_SERVER_NAME && !uses_env_bearer_token
+}}
+""",
+                        ),
+                    ],
+                },
+                {
+                    "path": "codex-rs/codex-mcp/src/connection_manager_tests.rs",
+                    "replacements": [
+                        (
+                            """#[tokio::test]
+async fn list_all_tools_uses_shared_codex_apps_cache_when_client_startup_fails() {
+""",
+                            f"""#[test]
+fn failed_codex_apps_startup_uses_cache_without_masking_other_states() {{
+    let codex_home = tempdir().expect("tempdir");
+    let cache_context = create_codex_apps_tools_cache_context(
+        codex_home.path().to_path_buf(),
+        Some("startup-status-account"),
+        Some("startup-status-user"),
+    );
+    store_current_tools(
+        &cache_context,
+        vec![create_test_tool(
+            CODEX_APPS_MCP_SERVER_NAME,
+            "cached_search",
+        )],
+    );
+    let failed: std::result::Result<ManagedClient, StartupOutcomeError> =
+        Err(StartupOutcomeError::Failed {{
+            error: "transient tools/list failure".to_string(),
+            is_authentication_required: false,
+        }});
+    let mut client = AsyncManagedClient {{
+        client: futures::future::ready(failed.clone()).boxed().shared(),
+        is_codex_apps_mcp_server: true,
+        cached_server_info: None,
+        codex_apps_tools_cache_context: Some(cache_context),
+        tool_catalog_cache_context: None,
+        tool_filter: ToolFilter::default(),
+        startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        startup_reconnect: None,
+        tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+        cancel_token: CancellationToken::new(),
+    }};
+
+    // {QWENDEX_CODEX_PATCH_MARKER}
+    assert!(startup_failure_uses_cached_codex_apps_tools(
+        &client, &failed
+    ));
+    assert!(!startup_failure_uses_cached_codex_apps_tools(
+        &client,
+        &Err(StartupOutcomeError::Cancelled),
+    ));
+    let authentication_required = Err(StartupOutcomeError::Failed {{
+        error: "login required".to_string(),
+        is_authentication_required: true,
+    }});
+    assert!(!startup_failure_uses_cached_codex_apps_tools(
+        &client,
+        &authentication_required,
+    ));
+
+    client.is_codex_apps_mcp_server = false;
+    assert!(!startup_failure_uses_cached_codex_apps_tools(
+        &client, &failed
+    ));
+    client.is_codex_apps_mcp_server = true;
+    client.codex_apps_tools_cache_context = None;
+    assert!(!startup_failure_uses_cached_codex_apps_tools(
+        &client, &failed
+    ));
+}}
+
+#[tokio::test]
+async fn failed_codex_apps_startup_reports_cached_degraded_ready_events() {{
+    let approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+    let codex_home = tempdir().expect("tempdir");
+    let cache_key = ConnectorRuntimeContextKey::personal(
+        Some("startup-event-account".to_string()),
+        Some("startup-event-user".to_string()),
+    );
+    let cache_manager = ConnectorRuntimeManager::<ToolInfo>::default();
+    let cache_context = cache_manager.context(codex_home.path().to_path_buf(), cache_key.clone());
+    store_current_tools(
+        &cache_context,
+        vec![create_test_tool(
+            CODEX_APPS_MCP_SERVER_NAME,
+            "cached_search",
+        )],
+    );
+    let mcp_servers = HashMap::from([(
+        CODEX_APPS_MCP_SERVER_NAME.to_string(),
+        EffectiveMcpServer::configured(McpServerConfig {{
+            auth: Default::default(),
+            transport: McpServerTransportConfig::StreamableHttp {{
+                url: "http://127.0.0.1:1/mcp".to_string(),
+                bearer_token_env_var: None,
+                http_headers: None,
+                env_http_headers: None,
+            }},
+            environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
+            enabled: true,
+            required: false,
+            supports_parallel_tool_calls: false,
+            disabled_reason: None,
+            startup_timeout_sec: Some(Duration::from_millis(250)),
+            tool_timeout_sec: None,
+            default_tools_approval_mode: None,
+            enabled_tools: None,
+            disabled_tools: None,
+            scopes: None,
+            oauth: None,
+            oauth_resource: None,
+            tools: HashMap::new(),
+        }}),
+    )]);
+    let cancel_token = CancellationToken::new();
+    let (tx_event, rx_event) = async_channel::bounded(8);
+    let manager = McpConnectionManager::new(
+        &mcp_servers,
+        OAuthCredentialsStoreMode::default(),
+        AuthKeyringBackendKind::default(),
+        &approval_policy,
+        "startup-events".to_string(),
+        Some(tx_event),
+        cancel_token.clone(),
+        PermissionProfile::default(),
+        McpRuntimeContext::new(
+            Arc::new(EnvironmentManager::without_environments()),
+            codex_home.path().to_path_buf(),
+        ),
+        codex_home.path().to_path_buf(),
+        cache_manager,
+        McpToolCatalogCache::default(),
+        cache_key,
+        /*prefix_mcp_tool_names*/ true,
+        ElicitationCapability::default(),
+        /*supports_openai_form_elicitation*/ false,
+        ToolPluginProvenance::default(),
+        /*auth*/ None,
+        /*codex_apps_auth_manager*/ None,
+        /*elicitation_reviewer*/ None,
+        /*elicitation_lifecycle*/ None,
+        ElicitationRequestRouter::default(),
+    )
+    .await;
+
+    let mut saw_starting = false;
+    let mut saw_ready = false;
+    let mut saw_cached_warning = false;
+    let summary = loop {{
+        let event = tokio::time::timeout(Duration::from_secs(2), rx_event.recv())
+            .await
+            .expect("startup event timeout")
+            .expect("startup event channel closed");
+        match event.msg {{
+            EventMsg::McpStartupUpdate(update) if update.server == CODEX_APPS_MCP_SERVER_NAME => {{
+                saw_starting |= matches!(update.status, McpStartupStatus::Starting);
+                saw_ready |= matches!(update.status, McpStartupStatus::Ready);
+                assert!(!matches!(update.status, McpStartupStatus::Failed {{ .. }}));
+            }}
+            EventMsg::Warning(warning) => {{
+                saw_cached_warning |= warning
+                    .message
+                    .contains("Cached tool definitions are loaded");
+            }}
+            EventMsg::McpStartupComplete(summary) => break summary,
+            _ => {{}}
+        }}
+    }};
+
+    assert!(saw_starting);
+    assert!(saw_ready);
+    assert!(saw_cached_warning);
+    assert_eq!(summary.ready, vec![CODEX_APPS_MCP_SERVER_NAME.to_string()]);
+    assert!(summary.failed.is_empty());
+    assert!(summary.cancelled.is_empty());
+    assert_eq!(manager.list_all_tools().await.len(), 1);
+    cancel_token.cancel();
+}}
+
+#[tokio::test]
+async fn list_all_tools_uses_shared_codex_apps_cache_when_client_startup_fails() {{
 """,
                         ),
                     ],

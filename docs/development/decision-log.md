@@ -1093,3 +1093,27 @@ no-child immediate-return coverage. Direct CLI smoke subprocesses clear all
 ambient `QWENDEX_*` runtime variables before applying explicit fixture
 overrides, so a surrounding managed Qdex launch cannot redirect their state,
 ledger, repository identity, or release evidence.
+
+## Codex Apps Cached Degraded Startup
+
+Decision: for Codex `0.145.0`, classify a failed startup of the reserved hosted
+`codex_apps` server as degraded-ready only when the matching account-scoped
+shared cache contains at least one tool definition. Emit a warning before the
+ready update, retain the cached catalog, preserve the original failure outcome,
+and continue the existing background reconnect behavior. Do not broaden this
+classification to authentication-required or cancelled startup, an empty
+cache, bearer-token custom servers, or any non-Apps MCP server.
+
+Reason: the hosted plugin service can transiently return server-side errors
+after the local plugin runtime has initialized successfully. Codex already
+retains cached definitions and retries in the background, so reporting a hard
+startup failure contradicts the usable local state and alarms operators without
+improving recovery. Reporting unconditional readiness would be equally
+misleading because live app actions may still fail. The narrow degraded-ready
+classification exposes both truths: cached discovery is usable, while hosted
+execution is impaired and reconnecting.
+
+Release: Qwendex `v0.6.7` extends the canonical Codex patch and isolated build
+allowlist with the MCP connection manager and deterministic event-level tests.
+The public contract explicitly states that Qwendex does not prevent or repair
+hosted outages, and uncached or unrelated MCP failures remain fail-visible.

@@ -67,7 +67,7 @@ Manager routing is per lane. The main Codex session keeps the user's selected
 model and reasoning. Low-risk bounded lanes may use local Qwen; high-risk lanes
 escalate to GPT/Codex authority.
 
-Qwendex `0.6.6` installs validated runtime generations side by side. Each
+Qwendex `0.6.7` installs validated runtime generations side by side. Each
 Qdex process is pinned to one immutable source/binary/config contract;
 activation affects only new sessions, and shell recovery can restore the prior
 known-good generation without invoking Qdex. Stock Codex supports Qwendex's
@@ -103,7 +103,7 @@ git fetch --tags origin
 git switch --detach <published-release-tag>
 ```
 
-The annotated `v0.6.6` tag is the publication boundary for this stable
+The annotated `v0.6.7` tag is the publication boundary for this stable
 release; untagged source remains candidate material until the release gates
 create and push that tag.
 
@@ -354,7 +354,7 @@ claims require GPT/Codex review and the appropriate Qwendex verification tier.
 
 ## Current Release / Known Limits
 
-This checkout is seeded as `v0.6.6` and supports Codex `0.145.0`.
+This checkout is seeded as `v0.6.7` and supports Codex `0.145.0`.
 It includes the supported-Codex update,
 state-schema/runtime isolation fixes, advisory Agent Management boundary, and
 validated Agent Manager/Kaveman/Local TUI controls described in the release

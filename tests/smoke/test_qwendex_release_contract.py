@@ -46,6 +46,8 @@ def test_codex_build_contract_requires_the_current_canonical_patch_surface():
 
     codex_145_required = release_gate.codex_required_patch_paths("0.145.0")
     codex_145_v2_paths = {
+        "codex-rs/codex-mcp/src/connection_manager.rs",
+        "codex-rs/codex-mcp/src/connection_manager_tests.rs",
         "codex-rs/core/src/tools/handlers/multi_agents_common.rs",
         "codex-rs/core/src/tools/handlers/multi_agents_v2.rs",
         "codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs",
@@ -65,6 +67,12 @@ def test_codex_build_contract_requires_the_current_canonical_patch_surface():
     assert codex_145_v2_paths.isdisjoint(
         release_gate.codex_required_patch_paths("0.144.4")
     )
+    dev_env = (ROOT / "scripts" / "qwendex_dev_env").read_text(encoding="utf-8")
+    for path in {
+        "codex-rs/codex-mcp/src/connection_manager.rs",
+        "codex-rs/codex-mcp/src/connection_manager_tests.rs",
+    }:
+        assert dev_env.count(f'"{path}"') == 2
 
 
 def run(*args: str, cwd: Path) -> str:

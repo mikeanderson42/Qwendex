@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## 0.6.7
+
+- Made transient hosted Codex Apps refresh failures degrade cleanly when the
+  account-scoped cache already contains tool definitions. Qdex now reports the
+  Apps connector as ready-with-warning instead of showing a hard
+  `MCP startup incomplete` failure for that cached recovery case.
+- Kept the failed live-refresh outcome available to the existing background
+  reconnect logic and warns that app actions may be unavailable until the
+  hosted service recovers.
+- Preserved hard failure behavior for authentication-required startup, an
+  empty cache, cancelled startup, and non-Apps MCP servers.
+- Added deterministic Codex `0.145.0` Rust tests for the emitted startup
+  events, aggregate summary, warning, retained cached catalog, and state
+  exclusions; refreshed the canonical patch digest and release footprint.
+
 ## 0.6.6
 
 - Fixed the Codex `0.145.0` runtime-generation gap that could ship a patched
