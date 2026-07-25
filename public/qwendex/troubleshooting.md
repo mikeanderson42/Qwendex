@@ -1,5 +1,27 @@
 # Troubleshooting
 
+## Codex Apps Live Refresh Is Unavailable
+
+Qwendex `0.6.7` treats the reserved hosted `codex_apps` server as
+degraded-ready only when its account-scoped cache already contains tool
+definitions. A warning explains that cached definitions are loaded and that
+app actions may be unavailable while Codex reconnects in the background.
+
+If startup still reports `MCP startup incomplete (failed: codex_apps)`, the
+cache was unavailable or empty, authentication is required, the startup was
+cancelled, or the selected runtime predates this release. Check the active
+generation and Codex version:
+
+```bash
+scripts/qwendex runtime status --json
+scripts/qwendex codex-patch preflight --json
+```
+
+Do not remove authentication or edit a sealed generation to hide the failure.
+Confirm network and ChatGPT service health, then start a new Qdex session after
+the hosted service recovers or after activating a validated current runtime.
+Other MCP servers retain their normal failure behavior.
+
 ## Qdex Cannot Start After A Runtime Update
 
 Do not repair a selected generation in place. From an ordinary shell or stock

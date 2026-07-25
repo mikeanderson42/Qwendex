@@ -35,7 +35,7 @@ QWENDEX_RELEASE_CODEX_SOURCE_REPO="https://github.com/openai/codex.git"
 QWENDEX_CODEX_SOURCE_REPO="${QWENDEX_CODEX_SOURCE_REPO:-$QWENDEX_RELEASE_CODEX_SOURCE_REPO}"
 QWENDEX_RELEASE_CODEX_VERSION="0.145.0"
 QWENDEX_RELEASE_CODEX_SOURCE_COMMIT="25af12f7e61572b0bc18ddb1008be543b91519b0"
-QWENDEX_RELEASE_CODEX_PATCH_SHA256="978e5ebd5255cab5286cc2ee1e1f04970d25eb36877a10cef78b3068d75e593e"
+QWENDEX_RELEASE_CODEX_PATCH_SHA256="16fbf12253db058320f5c262d4e3b0ad3d7a9d779ae21d1f0483acf5bdd7e914"
 QWENDEX_RELEASE_CODEX_CARGO_LOCK_SHA256="ffa26a770e6bce911f93f2e170d8a76bf27abb4c4696bb81a9a65940de1f217e"
 QWENDEX_CODEX_SOURCE_REF="${QWENDEX_CODEX_SOURCE_REF:-rust-v$QWENDEX_RELEASE_CODEX_VERSION}"
 QWENDEX_MODELS_CACHE_FILE="models_cache.qwendex-$QWENDEX_RELEASE_CODEX_VERSION.json"
@@ -1366,6 +1366,8 @@ from pathlib import Path
 source_path = Path(source)
 allowed_changes = {
     "codex-rs/Cargo.lock",
+    "codex-rs/codex-mcp/src/connection_manager.rs",
+    "codex-rs/codex-mcp/src/connection_manager_tests.rs",
     "codex-rs/config/src/tui_keymap.rs",
     "codex-rs/core/src/config/config_tests.rs",
     "codex-rs/core/src/config/mod.rs",
@@ -1443,6 +1445,8 @@ if source_ref == "rust-v0.145.0":
 else:
     # These role/default guards rely on the 0.145 V2 spawn implementation.
     required_patch_paths -= {
+        "codex-rs/codex-mcp/src/connection_manager.rs",
+        "codex-rs/codex-mcp/src/connection_manager_tests.rs",
         "codex-rs/core/src/tools/handlers/multi_agents_common.rs",
         "codex-rs/core/src/tools/handlers/multi_agents_v2.rs",
         "codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs",

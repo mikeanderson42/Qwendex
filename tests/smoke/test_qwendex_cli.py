@@ -313,7 +313,7 @@ def test_qwendex_version_and_config_are_in_sync():
     sample_config = json.loads((ROOT / "config" / "qwendex" / "qwendex.sample.json").read_text(encoding="utf-8"))
     version = json_result("version", "--json")
 
-    assert qwendex.VERSION == "0.6.6"
+    assert qwendex.VERSION == "0.6.7"
     assert version["data"]["version"] == qwendex.VERSION
     assert project_config["version"] == qwendex.VERSION
     assert sample_config["version"] == qwendex.VERSION
@@ -1890,7 +1890,7 @@ def assert_same_root_supports_quoted_path(tmp_path, path_fragment):
 
     assert config["projects"] == {str(checkout): {"trust_level": "trusted"}}
     assert qwendex.returncode == 0, qwendex.stderr or qwendex.stdout
-    assert json.loads(qwendex.stdout)["data"]["version"] == "0.6.6"
+    assert json.loads(qwendex.stdout)["data"]["version"] == "0.6.7"
     assert qwendex_dev.returncode == 0, qwendex_dev.stderr or qwendex_dev.stdout
     assert sourced_env.returncode == 0, sourced_env.stderr or sourced_env.stdout
     assert sourced_env.stdout.strip() == str(checkout)
@@ -2838,6 +2838,8 @@ def test_qwendex_codex_145_manifest_uses_upstream_v2_thread_cap_compatibility():
     assert "codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs" in anchor_paths
     assert "codex-rs/core/src/tools/handlers/multi_agents_v2.rs" in anchor_paths
     assert "codex-rs/core/src/tools/handlers/multi_agents_common.rs" in anchor_paths
+    assert "codex-rs/codex-mcp/src/connection_manager.rs" in anchor_paths
+    assert "codex-rs/codex-mcp/src/connection_manager_tests.rs" in anchor_paths
     assert "codex-rs/core/tests/suite/spawn_agent_description.rs" in anchor_paths
     reconciled_test_paths = {
         "codex-rs/core/config.schema.json",
@@ -2853,6 +2855,8 @@ def test_qwendex_codex_145_manifest_uses_upstream_v2_thread_cap_compatibility():
     assert "codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs" in patch_paths
     assert "codex-rs/core/src/tools/handlers/multi_agents_v2.rs" in patch_paths
     assert "codex-rs/core/src/tools/handlers/multi_agents_common.rs" in patch_paths
+    assert "codex-rs/codex-mcp/src/connection_manager.rs" in patch_paths
+    assert "codex-rs/codex-mcp/src/connection_manager_tests.rs" in patch_paths
     assert "codex-rs/core/tests/suite/spawn_agent_description.rs" in patch_paths
     assert reconciled_test_paths <= patch_paths
     assert any("legacy [agents].max_threads alias" in edit for edit in manifest["required_source_edits"])
@@ -2861,6 +2865,10 @@ def test_qwendex_codex_145_manifest_uses_upstream_v2_thread_cap_compatibility():
         for edit in manifest["required_source_edits"]
     )
     assert any("native Qwendex V2 schema and handler aligned" in edit for edit in manifest["required_source_edits"])
+    assert any(
+        "failed hosted Codex Apps refresh" in edit
+        for edit in manifest["required_source_edits"]
+    )
     config_test_spec = next(
         spec
         for spec in qwendex.codex_source_patch_specs("0.145.0")
@@ -2943,6 +2951,52 @@ def test_qwendex_codex_145_manifest_uses_upstream_v2_thread_cap_compatibility():
     common_patch_text = "\n".join(new for _old, new in common_spec["replacements"])
     assert "turn.multi_agent_version == MultiAgentVersion::V2" in common_patch_text
     assert "agent_default_subagent_model" in common_patch_text
+
+    apps_manager_spec = next(
+        spec
+        for spec in qwendex.codex_source_patch_specs("0.145.0")
+        if spec["path"] == "codex-rs/codex-mcp/src/connection_manager.rs"
+    )
+    apps_manager_patch_text = "\n".join(
+        new for _old, new in apps_manager_spec["replacements"]
+    )
+    assert "startup_failure_uses_cached_codex_apps_tools" in apps_manager_patch_text
+    assert "Cached tool definitions are loaded" in apps_manager_patch_text
+    assert (
+        "app actions may be unavailable until reconnect succeeds"
+        in apps_manager_patch_text
+    )
+    assert "McpStartupStatus::Ready" in apps_manager_patch_text
+    assert "summary.ready.push(server_name)" in apps_manager_patch_text
+    assert "is_authentication_required: false" in apps_manager_patch_text
+
+    apps_manager_tests_spec = next(
+        spec
+        for spec in qwendex.codex_source_patch_specs("0.145.0")
+        if spec["path"] == "codex-rs/codex-mcp/src/connection_manager_tests.rs"
+    )
+    apps_manager_tests_patch_text = "\n".join(
+        new for _old, new in apps_manager_tests_spec["replacements"]
+    )
+    assert (
+        "failed_codex_apps_startup_uses_cache_without_masking_other_states"
+        in apps_manager_tests_patch_text
+    )
+    assert (
+        "failed_codex_apps_startup_reports_cached_degraded_ready_events"
+        in apps_manager_tests_patch_text
+    )
+    assert "StartupOutcomeError::Cancelled" in apps_manager_tests_patch_text
+    assert "authentication_required" in apps_manager_tests_patch_text
+    assert "is_authentication_required: true" in apps_manager_tests_patch_text
+    assert "client.is_codex_apps_mcp_server = false" in apps_manager_tests_patch_text
+    assert "client.codex_apps_tools_cache_context = None" in apps_manager_tests_patch_text
+    assert "assert!(saw_starting)" in apps_manager_tests_patch_text
+    assert "assert!(saw_ready)" in apps_manager_tests_patch_text
+    assert "assert!(saw_cached_warning)" in apps_manager_tests_patch_text
+    assert "assert!(summary.failed.is_empty())" in apps_manager_tests_patch_text
+    assert "assert!(summary.cancelled.is_empty())" in apps_manager_tests_patch_text
+    assert "manager.list_all_tools().await.len(), 1" in apps_manager_tests_patch_text
 
     role_schema_spec = next(
         spec

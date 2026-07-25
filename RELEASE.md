@@ -1,3 +1,21 @@
+# v0.6.7
+
+Codex Apps degraded-startup resilience release for Codex `0.145.0`.
+
+- Treats a failed hosted Codex Apps refresh as degraded-ready when a non-empty
+  account-scoped tool cache is available, avoiding a misleading hard MCP
+  startup-failure summary while retaining cached tool definitions.
+- Emits a clear warning that live app actions may remain unavailable, preserves
+  the original failed outcome internally, and continues the existing
+  background reconnect path.
+- Leaves authentication-required or cancelled startup, uncached Apps startup,
+  and every non-Apps MCP failure unchanged and fail-visible.
+- Adds deterministic Rust coverage with an unreachable Apps endpoint, proving
+  the startup event is `Ready`, the aggregate summary has no failed server, the
+  degraded warning is emitted, and cached tools remain listable.
+- Extends the canonical Codex patch footprint and binds the reproducible
+  full-index patch digest into the isolated release build.
+
 # v0.6.6
 
 Codex `0.145.0` Qdex launch and TUI compatibility repair.

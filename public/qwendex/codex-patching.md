@@ -38,6 +38,11 @@ Qwendex owns a stable runtime contract:
   launch. Codex keeps a separate writable live config for its normal persisted
   UI choices, while Qdex supplies the canonical status line as a trailing
   launch override.
+- If the reserved hosted `codex_apps` server cannot refresh but its
+  account-scoped cache has tool definitions, the patched runtime reports that
+  server as degraded-ready, emits a warning, retains the cached catalog, and
+  keeps reconnecting in the background. Authentication-required, empty-cache,
+  cancelled, and non-Apps failures retain their normal startup classification.
 
 The intended footer text is:
 
@@ -151,6 +156,8 @@ version-specific anchor sets:
 - `codex-rs/core/tests/suite/subagent_notifications.rs`
 - `codex-rs/core/config.schema.json`
 - `codex-rs/models-manager/src/manager.rs`
+- `codex-rs/codex-mcp/src/connection_manager.rs`
+- `codex-rs/codex-mcp/src/connection_manager_tests.rs`
 
 Inspect the active manifest with:
 
@@ -178,6 +185,13 @@ spawn descendants, child policy stays inherited across fresh and resumed
 threads, passive native roles do not alter V2 children, and no-child waits
 return immediately. It also exercises running-child timeout paths and
 regenerates Codex's config schema for the Qwendex TUI key bindings.
+
+The Codex Apps coverage uses an unreachable local endpoint and a populated
+account-scoped cache to prove `Starting` then `Ready` startup events, a ready
+aggregate summary with no failed or cancelled entry, a visible degraded-service
+warning, retained cached tools, and unchanged failure classification outside
+that narrow case, including reauthentication-required failures. This does not
+claim that Qwendex can prevent or repair a hosted plugin-service outage.
 
 The canonical development workflow is `qwendex-dev codex-patch apply`, focused
 Rust tests, `cargo fmt --check`, `codex-patch preflight --require-applied`, and

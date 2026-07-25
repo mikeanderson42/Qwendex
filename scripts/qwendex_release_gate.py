@@ -109,6 +109,8 @@ CI_REQUIRED_CHECKS = {
 }
 CODEX_ALLOWED_BUILD_PATHS = {
     "codex-rs/Cargo.lock",
+    "codex-rs/codex-mcp/src/connection_manager.rs",
+    "codex-rs/codex-mcp/src/connection_manager_tests.rs",
     "codex-rs/config/src/tui_keymap.rs",
     "codex-rs/core/src/config/config_tests.rs",
     "codex-rs/core/src/config/mod.rs",
@@ -141,6 +143,8 @@ CODEX_ALLOWED_BUILD_PATHS = {
 }
 CODEX_REQUIRED_PATCH_PATHS = CODEX_ALLOWED_BUILD_PATHS - {"codex-rs/Cargo.lock"}
 CODEX_145_ONLY_PATCH_PATHS = {
+    "codex-rs/codex-mcp/src/connection_manager.rs",
+    "codex-rs/codex-mcp/src/connection_manager_tests.rs",
     "codex-rs/core/src/tools/handlers/multi_agents_common.rs",
     "codex-rs/core/src/tools/handlers/multi_agents_v2.rs",
     "codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs",
