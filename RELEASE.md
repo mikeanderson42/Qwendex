@@ -1,3 +1,20 @@
+# v0.6.8
+
+Immutable-runtime eval output-path hotfix for Codex `0.145.0`.
+
+- Makes `scripts/qwendex eval` honor the configured receipts directory when
+  `--results-root` is omitted, including the writable
+  `QWENDEX_RESULTS_ROOT` exported by a selected immutable runtime generation.
+- Preserves explicit `--results-root` precedence.
+- Adds unit coverage for configured and explicit output roots and a sealed
+  runtime-generation regression that writes an exact-marker receipt without
+  an explicit results flag.
+- Makes performance CLI fixtures discard inherited `QWENDEX_*`, `CODEX_HOME`,
+  and `CODEX_AGENT_USE` state before applying their explicit test environment,
+  preventing parent-session repository scope from contaminating validation.
+- Retains the unchanged v0.6.7 Codex Apps degraded-startup patch and
+  reproducible Codex `0.145.0` build contract.
+
 # v0.6.7
 
 Codex Apps degraded-startup resilience release for Codex `0.145.0`.

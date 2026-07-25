@@ -313,7 +313,7 @@ def test_qwendex_version_and_config_are_in_sync():
     sample_config = json.loads((ROOT / "config" / "qwendex" / "qwendex.sample.json").read_text(encoding="utf-8"))
     version = json_result("version", "--json")
 
-    assert qwendex.VERSION == "0.6.7"
+    assert qwendex.VERSION == "0.6.8"
     assert version["data"]["version"] == qwendex.VERSION
     assert project_config["version"] == qwendex.VERSION
     assert sample_config["version"] == qwendex.VERSION
@@ -1890,7 +1890,7 @@ def assert_same_root_supports_quoted_path(tmp_path, path_fragment):
 
     assert config["projects"] == {str(checkout): {"trust_level": "trusted"}}
     assert qwendex.returncode == 0, qwendex.stderr or qwendex.stdout
-    assert json.loads(qwendex.stdout)["data"]["version"] == "0.6.7"
+    assert json.loads(qwendex.stdout)["data"]["version"] == "0.6.8"
     assert qwendex_dev.returncode == 0, qwendex_dev.stderr or qwendex_dev.stdout
     assert sourced_env.returncode == 0, sourced_env.stderr or sourced_env.stdout
     assert sourced_env.stdout.strip() == str(checkout)
@@ -3350,9 +3350,10 @@ def test_qwendex_receipt_verifies_schema_and_digest(tmp_path):
     assert "sha256 mismatch" in " ".join(data["errors"])
 
 
-def test_qwendex_eval_defaults_to_full_suite(monkeypatch):
+def test_qwendex_eval_defaults_to_full_suite(tmp_path, monkeypatch):
     qwendex = load_qwendex()
     calls = {}
+    configured_results_root = tmp_path / "configured-results"
 
     class FakeEvalModule:
         DEFAULT_RESULTS_ROOT = ROOT / "results" / "fake"
@@ -3368,17 +3369,30 @@ def test_qwendex_eval_defaults_to_full_suite(monkeypatch):
             }
 
     monkeypatch.setattr(qwendex, "script_module", lambda name: FakeEvalModule)
-    cfg = qwendex.load_qwendex_config(project_config=ROOT / "config/qwendex/qwendex.json", user_config=ROOT / "missing-user.json")
+    cfg = qwendex.load_qwendex_config(
+        env={"QWENDEX_RESULTS_ROOT": str(configured_results_root)},
+        project_config=ROOT / "config/qwendex/qwendex.json",
+        user_config=ROOT / "missing-user.json",
+    )
     args = qwendex.command_line().parse_args(["eval"])
 
     data = qwendex.command_eval(args, cfg)
 
     assert data["status"] == "pass"
+    assert calls["results_root"] == configured_results_root
     assert calls["case_id"] == ""
     assert calls["run_all"] is True
     assert data["data"]["metrics"]["total_cases"] == 2
     assert data["data"]["metrics"]["passed_cases"] == 2
     assert data["data"]["manager_estimate"]["release_risk"] in {"low", "medium", "high"}
+
+    explicit_results_root = tmp_path / "explicit-results"
+    explicit_args = qwendex.command_line().parse_args(
+        ["eval", "--results-root", str(explicit_results_root)]
+    )
+    qwendex.command_eval(explicit_args, cfg)
+
+    assert calls["results_root"] == explicit_results_root
 
 
 def test_qwendex_learning_allowlist_preflight_denies_unsafe_paths(tmp_path):
