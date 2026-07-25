@@ -49,6 +49,15 @@ def test_codex_build_contract_requires_the_current_canonical_patch_surface():
         "codex-rs/core/src/tools/handlers/multi_agents_common.rs",
         "codex-rs/core/src/tools/handlers/multi_agents_v2.rs",
         "codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs",
+        "codex-rs/core/src/tools/handlers/multi_agents_spec_tests.rs",
+        "codex-rs/core/src/tools/handlers/multi_agents_tests.rs",
+        "codex-rs/core/src/tools/spec_plan_tests.rs",
+        "codex-rs/core/tests/suite/agent_execution.rs",
+        "codex-rs/core/tests/suite/multi_agent_resume.rs",
+        "codex-rs/core/tests/suite/pending_input.rs",
+        "codex-rs/core/tests/suite/spawn_agent_description.rs",
+        "codex-rs/core/tests/suite/subagent_notifications.rs",
+        "codex-rs/core/config.schema.json",
     }
     assert codex_145_v2_paths <= release_gate.CODEX_ALLOWED_BUILD_PATHS
     assert codex_145_v2_paths <= codex_145_required

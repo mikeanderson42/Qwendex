@@ -1082,3 +1082,14 @@ live config's basic TOML safety, before each new launch. During migration,
 activation retains the newest older generation that still passes the current
 validator as `known_good`; an invalid current generation remains recorded as
 `previous` for diagnosis but cannot replace a usable rollback target.
+
+Release: Qwendex `v0.6.6` publishes this compatibility repair against the
+existing Codex `0.145.0` source pin. Its patch footprint also updates the
+configured-role integration assertion so the release tests the same passive
+role/V2-hidden-schema boundary enforced by production code. The patch also
+forces model/reasoning override exposure off in the native V2 schema, refreshes
+the generated Codex config schema, and retains both running-child timeout and
+no-child immediate-return coverage. Direct CLI smoke subprocesses clear all
+ambient `QWENDEX_*` runtime variables before applying explicit fixture
+overrides, so a surrounding managed Qdex launch cannot redirect their state,
+ledger, repository identity, or release evidence.

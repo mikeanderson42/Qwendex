@@ -140,7 +140,16 @@ version-specific anchor sets:
 - `codex-rs/core/src/tools/handlers/multi_agents_common.rs`
 - `codex-rs/core/src/tools/handlers/multi_agents_v2/wait.rs`
 - `codex-rs/core/src/tools/handlers/multi_agents_spec.rs`
+- `codex-rs/core/src/tools/handlers/multi_agents_spec_tests.rs`
+- `codex-rs/core/src/tools/handlers/multi_agents_tests.rs`
 - `codex-rs/core/src/config/config_tests.rs`
+- `codex-rs/core/src/tools/spec_plan_tests.rs`
+- `codex-rs/core/tests/suite/agent_execution.rs`
+- `codex-rs/core/tests/suite/multi_agent_resume.rs`
+- `codex-rs/core/tests/suite/pending_input.rs`
+- `codex-rs/core/tests/suite/spawn_agent_description.rs`
+- `codex-rs/core/tests/suite/subagent_notifications.rs`
+- `codex-rs/core/config.schema.json`
 - `codex-rs/models-manager/src/manager.rs`
 
 Inspect the active manifest with:
@@ -157,9 +166,18 @@ explicit V2 session cap takes precedence over the legacy
 spawn schema omits native role/model/reasoning/service-tier overrides and V2
 children ignore native `[agents]` model/reasoning defaults. Passive role files
 in a trusted project are therefore tolerated for launch compatibility but are
-not selectable through the canonical Qwendex V2 spawn schema. Stock Codex
+not selectable through the canonical Qwendex V2 spawn schema. The patched
+Codex integration suite retains the upstream no-role V1 baseline and keeps a
+configured role in its V2 fixture while asserting that V2 hides it. Stock Codex
 remains a valid Off-mode recovery binary, but it does not provide those exact
 Qwendex guarantees.
+
+The same patch keeps the V2 tool schema and parser sealed to the same four
+per-child overrides. Its integration coverage proves that child threads cannot
+spawn descendants, child policy stays inherited across fresh and resumed
+threads, passive native roles do not alter V2 children, and no-child waits
+return immediately. It also exercises running-child timeout paths and
+regenerates Codex's config schema for the Qwendex TUI key bindings.
 
 The canonical development workflow is `qwendex-dev codex-patch apply`, focused
 Rust tests, `cargo fmt --check`, `codex-patch preflight --require-applied`, and

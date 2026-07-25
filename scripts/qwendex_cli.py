@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.6.5"
+VERSION = "0.6.6"
 CONFIG_DIR = ROOT / "config" / "qwendex"
 DEFAULT_PROJECT_CONFIG = CONFIG_DIR / "qwendex.json"
 DEFAULT_USER_CONFIG = Path.home() / ".config" / "qwendex" / "config.json"
@@ -690,6 +690,68 @@ CODEX_PATCH_MANIFESTS["0.145.0"] = {
                 "agent_default_subagent_model",
             ],
         },
+        {
+            "path": "codex-rs/core/tests/suite/spawn_agent_description.rs",
+            "anchors": [
+                "configured_agent_roles_control_spawn_agent_type",
+                "spawn_agent_exposes_agent_type",
+            ],
+        },
+        {
+            "path": "codex-rs/core/tests/suite/agent_execution.rs",
+            "anchors": [
+                "const SECOND_TASK",
+                "max_concurrent_threads_per_session = 2",
+            ],
+        },
+        {
+            "path": "codex-rs/core/tests/suite/subagent_notifications.rs",
+            "anchors": [
+                "const TURN_0_FORK_PROMPT",
+                "agent_default_subagent_model",
+            ],
+        },
+        {
+            "path": "codex-rs/core/tests/suite/multi_agent_resume.rs",
+            "anchors": [
+                "const FOLLOWUP_TASK",
+                "follow-up should lazily reload the original worker",
+            ],
+        },
+        {
+            "path": "codex-rs/core/tests/suite/pending_input.rs",
+            "anchors": [
+                "const WAIT_CALL_ID",
+                "Feature::MultiAgentV2",
+            ],
+        },
+        {
+            "path": "codex-rs/core/config.schema.json",
+            "anchors": [
+                '"queue": null',
+                "Queue the current composer draft while a task is running.",
+            ],
+            "patch_anchors": [
+                "qwendex_toggle_kaveman",
+                "qwendex_toggle_local",
+                "qwendex_toggle_manager",
+            ],
+        },
+        {
+            "path": "codex-rs/core/src/tools/handlers/multi_agents_tests.rs",
+            "anchors": [
+                "multi_agent_v2_spawn_rejects_legacy_items_field",
+                "multi_agent_v2_wait_agent_uses_configured_default_timeout",
+            ],
+        },
+        {
+            "path": "codex-rs/core/src/tools/handlers/multi_agents_spec_tests.rs",
+            "anchors": ["wait_agent_tool_v2_uses_timeout_only_summary_output"],
+        },
+        {
+            "path": "codex-rs/core/src/tools/spec_plan_tests.rs",
+            "anchors": ["multi_agent_feature_selects_one_agent_tool_family"],
+        },
     ],
     "required_source_edits": [
         edit
@@ -702,6 +764,9 @@ CODEX_PATCH_MANIFESTS["0.145.0"] = {
         "Keep Qwendex V2 spawn input free of native role, model, reasoning, and service-tier overrides.",
         "Prevent V2 children from inheriting native [agents] default model or reasoning controls.",
         "Remove the V2-only reasoning override import that becomes unused under the fixed Qwendex worker contract.",
+        "Prove configured native roles remain passive input but hidden from the Qwendex V2 spawn schema.",
+        "Keep the native Qwendex V2 schema and handler aligned by sealing every per-child override field.",
+        "Reconcile Codex unit and integration tests plus the generated config schema with the Qwendex V2 and TUI keymap contracts.",
     ],
 }
 
@@ -5352,7 +5417,13 @@ def codex_source_patch_state(source: Path, manifest: Mapping[str, Any]) -> dict[
         anchors = [str(anchor) for anchor in spec.get("anchors", [])]
         absent = [anchor for anchor in anchors if anchor not in text]
         missing_anchors.extend(f"{rel}: {anchor}" for anchor in absent)
-        patched = QWENDEX_CODEX_PATCH_MARKER in text or QWENDEX_CODEX_STATUS_ITEM_ID in text
+        patch_anchors = [str(anchor) for anchor in spec.get("patch_anchors", [])]
+        patch_anchors_ok = bool(patch_anchors) and all(anchor in text for anchor in patch_anchors)
+        patched = (
+            QWENDEX_CODEX_PATCH_MARKER in text
+            or QWENDEX_CODEX_STATUS_ITEM_ID in text
+            or patch_anchors_ok
+        )
         if patched:
             marker_hits.append(rel)
         else:
@@ -5363,6 +5434,7 @@ def codex_source_patch_state(source: Path, manifest: Mapping[str, Any]) -> dict[
             "anchors_ok": not absent,
             "patched": patched,
             "missing_anchors": absent,
+            "patch_anchors_ok": patch_anchors_ok,
         })
     expected_file_count = len(files)
     applied = bool(expected_file_count) and not missing_files and not missing_patch_markers
@@ -5811,14 +5883,14 @@ fn qwendex_kaveman_directive() -> Option<String> {{
     let value = serde_json::from_str::<serde_json::Value>(&raw).ok()?;
     if !value
         .get("kaveman_enabled")
-        .and_then(|enabled| enabled.as_bool())
+        .and_then(serde_json::Value::as_bool)
         .unwrap_or(false)
     {{
         return None;
     }}
     value
         .get("kaveman_directive")
-        .and_then(|directive| directive.as_str())
+        .and_then(serde_json::Value::as_str)
         .map(str::trim)
         .filter(|directive| !directive.is_empty())
         .map(|directive| format!("Qwendex Kaveman directive: {{directive}}"))
@@ -5842,10 +5914,10 @@ pub(crate) fn with_terminal_visualization_instructions(
     }} else {{
         control_instructions
     }};
-    if let Some(existing) = existing_instructions {{
-        if !existing.trim().is_empty() {{
-            blocks.push(existing);
-        }}
+    if let Some(existing) = existing_instructions
+        && !existing.trim().is_empty()
+    {{
+        blocks.push(existing);
     }}
     if visualization_enabled {{
         blocks.push(TERMINAL_VISUALIZATION_INSTRUCTIONS.to_string());
@@ -5855,6 +5927,32 @@ pub(crate) fn with_terminal_visualization_instructions(
     }}
     (!blocks.is_empty()).then(|| blocks.join("\\n\\n"))
 }}
+""",
+                ),
+                (
+                    """        .and_then(|enabled| enabled.as_bool())
+""",
+                    """        .and_then(serde_json::Value::as_bool)
+""",
+                ),
+                (
+                    """        .and_then(|directive| directive.as_str())
+""",
+                    """        .and_then(serde_json::Value::as_str)
+""",
+                ),
+                (
+                    """    if let Some(existing) = existing_instructions {
+        if !existing.trim().is_empty() {
+            blocks.push(existing);
+        }
+    }
+""",
+                    """    if let Some(existing) = existing_instructions
+        && !existing.trim().is_empty()
+    {
+        blocks.push(existing);
+    }
 """,
                 ),
             ],
@@ -6334,6 +6432,15 @@ async fn multi_agent_v2_uses_agents_max_concurrent_threads_per_session() -> std:
                             f"""            // {QWENDEX_CODEX_PATCH_MARKER}: role/model metadata remains hidden.
 """,
                         ),
+                        (
+                            """                        expose_spawn_agent_model_overrides: turn_context
+                            .config
+                            .multi_agent_v2
+                            .expose_spawn_agent_model_overrides,
+""",
+                            """                        expose_spawn_agent_model_overrides: false,
+""",
+                        ),
                     ],
                 },
                 {
@@ -6423,6 +6530,12 @@ async fn multi_agent_v2_uses_agents_max_concurrent_threads_per_session() -> std:
     .await?;
 """,
                         ),
+                        (
+                            """    let role_tag = role_name.unwrap_or(DEFAULT_ROLE_NAME);
+""",
+                            """    let role_tag = DEFAULT_ROLE_NAME;
+""",
+                        ),
                     ],
                 },
                 {
@@ -6457,6 +6570,986 @@ async fn multi_agent_v2_uses_agents_max_concurrent_threads_per_session() -> std:
                     .or_else(|| turn.config.agent_default_subagent_reasoning_effort.clone()),
             )
         }};
+""",
+                        ),
+                    ],
+                },
+                {
+                    "path": "codex-rs/core/tests/suite/spawn_agent_description.rs",
+                    "replacements": [
+                        (
+                            """#[test_case(false, false, MULTI_AGENT_V1_NAMESPACE; "v1 hides agent type without roles")]
+#[test_case(true, true, "collaboration"; "v2 exposes agent type with a role")]
+""",
+                            """#[test_case(false, false, MULTI_AGENT_V1_NAMESPACE; "v1 hides agent type without roles")]
+#[test_case(true, true, "collaboration"; "v2 hides agent type with a role")]
+""",
+                        ),
+                        (
+                            """    assert_eq!(
+        spawn_agent_exposes_agent_type(&response.single_request().body_json(), namespace),
+        has_agent_role
+    );
+""",
+                            f"""    {marker}
+    assert!(!spawn_agent_exposes_agent_type(
+        &response.single_request().body_json(),
+        namespace
+    ));
+""",
+                        ),
+                    ],
+                },
+                {
+                    "path": "codex-rs/core/tests/suite/agent_execution.rs",
+                    "replacements": [
+                        (
+                            """async fn v2_nested_spawn_checks_shared_active_execution_capacity() -> Result<()> {
+""",
+                            f"""{marker}
+async fn v2_nested_spawn_is_rejected_for_non_root_agent() -> Result<()> {{
+""",
+                        ),
+                        (
+                            """    assert_eq!(
+        second_output,
+        "collab spawn failed: agent thread limit reached"
+    );
+""",
+                            """    assert!(second_output.starts_with("unsupported call:"));
+    assert!(second_output.contains("spawn_agent"));
+""",
+                        ),
+                    ],
+                },
+                {
+                    "path": "codex-rs/core/tests/suite/subagent_notifications.rs",
+                    "replacements": [
+                        (
+                            """const V2_REQUESTED_MODEL: &str = "gpt-5.6-sol";
+const V2_REQUESTED_REASONING_EFFORT: ReasoningEffort = ReasoningEffort::Low;
+""",
+                            f"""// {QWENDEX_CODEX_PATCH_MARKER}: V2 ignores native per-child model and reasoning overrides.
+""",
+                        ),
+                        (
+                            """#[derive(Clone, Copy)]
+enum FullHistoryV2ModelSelection {
+    ConfiguredDefault,
+    ExplicitOverride,
+}
+
+#[test_case(FullHistoryV2ModelSelection::ConfiguredDefault; "configured default with omitted fork_turns")]
+#[test_case(FullHistoryV2ModelSelection::ExplicitOverride; "explicit override with fork_turns all")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spawned_full_history_v2_child_uses_model_precedence_without_dropping_context(
+    selection: FullHistoryV2ModelSelection,
+) -> Result<()> {
+""",
+                            """#[derive(Clone, Copy)]
+enum FullHistoryV2ForkMode {
+    Omitted,
+    All,
+}
+
+#[test_case(FullHistoryV2ForkMode::Omitted; "omitted fork_turns")]
+#[test_case(FullHistoryV2ForkMode::All; "fork_turns all")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spawned_full_history_v2_child_inherits_root_policy_without_dropping_context(
+    fork_mode: FullHistoryV2ForkMode,
+) -> Result<()> {
+""",
+                        ),
+                        (
+                            """    let (spawn_args, expected_model, expected_reasoning_effort) = match selection {
+        FullHistoryV2ModelSelection::ConfiguredDefault => (
+            json!({
+                "message": CHILD_PROMPT,
+                "task_name": "worker",
+            }),
+            V2_DEFAULT_MODEL,
+            V2_DEFAULT_REASONING_EFFORT,
+        ),
+        FullHistoryV2ModelSelection::ExplicitOverride => (
+            json!({
+                "message": CHILD_PROMPT,
+                "task_name": "worker",
+                "fork_turns": "all",
+                "model": V2_REQUESTED_MODEL,
+                "reasoning_effort": V2_REQUESTED_REASONING_EFFORT,
+            }),
+            V2_REQUESTED_MODEL,
+            V2_REQUESTED_REASONING_EFFORT,
+        ),
+    };
+""",
+                            """    let spawn_args = match fork_mode {
+        FullHistoryV2ForkMode::Omitted => json!({
+            "message": CHILD_PROMPT,
+            "task_name": "worker",
+        }),
+        FullHistoryV2ForkMode::All => json!({
+            "message": CHILD_PROMPT,
+            "task_name": "worker",
+            "fork_turns": "all",
+        }),
+    };
+    let expected_model = INHERITED_MODEL;
+""",
+                        ),
+                        (
+                            """    test.submit_turn(TURN_0_FORK_PROMPT).await?;
+    let _ = seed_turn.single_request();
+    test.submit_turn(TURN_1_PROMPT).await?;
+    let _ = spawn_turn.single_request();
+
+    let child_request = wait_for_request_with_model(&child_request_log, expected_model).await?;
+    assert!(child_request.body_contains_text(TURN_0_FORK_PROMPT));
+    let child_body = child_request.body_json();
+    assert_eq!(
+        (
+            child_body["model"].clone(),
+            child_body["reasoning"]["effort"].clone(),
+        ),
+        (
+            json!(expected_model),
+            json!(expected_reasoning_effort.to_string()),
+        )
+    );
+""",
+                            """    test.submit_turn(TURN_0_FORK_PROMPT).await?;
+    let _ = seed_turn.single_request();
+    test.submit_turn(TURN_1_PROMPT).await?;
+    let parent_request = spawn_turn.single_request();
+    let parent_body = parent_request.body_json();
+    assert_eq!(parent_body["model"], json!(expected_model));
+    let expected_reasoning_effort = parent_body["reasoning"]["effort"].clone();
+
+    let child_request = wait_for_request_with_model(&child_request_log, expected_model).await?;
+    assert!(child_request.body_contains_text(TURN_0_FORK_PROMPT));
+    let child_body = child_request.body_json();
+    assert_eq!(
+        (
+            child_body["model"].clone(),
+            child_body["reasoning"]["effort"].clone(),
+        ),
+        (json!(expected_model), expected_reasoning_effort)
+    );
+""",
+                        ),
+                    ],
+                },
+                {
+                    "path": "codex-rs/core/tests/suite/multi_agent_resume.rs",
+                    "replacements": [
+                        (
+                            """use codex_protocol::models::PermissionProfile;
+use codex_protocol::openai_models::ReasoningEffort;
+""",
+                            f"""// {QWENDEX_CODEX_PATCH_MARKER}: V2 resume coverage verifies inherited policy, not native roles.
+""",
+                        ),
+                        (
+                            """const ROLE_MODEL: &str = "gpt-5.4";
+const ROLE_MODEL_PROVIDER_ID: &str = "mock";
+""",
+                            f"""// {QWENDEX_CODEX_PATCH_MARKER}: the configured role remains passive in V2.
+const ROLE_MODEL: &str = "gpt-5.4";
+""",
+                        ),
+                        (
+                            """async fn cold_root_resume_restores_agent_identity_and_role_on_followup() -> Result<()> {
+""",
+                            """async fn cold_root_resume_restores_agent_identity_and_inherited_policy_on_followup() -> Result<()> {
+""",
+                        ),
+                        (
+                            """    let spawn_args = serde_json::to_string(&json!({
+        "message": INITIAL_TASK,
+        "task_name": "worker",
+        "agent_type": ROLE_NAME,
+        "fork_turns": "none",
+    }))?;
+""",
+                            """    let spawn_args = serde_json::to_string(&json!({
+        "message": INITIAL_TASK,
+        "task_name": "worker",
+        "fork_turns": "none",
+    }))?;
+""",
+                        ),
+                        (
+                            """    }))?;
+    mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| body_contains(request, INITIAL_PROMPT),
+""",
+                            """    }))?;
+    let initial_root_request = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| body_contains(request, INITIAL_PROMPT),
+""",
+                        ),
+                        (
+                            """    assert!(initial_child_request.requests().iter().any(|request| {
+        request.body_contains_text(INITIAL_TASK)
+            && request.body_contains_text(ROLE_DEVELOPER_INSTRUCTIONS)
+    }));
+    let initial_worker_config = worker_thread.config_snapshot().await;
+    let initial_worker_role_config = (
+        initial_worker_config.model,
+        initial_worker_config.model_provider_id,
+        initial_worker_config.reasoning_effort,
+        initial_worker_config.permission_profile,
+    );
+    assert_eq!(
+        initial_worker_role_config,
+        (
+            ROLE_MODEL.to_string(),
+            ROLE_MODEL_PROVIDER_ID.to_string(),
+            Some(ReasoningEffort::High),
+            PermissionProfile::Disabled,
+        )
+    );
+""",
+                            """    let initial_root_request = initial_root_request
+        .requests()
+        .into_iter()
+        .next()
+        .expect("initial root request");
+    let initial_child_request = initial_child_request
+        .requests()
+        .into_iter()
+        .next()
+        .expect("initial child request");
+    assert!(initial_child_request.body_contains_text(INITIAL_TASK));
+    assert!(!initial_child_request.body_contains_text(ROLE_DEVELOPER_INSTRUCTIONS));
+    let initial_root_body = initial_root_request.body_json();
+    let initial_child_body = initial_child_request.body_json();
+    assert_eq!(initial_child_body["model"], initial_root_body["model"]);
+    assert_eq!(
+        initial_child_body["reasoning"]["effort"],
+        initial_root_body["reasoning"]["effort"]
+    );
+    let root_config = initial.codex.config_snapshot().await;
+    let initial_worker_config = worker_thread.config_snapshot().await;
+    assert_eq!(initial_worker_config.model, root_config.model);
+    assert_eq!(
+        initial_worker_config.model_provider_id,
+        root_config.model_provider_id
+    );
+    assert_eq!(
+        initial_worker_config.permission_profile,
+        root_config.permission_profile
+    );
+    let initial_worker_inherited_policy = (
+        initial_worker_config.model,
+        initial_worker_config.model_provider_id,
+        initial_worker_config.reasoning_effort,
+        initial_worker_config.permission_profile,
+    );
+""",
+                        ),
+                        (
+                            """    assert!(followup_child_request.requests().iter().any(|request| {
+        request.body_contains_text(FOLLOWUP_TASK)
+            && request.body_contains_text(ROLE_DEVELOPER_INSTRUCTIONS)
+    }));
+""",
+                            """    assert!(followup_child_request.requests().iter().any(|request| {
+        request.body_contains_text(FOLLOWUP_TASK)
+            && !request.body_contains_text(ROLE_DEVELOPER_INSTRUCTIONS)
+    }));
+""",
+                        ),
+                        (
+                            """    let reloaded_worker_role_config = (
+        reloaded_worker_config.model,
+        reloaded_worker_config.model_provider_id,
+        reloaded_worker_config.reasoning_effort,
+        reloaded_worker_config.permission_profile,
+    );
+    assert_eq!(reloaded_worker_role_config, initial_worker_role_config);
+""",
+                            """    let reloaded_worker_inherited_policy = (
+        reloaded_worker_config.model,
+        reloaded_worker_config.model_provider_id,
+        reloaded_worker_config.reasoning_effort,
+        reloaded_worker_config.permission_profile,
+    );
+    assert_eq!(
+        reloaded_worker_inherited_policy,
+        initial_worker_inherited_policy
+    );
+""",
+                        ),
+                    ],
+                },
+                {
+                    "path": "codex-rs/core/tests/suite/pending_input.rs",
+                    "replacements": [
+                        (
+                            """async fn steer_interrupts_wait_agent_and_is_sent_in_follow_up_request() {
+    const WAIT_CALL_ID: &str = "wait-call";
+    const INITIAL_PROMPT: &str = "wait for an agent";
+    const STEER_PROMPT: &str = "stop waiting and continue";
+    const MULTI_AGENT_V2_NAMESPACE: &str = "collaboration";
+
+    let first_chunks = vec![
+        chunk(ev_response_created("resp-1")),
+        chunk(ev_function_call_with_namespace(
+            WAIT_CALL_ID,
+            MULTI_AGENT_V2_NAMESPACE,
+            "wait_agent",
+            r#"{"timeout_ms":10000}"#,
+        )),
+        chunk(ev_completed("resp-1")),
+    ];
+    let (server, _completions) =
+        start_streaming_sse_server(vec![first_chunks, response_completed_chunks("resp-2")]).await;
+    let codex = test_codex()
+        .with_model("gpt-5.4")
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::MultiAgentV2)
+                .expect("test config should allow feature update");
+        })
+        .build_with_streaming_server(&server)
+        .await
+        .expect("build Codex test session")
+        .codex;
+
+    submit_user_input(&codex, INITIAL_PROMPT).await;
+    wait_for_event(&codex, |event| {
+        matches!(event, EventMsg::CollabWaitingBegin(_))
+    })
+    .await;
+
+    steer_user_input(&codex, STEER_PROMPT).await;
+    wait_for_turn_complete(&codex).await;
+
+    let requests = server.requests().await;
+    assert_eq!(requests.len(), 2);
+    let second: Value = from_slice(&requests[1]).expect("parse second request");
+    let relevant_user_input = message_input_texts(&second, "user")
+        .into_iter()
+        .filter(|text| text == INITIAL_PROMPT || text == STEER_PROMPT)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        relevant_user_input,
+        vec![INITIAL_PROMPT.to_string(), STEER_PROMPT.to_string()]
+    );
+    let wait_output = function_call_output_text(&second, WAIT_CALL_ID).expect("wait_agent output");
+    assert_eq!(
+        serde_json::from_str::<Value>(wait_output).expect("parse wait_agent output"),
+        json!({
+            "message": "Wait interrupted by new input.",
+            "timed_out": false,
+        })
+    );
+
+    server.shutdown().await;
+}
+""",
+                            f"""{marker}
+async fn wait_agent_without_running_child_returns_immediately() {{
+    const WAIT_CALL_ID: &str = "wait-call";
+    const INITIAL_PROMPT: &str = "wait for an agent";
+    const MULTI_AGENT_V2_NAMESPACE: &str = "collaboration";
+
+    let first_chunks = vec![
+        chunk(ev_response_created("resp-1")),
+        chunk(ev_function_call_with_namespace(
+            WAIT_CALL_ID,
+            MULTI_AGENT_V2_NAMESPACE,
+            "wait_agent",
+            r#"{{"timeout_ms":10000}}"#,
+        )),
+        chunk(ev_completed("resp-1")),
+    ];
+    let (server, _completions) =
+        start_streaming_sse_server(vec![first_chunks, response_completed_chunks("resp-2")]).await;
+    let test = test_codex()
+        .with_model("gpt-5.4")
+        .with_config(|config| {{
+            config
+                .features
+                .enable(Feature::Collab)
+                .expect("test config should allow collab");
+            config
+                .features
+                .enable(Feature::MultiAgentV2)
+                .expect("test config should allow feature update");
+        }})
+        .build_with_streaming_server(&server)
+        .await
+        .expect("build Codex test session");
+    let codex = Arc::clone(&test.codex);
+
+    submit_user_input(&codex, INITIAL_PROMPT).await;
+    wait_for_turn_complete(&codex).await;
+
+    let requests = server.requests().await;
+    assert_eq!(requests.len(), 2);
+    let second: Value = from_slice(&requests[1]).expect("parse second request");
+    let relevant_user_input = message_input_texts(&second, "user")
+        .into_iter()
+        .filter(|text| text == INITIAL_PROMPT)
+        .collect::<Vec<_>>();
+    assert_eq!(relevant_user_input, vec![INITIAL_PROMPT.to_string()]);
+    let wait_output = function_call_output_text(&second, WAIT_CALL_ID).expect("wait_agent output");
+    assert_eq!(
+        serde_json::from_str::<Value>(wait_output).expect("parse wait_agent output"),
+        json!({{
+            "message": "No child agent is running. Do not retry wait_agent; integrate terminal results, finalize, or use one explicitly bounded followup_task for revalidation.",
+            "timed_out": false,
+        }})
+    );
+
+    server.shutdown().await;
+}}
+""",
+                        ),
+                    ],
+                },
+                {
+                    "path": "codex-rs/core/src/tools/handlers/multi_agents_tests.rs",
+                    "replacements": [
+                        (
+                            """use codex_protocol::openai_models::ReasoningEffort;
+""",
+                            """// QWENDEX_CODEX_TUI_PATCH_V1: V2 tests intentionally omit native reasoning overrides.
+""",
+                        ),
+                        (
+                            """        .expect("fork_turns=all should reject agent_type overrides");
+
+    assert_eq!(
+        err,
+        FunctionCallError::RespondToModel(
+            "Full-history forked agents inherit the parent agent type; omit agent_type, or spawn without a full-history fork.".to_string(),
+        )
+    );
+""",
+                            """        .expect("fork_turns=all should reject agent_type overrides");
+
+    let FunctionCallError::RespondToModel(message) = err else {
+        panic!("expected a model-facing validation error");
+    };
+    assert!(message.contains("unknown field `agent_type`"));
+""",
+                        ),
+                        (
+                            """async fn multi_agent_v2_spawn_rejects_child_model_from_different_backend() {
+""",
+                            """async fn multi_agent_v2_spawn_rejects_model_override() {
+""",
+                        ),
+                        (
+                            """        .expect("model from a different multi-agent backend should be rejected");
+
+    assert_eq!(
+        err,
+        FunctionCallError::RespondToModel(
+            "Unknown model `gpt-5.4` for spawn_agent. Available models: gpt-5.6-sol, gpt-5.6-terra"
+                .to_string()
+        )
+    );
+""",
+                            """        .expect("Qwendex V2 should reject model overrides");
+
+    let FunctionCallError::RespondToModel(message) = err else {
+        panic!("expected a model-facing validation error");
+    };
+    assert!(message.contains("unknown field `model`"));
+""",
+                        ),
+                        (
+                            """#[tokio::test]
+async fn multi_agent_v2_full_history_fork_accepts_explicit_service_tier() {
+    #[derive(Debug, Deserialize)]
+    struct SpawnAgentResult {
+        task_name: String,
+    }
+
+    let (mut session, turn) = make_session_and_context().await;
+    let mut turn = turn
+        .with_model("gpt-5.4".to_string(), &session.services.models_manager)
+        .await;
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    set_turn_config(&mut turn, config);
+    let manager = thread_manager();
+    let root = manager
+        .start_thread((*turn.config).clone())
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.thread_id = root.thread_id;
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+
+    let output = SpawnAgentHandlerV2::default()
+        .handle(invocation(
+            session.clone(),
+            turn.clone(),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "inspect this repo",
+                "task_name": "fork_with_tier",
+                "service_tier": ServiceTier::Fast.request_value()
+            })),
+        ))
+        .await
+        .expect("multi-agent v2 full-history fork should accept explicit service tier");
+    let (content, _) = expect_text_output(output);
+    let result: SpawnAgentResult =
+        serde_json::from_str(&content).expect("spawn_agent result should be json");
+    let child_thread_id = session
+        .services
+        .agent_control
+        .resolve_agent_reference(
+            session.thread_id,
+            &turn.session_source,
+            result.task_name.as_str(),
+        )
+        .await
+        .expect("spawned task name should resolve");
+    let snapshot = manager
+        .get_thread(child_thread_id)
+        .await
+        .expect("spawned agent thread should exist")
+        .config_snapshot()
+        .await;
+
+    assert_eq!(
+        snapshot.service_tier,
+        Some(ServiceTier::Fast.request_value().to_string())
+    );
+}
+
+#[tokio::test]
+async fn multi_agent_v2_spawn_partial_fork_turns_allows_agent_type_override() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let role_name = install_role_with_model_override(&mut turn).await;
+    let manager = thread_manager();
+    let root = manager
+        .start_thread((*turn.config).clone())
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.thread_id = root.thread_id;
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    let turn = TurnContext {
+        config: Arc::new(config),
+        multi_agent_version: codex_protocol::protocol::MultiAgentVersion::V2,
+        ..turn
+    };
+
+    let output = SpawnAgentHandlerV2::default()
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "inspect this repo",
+                "task_name": "partial_fork",
+                "agent_type": role_name,
+                "fork_turns": "1"
+            })),
+        ))
+        .await
+        .expect("partial fork should allow agent_type overrides");
+    let (content, _) = expect_text_output(output);
+    let result: serde_json::Value =
+        serde_json::from_str(&content).expect("spawn_agent result should be json");
+    assert_eq!(result["task_name"], "/root/partial_fork");
+    let agent_id = manager
+        .captured_ops()
+        .into_iter()
+        .map(|(thread_id, _)| thread_id)
+        .find(|thread_id| *thread_id != root.thread_id)
+        .expect("spawned agent should receive an op");
+    let snapshot = manager
+        .get_thread(agent_id)
+        .await
+        .expect("spawned agent thread should exist")
+        .config_snapshot()
+        .await;
+
+    assert_eq!(snapshot.model, "gpt-5-role-override");
+    assert_eq!(snapshot.model_provider_id, "ollama");
+    assert_eq!(snapshot.reasoning_effort, Some(ReasoningEffort::Minimal));
+}
+""",
+                            """#[tokio::test]
+async fn multi_agent_v2_rejects_explicit_service_tier() {
+    let (session, mut turn) = make_session_and_context().await;
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    set_turn_config(&mut turn, config);
+
+    let err = SpawnAgentHandlerV2::default()
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "inspect this repo",
+                "task_name": "fork_with_tier",
+                "service_tier": ServiceTier::Fast.request_value()
+            })),
+        ))
+        .await
+        .err()
+        .expect("Qwendex V2 should reject service-tier overrides");
+    let FunctionCallError::RespondToModel(message) = err else {
+        panic!("expected a model-facing validation error");
+    };
+    assert!(message.contains("unknown field `service_tier`"));
+}
+
+#[tokio::test]
+async fn multi_agent_v2_spawn_partial_fork_rejects_agent_type_override() {
+    let (session, mut turn) = make_session_and_context().await;
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    set_turn_config(&mut turn, config);
+
+    let err = SpawnAgentHandlerV2::default()
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "inspect this repo",
+                "task_name": "partial_fork",
+                "agent_type": "researcher",
+                "fork_turns": "1"
+            })),
+        ))
+        .await
+        .err()
+        .expect("Qwendex V2 should reject agent-type overrides");
+    let FunctionCallError::RespondToModel(message) = err else {
+        panic!("expected a model-facing validation error");
+    };
+    assert!(message.contains("unknown field `agent_type`"));
+}
+""",
+                        ),
+                        (
+                            """#[tokio::test]
+async fn multi_agent_v2_wait_agent_rejects_timeout_below_configured_min() {
+""",
+                            """// QWENDEX_CODEX_TUI_PATCH_V1
+async fn v2_wait_session_with_running_worker(
+    mut session: crate::session::session::Session,
+    turn: TurnContext,
+) -> (
+    ThreadManager,
+    Arc<crate::session::session::Session>,
+    Arc<TurnContext>,
+) {
+    let manager = thread_manager();
+    let root = manager
+        .start_thread((*turn.config).clone())
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.thread_id = root.thread_id;
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+    SpawnAgentHandlerV2::default()
+        .handle(invocation(
+            session.clone(),
+            turn.clone(),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "stay available for wait timeout coverage",
+                "task_name": "timeout_worker"
+            })),
+        ))
+        .await
+        .expect("spawn timeout worker");
+    (manager, session, turn)
+}
+
+#[tokio::test]
+async fn multi_agent_v2_wait_agent_rejects_timeout_below_configured_min() {
+""",
+                        ),
+                        (
+                            """    config.multi_agent_v2.min_wait_timeout_ms = 1;
+    config.multi_agent_v2.max_wait_timeout_ms = 1_000;
+    config.multi_agent_v2.default_wait_timeout_ms = 50;
+    set_turn_config(&mut turn, config);
+
+    let output = WaitAgentHandlerV2::default()
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+""",
+                            """    config.multi_agent_v2.min_wait_timeout_ms = 1;
+    config.multi_agent_v2.max_wait_timeout_ms = 1_000;
+    config.multi_agent_v2.default_wait_timeout_ms = 50;
+    set_turn_config(&mut turn, config);
+    let (_manager, session, turn) = v2_wait_session_with_running_worker(session, turn).await;
+
+    let output = WaitAgentHandlerV2::default()
+        .handle(invocation(
+            session,
+            turn,
+""",
+                        ),
+                        (
+                            """    config.multi_agent_v2.min_wait_timeout_ms = 1;
+    config.multi_agent_v2.max_wait_timeout_ms = 1_000;
+    config.multi_agent_v2.default_wait_timeout_ms = 50;
+    set_turn_config(&mut turn, config);
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+
+    let early = timeout(
+""",
+                            """    config.multi_agent_v2.min_wait_timeout_ms = 1;
+    config.multi_agent_v2.max_wait_timeout_ms = 1_000;
+    config.multi_agent_v2.default_wait_timeout_ms = 50;
+    set_turn_config(&mut turn, config);
+    let (_manager, session, turn) = v2_wait_session_with_running_worker(session, turn).await;
+
+    let early = timeout(
+""",
+                        ),
+                        (
+                            """    config.multi_agent_v2.min_wait_timeout_ms = 0;
+    config.multi_agent_v2.max_wait_timeout_ms = 0;
+    config.multi_agent_v2.default_wait_timeout_ms = 0;
+    set_turn_config(&mut turn, config);
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+""",
+                            """    config.multi_agent_v2.min_wait_timeout_ms = 0;
+    config.multi_agent_v2.max_wait_timeout_ms = 0;
+    config.multi_agent_v2.default_wait_timeout_ms = 0;
+    set_turn_config(&mut turn, config);
+    let (_manager, session, turn) = v2_wait_session_with_running_worker(session, turn).await;
+""",
+                        ),
+                        (
+                            """    config.multi_agent_v2.min_wait_timeout_ms = 1;
+    config.multi_agent_v2.max_wait_timeout_ms = 1;
+    config.multi_agent_v2.default_wait_timeout_ms = 1;
+    set_turn_config(&mut turn, config);
+
+    let output = WaitAgentHandlerV2::default()
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+""",
+                            """    config.multi_agent_v2.min_wait_timeout_ms = 1;
+    config.multi_agent_v2.max_wait_timeout_ms = 1;
+    config.multi_agent_v2.default_wait_timeout_ms = 1;
+    set_turn_config(&mut turn, config);
+    let (_manager, session, turn) = v2_wait_session_with_running_worker(session, turn).await;
+
+    let output = WaitAgentHandlerV2::default()
+        .handle(invocation(
+            session,
+            turn,
+""",
+                        ),
+                        (
+                            """            message: "Wait timed out.".to_string(),
+""",
+                            """            message: "Wait timed out. Inspect list_agents before any retry; do not retry when no child is running.".to_string(),
+""",
+                        ),
+                        (
+                            """    assert_eq!(success, None);
+}
+
+#[tokio::test]
+async fn wait_agent_returns_not_found_for_missing_agents() {
+""",
+                            """    assert_eq!(success, None);
+}
+
+#[tokio::test]
+async fn multi_agent_v2_wait_agent_returns_immediately_without_running_children() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    session.services.agent_control = manager.agent_control();
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    set_turn_config(&mut turn, config);
+
+    let output = timeout(
+        Duration::from_secs(/*secs*/ 1),
+        WaitAgentHandlerV2::default().handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "wait_agent",
+            function_payload(json!({})),
+        )),
+    )
+    .await
+    .expect("no-child wait should complete immediately")
+    .expect("wait_agent should succeed");
+    let (content, success) = expect_text_output(output);
+    let result: crate::tools::handlers::multi_agents_v2::wait::WaitAgentResult =
+        serde_json::from_str(&content).expect("wait_agent result should be json");
+    assert!(!result.timed_out);
+    assert!(result.message.contains("No child agent is running"));
+    assert_eq!(success, None);
+}
+
+#[tokio::test]
+async fn wait_agent_returns_not_found_for_missing_agents() {
+""",
+                        ),
+                    ],
+                },
+                {
+                    "path": "codex-rs/core/src/tools/spec_plan_tests.rs",
+                    "replacements": [
+                        (
+                            """    for property in ["model", "reasoning_effort"] {
+        assert!(spawn_agent_properties.contains_key(property));
+    }
+    for property in ["agent_type", "service_tier"] {
+        assert!(!spawn_agent_properties.contains_key(property));
+    }
+""",
+                            f"""    {marker}
+    for property in ["agent_type", "model", "reasoning_effort", "service_tier"] {{
+        assert!(!spawn_agent_properties.contains_key(property));
+    }}
+""",
+                        ),
+                    ],
+                },
+                {
+                    "path": "codex-rs/core/src/tools/handlers/multi_agents_spec_tests.rs",
+                    "replacements": [
+                        (
+                            """    assert!(description.contains(
+        "Does not return the content; returns either a summary of which agents have updates (if any)"
+    ));
+""",
+                            f"""    {marker}
+    assert!(description.contains("Returns immediately when no child is running."));
+    assert!(description.contains("do not retry wait_agent unless a child is still running."));
+""",
+                        ),
+                    ],
+                },
+                {
+                    "path": "codex-rs/core/config.schema.json",
+                    "replacements": [
+                        (
+                            """              "open_transcript": null,
+              "queue": null,
+              "submit": null,
+""",
+                            """              "open_transcript": null,
+              "queue": null,
+              "qwendex_toggle_kaveman": null,
+              "qwendex_toggle_local": null,
+              "qwendex_toggle_manager": null,
+              "submit": null,
+""",
+                        ),
+                        (
+                            """        "open_transcript": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Open the transcript overlay."
+        },
+        "queue": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Queue the current composer draft while a task is running."
+        },
+        "submit": {
+""",
+                            """        "open_transcript": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Open the transcript overlay."
+        },
+        "queue": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Queue the current composer draft while a task is running."
+        },
+        "qwendex_toggle_kaveman": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Toggle Qwendex Kaveman output mode."
+        },
+        "qwendex_toggle_local": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Toggle Qwendex local routing."
+        },
+        "qwendex_toggle_manager": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Toggle Qwendex Manager Mode."
+        },
+        "submit": {
+""",
+                        ),
+                        (
+                            """            "open_transcript": null,
+            "queue": null,
+            "submit": null,
+""",
+                            """            "open_transcript": null,
+            "queue": null,
+            "qwendex_toggle_kaveman": null,
+            "qwendex_toggle_local": null,
+            "qwendex_toggle_manager": null,
+            "submit": null,
 """,
                         ),
                     ],

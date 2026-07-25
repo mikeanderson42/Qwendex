@@ -35,7 +35,7 @@ QWENDEX_RELEASE_CODEX_SOURCE_REPO="https://github.com/openai/codex.git"
 QWENDEX_CODEX_SOURCE_REPO="${QWENDEX_CODEX_SOURCE_REPO:-$QWENDEX_RELEASE_CODEX_SOURCE_REPO}"
 QWENDEX_RELEASE_CODEX_VERSION="0.145.0"
 QWENDEX_RELEASE_CODEX_SOURCE_COMMIT="25af12f7e61572b0bc18ddb1008be543b91519b0"
-QWENDEX_RELEASE_CODEX_PATCH_SHA256="55d64671c47059d4d3e95666238d1fcaf2272fb57cb17d1799ced4f9214ae7a3"
+QWENDEX_RELEASE_CODEX_PATCH_SHA256="978e5ebd5255cab5286cc2ee1e1f04970d25eb36877a10cef78b3068d75e593e"
 QWENDEX_RELEASE_CODEX_CARGO_LOCK_SHA256="ffa26a770e6bce911f93f2e170d8a76bf27abb4c4696bb81a9a65940de1f217e"
 QWENDEX_CODEX_SOURCE_REF="${QWENDEX_CODEX_SOURCE_REF:-rust-v$QWENDEX_RELEASE_CODEX_VERSION}"
 QWENDEX_MODELS_CACHE_FILE="models_cache.qwendex-$QWENDEX_RELEASE_CODEX_VERSION.json"
@@ -1375,7 +1375,16 @@ allowed_changes = {
     "codex-rs/core/src/tools/handlers/multi_agents_v2.rs",
     "codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs",
     "codex-rs/core/src/tools/handlers/multi_agents_v2/wait.rs",
+    "codex-rs/core/src/tools/handlers/multi_agents_spec_tests.rs",
+    "codex-rs/core/src/tools/handlers/multi_agents_tests.rs",
     "codex-rs/core/src/tools/spec_plan.rs",
+    "codex-rs/core/src/tools/spec_plan_tests.rs",
+    "codex-rs/core/tests/suite/agent_execution.rs",
+    "codex-rs/core/tests/suite/multi_agent_resume.rs",
+    "codex-rs/core/tests/suite/pending_input.rs",
+    "codex-rs/core/tests/suite/spawn_agent_description.rs",
+    "codex-rs/core/tests/suite/subagent_notifications.rs",
+    "codex-rs/core/config.schema.json",
     "codex-rs/hooks/src/events/session_start.rs",
     "codex-rs/hooks/src/schema.rs",
     "codex-rs/models-manager/src/manager.rs",
@@ -1437,6 +1446,15 @@ else:
         "codex-rs/core/src/tools/handlers/multi_agents_common.rs",
         "codex-rs/core/src/tools/handlers/multi_agents_v2.rs",
         "codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs",
+        "codex-rs/core/src/tools/handlers/multi_agents_spec_tests.rs",
+        "codex-rs/core/src/tools/handlers/multi_agents_tests.rs",
+        "codex-rs/core/src/tools/spec_plan_tests.rs",
+        "codex-rs/core/tests/suite/agent_execution.rs",
+        "codex-rs/core/tests/suite/multi_agent_resume.rs",
+        "codex-rs/core/tests/suite/pending_input.rs",
+        "codex-rs/core/tests/suite/spawn_agent_description.rs",
+        "codex-rs/core/tests/suite/subagent_notifications.rs",
+        "codex-rs/core/config.schema.json",
     }
 missing_patch_paths = sorted(required_patch_paths - set(changed_paths))
 source_diff = run(

@@ -1,6 +1,4 @@
-# v0.6.5
-
-## Pending compatibility repair
+# v0.6.6
 
 Codex `0.145.0` Qdex launch and TUI compatibility repair.
 
@@ -12,10 +10,15 @@ Codex `0.145.0` Qdex launch and TUI compatibility repair.
   Codex native-role definitions. Explicit role/profile activation remains
   unavailable, and the canonical V2 patch still keeps role/model/reasoning/
   service-tier inputs outside the Qwendex child contract.
-- Adds regression coverage for both sealed config-baseline drift and project role
-  surfaces without changing the Codex `0.145.0` Rust patch or memory boundary.
+- Adds regression coverage for sealed config-baseline drift and project role
+  surfaces, including a patched Codex integration assertion that V2 keeps
+  configured native roles out of the `spawn_agent` schema.
+- Seals native V2 tool-schema overrides to match the parser and refreshes the
+  Codex config-schema and wait-path tests used by the release gate.
+- Isolates direct CLI smoke subprocesses from every ambient Qwendex runtime
+  variable so validation remains deterministic inside an active Qdex session.
 
-## Release baseline
+# v0.6.5
 
 Codex `0.145.0` memory-boundary completion release.
 

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.6.6
+
 - Fixed the Codex `0.145.0` runtime-generation gap that could ship a patched
   TUI with no `qwendex-manager` item in its generated `config.toml`. An
   immutable config baseline is now canonicalized, digested, and validated;
@@ -12,7 +14,16 @@
   activation, and its canonical V2 patch still omits role/model/reasoning/
   service-tier spawn inputs, so Qwendex AgentPolicy remains authoritative.
 - Added regressions for config-baseline drift and project role surfaces while
-  retaining the existing Codex `0.145.0` binary patch and memory boundary.
+  retaining the Codex `0.145.0` runtime and memory boundary.
+- Reconciled the patched Codex integration test with the canonical V2 contract:
+  configured native roles remain valid passive input but are not exposed by
+  the Qwendex V2 `spawn_agent` schema.
+- Sealed the native V2 tool schema to the same role/model/reasoning/service-tier
+  contract enforced by its parser, regenerated the Codex keymap schema, and
+  aligned the upstream timeout and no-child wait coverage.
+- Made direct CLI smoke subprocesses discard ambient Qwendex runtime state
+  before applying fixture overrides, keeping validation reproducible when the
+  suite runs from an active Qdex Manager session.
 
 ## 0.6.5
 
