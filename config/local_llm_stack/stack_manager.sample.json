@@ -182,9 +182,15 @@
   ],
   "task_prompt_policy": {
     "max_output_tokens": 2048,
-    "tool_temperature": 0.15,
+    "tool_temperature": 0.0,
     "rules": [
       "Use bounded commands and compact reads.",
+      "For structured data, inspect real keys and types before extraction and require explicit semantic field mappings.",
+      "For keyed maps, preserve key/value pairs and bind one selected entry before deriving coupled fields.",
+      "When output mixes top-level and nested fields, bind the full document before filtering and return the complete extraction object unchanged.",
+      "Preserve source-observed zero, false, empty, and null; use UNVERIFIED only for unresolved paths or absent evidence.",
+      "Read verified fields directly; do not use jq //, truthiness, or defaults where false, zero, empty, or null is valid.",
+      "For structured acceptance, require an output schema or equivalent deterministic verifier, bounded retry, and escalation after the cap.",
       "Stop on LOCAL_MODEL_* guard markers.",
       "Keep local-model outputs receipt-backed and reviewable."
     ]

@@ -1062,28 +1062,67 @@ def current_gpu_summary() -> dict[str, Any]:
     cp = run(
         [
             "nvidia-smi",
-            "--query-gpu=name,memory.total,memory.used,memory.free,utilization.gpu",
+            "--query-gpu=index,uuid,name,memory.total,memory.used,memory.free,utilization.gpu",
             "--format=csv,noheader,nounits",
         ],
         capture=True,
     )
     if cp.returncode != 0 or not cp.stdout.strip():
         return {"available": False, "error": cp.stderr.strip()}
-    first = cp.stdout.splitlines()[0]
-    parts = [part.strip() for part in first.split(",")]
-    if len(parts) < 5:
-        return {"available": False, "error": first}
-    try:
-        return {
-            "available": True,
-            "name": parts[0],
-            "memory_total_mb": int(parts[1]),
-            "memory_used_mb": int(parts[2]),
-            "memory_free_mb": int(parts[3]),
-            "gpu_utilization_percent": int(parts[4]),
-        }
-    except ValueError:
-        return {"available": False, "error": first}
+    gpus: list[dict[str, Any]] = []
+    for line in cp.stdout.splitlines():
+        parts = [part.strip() for part in line.split(",")]
+        if len(parts) < 7:
+            continue
+        try:
+            gpus.append(
+                {
+                    "gpu_index": int(parts[0]),
+                    "gpu_uuid": parts[1],
+                    "name": parts[2],
+                    "memory_total_mb": int(parts[3]),
+                    "memory_used_mb": int(parts[4]),
+                    "memory_free_mb": int(parts[5]),
+                    "gpu_utilization_percent": int(parts[6]),
+                }
+            )
+        except ValueError:
+            continue
+    if not gpus:
+        return {"available": False, "error": cp.stdout.splitlines()[0]}
+
+    selected = gpus[0]
+    selection = "first detected GPU"
+    llama_allocations: dict[str, int] = {}
+    apps = run(
+        [
+            "nvidia-smi",
+            "--query-compute-apps=gpu_uuid,pid,process_name,used_gpu_memory",
+            "--format=csv,noheader,nounits",
+        ],
+        capture=True,
+    )
+    if apps.returncode == 0:
+        for line in apps.stdout.splitlines():
+            parts = [part.strip() for part in line.split(",")]
+            if len(parts) < 4 or "llama-server" not in parts[2]:
+                continue
+            try:
+                llama_allocations[parts[0]] = llama_allocations.get(parts[0], 0) + int(parts[3])
+            except ValueError:
+                continue
+    if llama_allocations:
+        selected_uuid, allocation_mb = max(llama_allocations.items(), key=lambda item: item[1])
+        selected = next((gpu for gpu in gpus if gpu["gpu_uuid"] == selected_uuid), selected)
+        if selected["gpu_uuid"] == selected_uuid:
+            selection = "largest llama-server allocation"
+            selected = {**selected, "llama_server_memory_mb": allocation_mb}
+
+    return {
+        "available": True,
+        "selection": selection,
+        **{key: value for key, value in selected.items() if key != "gpu_uuid"},
+    }
 
 
 def model_role_hint(profile: BackendProfile) -> str:
@@ -1870,7 +1909,7 @@ def dashboard_text(cfg: StackConfig) -> str:
     if gpu.get("available"):
         lines.append(
             f"GPU:     {gpu['name']} | used {gpu['memory_used_mb']}MB / {gpu['memory_total_mb']}MB | "
-            f"free {gpu['memory_free_mb']}MB | util {gpu['gpu_utilization_percent']}%"
+            f"free {gpu['memory_free_mb']}MB | util {gpu['gpu_utilization_percent']}% | {gpu.get('selection', 'unknown selection')}"
         )
     elif gpu.get("error"):
         lines.append(f"GPU:     unavailable ({gpu['error']})")
@@ -2382,6 +2421,7 @@ def prompt_custom_textgen_overrides(profile: BackendProfile) -> CustomTextgenOve
         ("LLAMACPP_REASONING_BUDGET", "llama.cpp reasoning budget"),
         ("CODEX_TEXTGEN_TOOL_TEMPERATURE", "bridge tool temperature"),
         ("LLAMACPP_EXTRA_ARGS", "llama.cpp extra args"),
+        ("LLAMACPP_SPEC_DRAFT_N_MAX", "llama.cpp speculative draft token cap"),
     ]
     print("Temporary backend overrides")
     print("===========================")

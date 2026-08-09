@@ -34,6 +34,8 @@ DEFAULT_RUFF_TARGETS = (
     "scripts/local_llm_stack.py",
     "scripts/qwendex_responses_bridge.py",
     "scripts/tabbyapi_responses_proxy.py",
+    "tests/smoke/test_benchmark_apples_to_apples_llm.py",
+    "tests/smoke/test_run_llamacpp_qwen_gguf.py",
 )
 
 
@@ -64,8 +66,10 @@ def classify_path(path: Path) -> str:
             "qwendex_responses_bridge",
             "local_llm",
             "artifact_queue_mcp",
+            "benchmark_apples_to_apples_llm",
             "harness_eval",
             "qwendex",
+            "run_llamacpp_qwen_gguf",
         )
     ):
         return "harness_tests"
@@ -220,8 +224,32 @@ def run_harness_gate(repo_root: Path = ROOT) -> dict[str, Any]:
     checks.append(
         run_check(
             "shell_syntax_launchers",
-            ["bash", "-n", "scripts/llm", "scripts/run_local_qwen_codex.sh", "scripts/run_codex_textgen_bridge.sh"],
+            [
+                "bash",
+                "-n",
+                "scripts/llm",
+                "scripts/run_local_qwen_codex.sh",
+                "scripts/run_codex_textgen_bridge.sh",
+                "scripts/run_llamacpp_qwen_gguf.sh",
+            ],
             repo_root=repo_root,
+        )
+    )
+    checks.append(
+        run_check(
+            "benchmark_sandbox_regressions",
+            [
+                "python3",
+                "-m",
+                "pytest",
+                "-q",
+                "-p",
+                "no:cacheprovider",
+                "tests/smoke/test_benchmark_apples_to_apples_llm.py",
+                "tests/smoke/test_run_llamacpp_qwen_gguf.py",
+            ],
+            repo_root=repo_root,
+            timeout=90,
         )
     )
     if shutil.which("ruff"):

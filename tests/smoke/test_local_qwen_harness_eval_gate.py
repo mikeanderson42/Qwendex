@@ -104,6 +104,8 @@ def test_harness_gate_classifies_scope_and_blocks_mixed_staged_research():
     assert gate.classify_path(Path("docs/generated/local_llm_stack/LOCAL_QWEN_NOTE.md")) == "harness_docs"
     assert gate.classify_path(Path("public/qwendex/README.md")) == "harness_docs"
     assert gate.classify_path(Path("tests/smoke/test_qwendex_cli.py")) == "harness_tests"
+    assert gate.classify_path(Path("tests/smoke/test_benchmark_apples_to_apples_llm.py")) == "harness_tests"
+    assert gate.classify_path(Path("tests/smoke/test_run_llamacpp_qwen_gguf.py")) == "harness_tests"
     assert gate.classify_path(Path("results/local_qwen_harness_hardening/run/receipt.json")) == "local_stack_receipt"
     assert gate.classify_path(Path("state/research/test_queue.csv")) == "research_surface"
     assert gate.classify_path(Path("random.tmp")) == "unknown"

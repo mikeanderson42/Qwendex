@@ -54,6 +54,15 @@ validate the selected runtime's supported flags before use. The vLLM launcher
 keeps remote model code disabled unless `VLLM_TRUST_REMOTE_CODE=1` is set
 explicitly.
 
+For a llama.cpp GGUF profile, `LLAMACPP_SPEC_TYPE` selects a supported
+speculative-decoding mode. Use `draft-mtp` only when the GGUF includes
+compatible MTP layers. `LLAMACPP_SPEC_DRAFT_N_MAX` sets a validated draft
+token cap without routing the value through free-form extra arguments. On a
+multi-GPU host, `LLAMACPP_DEVICE` and
+`LLAMACPP_MAIN_GPU` pin the backend to a device reported by
+`llama-server --list-devices`. When a llama.cpp backend is running,
+`llmstack status` reports the GPU with its largest `llama-server` allocation.
+
 The published 32k backend profile, local Qwendex seats, launcher fallback, and
 sample environment all use a 32768-token context with auto-compaction at
 28672. A local backend override may lower both values, but its compact limit

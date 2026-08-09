@@ -231,6 +231,7 @@ def case_bridge_status_contract_check(repo_root: Path, sandbox: Path, live: bool
         tool_top_p=None,
         tool_top_k=None,
         tool_min_p=None,
+        tool_seed=None,
         tool_reasoning_effort="",
         enable_thinking=False,
         preserve_thinking=False,
