@@ -58,6 +58,23 @@ def test_published_qwendex_configs_validate_against_draft_2020_12() -> None:
     assert payload["errors"] == []
 
 
+@pytest.mark.parametrize("default_seat", ["luna", "terra"])
+def test_hosted_seats_are_valid_default_seat_values(
+    tmp_path: Path, default_seat: str
+) -> None:
+    repo = isolated_surface(tmp_path)
+    for name in ("qwendex.json", "qwendex.sample.json"):
+        config_path = repo / "config" / "qwendex" / name
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        config["default_seat"] = default_seat
+        write_json(config_path, config)
+
+    result, payload = run_validator(repo)
+
+    assert result.returncode == 0, payload
+    assert payload["status"] == "pass"
+
+
 def test_validator_blocks_config_that_violates_published_schema(tmp_path: Path) -> None:
     repo = isolated_surface(tmp_path)
     config_path = repo / "config" / "qwendex" / "qwendex.json"

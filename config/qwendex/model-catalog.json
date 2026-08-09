@@ -5,14 +5,14 @@
   "models": {
     "qwen-local": {
       "backend": "local-responses-adapter",
-      "context_window": 65536,
-      "compact_limit": 56000,
+      "context_window": 32768,
+      "compact_limit": 28672,
       "template": "config/local_llm_stack/qwen3_codex_tool_plain.jinja",
       "tool_call_reliability": "bounded",
       "recommended_limits": {
         "max_output_tokens": 2048,
         "tool_output_token_limit": 1200,
-        "temperature": 0.15
+        "temperature": 0.0
       },
       "known_markers": [
         "LOCAL_MODEL_TOOL_CALL_TOO_LARGE",

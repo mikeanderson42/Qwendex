@@ -1,6 +1,6 @@
 {
   "schema_version": "qwendex.config.v1",
-  "version": "0.6.9",
+  "version": "0.7.0",
   "default_seat": "primary",
   "routing": {
     "mode": "token_saver",
@@ -84,6 +84,19 @@
     "local_subagents": {
       "enabled": true
     },
+    "hosted_worker_routing": {
+      "enabled": true,
+      "default": {"model": "gpt-5.6-terra", "reasoning_effort": "high"},
+      "profiles": {
+        "explorer": {"model": "gpt-5.6-terra", "reasoning_effort": "high"},
+        "docs_researcher": {"model": "gpt-5.6-terra", "reasoning_effort": "high"},
+        "scribe": {"model": "gpt-5.6-terra", "reasoning_effort": "high"},
+        "implementer": {"model": "gpt-5.6-terra", "reasoning_effort": "high"},
+        "verifier": {"model": "gpt-5.6-terra", "reasoning_effort": "high"},
+        "reviewer": {"model": "gpt-5.6-terra", "reasoning_effort": "xhigh"},
+        "release_manager": {"model": "gpt-5.6-terra", "reasoning_effort": "xhigh"}
+      }
+    },
     "kaveman": {
       "enabled": false,
       "directive": "Use terse output: short, direct, minimal prose, no optional explanation unless asked."
@@ -97,6 +110,11 @@
       "manager": {"label": "Manager Mode", "max_subagents": 4}
     },
     "local_qwen_eligibility": {
+      "allowed_profiles": [
+        "explorer",
+        "docs_researcher",
+        "scribe"
+      ],
       "allowed_task_classes": [
         "repository_mapping",
         "read_heavy_investigation",
@@ -139,7 +157,8 @@
   },
   "seats": {
     "primary": {
-      "model": "gpt-5.5",
+      "model": "gpt-5.6-terra",
+      "reasoning_effort": "high",
       "authority": "release_review",
       "backend": "codex",
       "context_window": 200000,
@@ -153,18 +172,36 @@
       "guard_profile": "balanced"
     },
     "audit": {
-      "model": "gpt-5.5",
+      "model": "gpt-5.6-terra",
+      "reasoning_effort": "xhigh",
       "authority": "read_only_review",
       "backend": "codex",
       "context_window": 200000,
       "guard_profile": "max_safety"
     },
     "release": {
-      "model": "gpt-5.5",
+      "model": "gpt-5.6-terra",
+      "reasoning_effort": "xhigh",
       "authority": "public_release_acceptance",
       "backend": "codex",
       "context_window": 200000,
       "guard_profile": "max_safety"
+    },
+    "luna": {
+      "model": "gpt-5.6-luna",
+      "reasoning_effort": "max",
+      "authority": "bounded_hosted_operator",
+      "backend": "codex",
+      "context_window": 200000,
+      "guard_profile": "balanced"
+    },
+    "terra": {
+      "model": "gpt-5.6-terra",
+      "reasoning_effort": "high",
+      "authority": "bounded_hosted_operator",
+      "backend": "codex",
+      "context_window": 200000,
+      "guard_profile": "balanced"
     },
     "sandbox": {
       "authority": "isolated_probe",

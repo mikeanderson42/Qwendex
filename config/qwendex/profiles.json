@@ -4,7 +4,8 @@
   "profiles": {
     "primary": {
       "seat": "primary",
-      "model": "gpt-5.5",
+      "model": "gpt-5.6-terra",
+      "reasoning_effort": "high",
       "use_for": ["architecture", "security", "public release review", "protocol changes"],
       "acceptance_authority": true
     },
@@ -18,15 +19,35 @@
     },
     "audit": {
       "seat": "audit",
-      "model": "gpt-5.5",
+      "model": "gpt-5.6-terra",
+      "reasoning_effort": "xhigh",
       "use_for": ["review current changes", "security review", "claim review"],
       "acceptance_authority": true
     },
     "release": {
       "seat": "release",
-      "model": "gpt-5.5",
+      "model": "gpt-5.6-terra",
+      "reasoning_effort": "xhigh",
       "use_for": ["release acceptance", "public docs claims", "migration approval"],
       "acceptance_authority": true
+    },
+    "luna": {
+      "seat": "luna",
+      "model": "gpt-5.6-luna",
+      "reasoning_effort": "max",
+      "use_for": ["repeatable one-shot inspection", "documentation inventory", "bounded summaries"],
+      "acceptance_authority": false,
+      "requires_receipt": true,
+      "manager_v2_compatible": false
+    },
+    "terra": {
+      "seat": "terra",
+      "model": "gpt-5.6-terra",
+      "reasoning_effort": "high",
+      "use_for": ["bounded implementation", "verification", "Manager V2 workers"],
+      "acceptance_authority": false,
+      "requires_receipt": true,
+      "manager_v2_compatible": true
     },
     "sandbox": {
       "seat": "sandbox",

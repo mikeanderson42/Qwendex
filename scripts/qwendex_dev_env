@@ -35,7 +35,7 @@ QWENDEX_RELEASE_CODEX_SOURCE_REPO="https://github.com/openai/codex.git"
 QWENDEX_CODEX_SOURCE_REPO="${QWENDEX_CODEX_SOURCE_REPO:-$QWENDEX_RELEASE_CODEX_SOURCE_REPO}"
 QWENDEX_RELEASE_CODEX_VERSION="0.147.0"
 QWENDEX_RELEASE_CODEX_SOURCE_COMMIT="be6e8eac029b183056b7e4402879f15d2c85f61b"
-QWENDEX_RELEASE_CODEX_PATCH_SHA256="fa38c6481923dd24fc07092602c3be3bef428d43bb298ec8ae285b21b42b6819"
+QWENDEX_RELEASE_CODEX_PATCH_SHA256="eb69c88401d48e79d42ce48bebc7447b4b3a40fdd779a00a031dc0621853812d"
 QWENDEX_RELEASE_CODEX_CARGO_LOCK_SHA256="bc4fe450de929afe82928734f860ca83e5f9dc5f9f1211b0974ea47b57af77ca"
 # Codex 0.147 enables Rusty V8's sandboxed code-mode runtime. Its own pinned
 # release publishes the verified archive/binding pair that the generic Rusty
@@ -179,7 +179,7 @@ write_codex_config() {
   source_root_toml="$(toml_quote "$SOURCE_ROOT")"
   cat > "$CODEX_HOME_DIR/config.toml" <<EOF
 model = "gpt-5.6-terra"
-model_reasoning_effort = "max"
+model_reasoning_effort = "high"
 approval_policy = "never"
 sandbox_mode = "workspace-write"
 suppress_unstable_features_warning = true
@@ -195,10 +195,11 @@ chronicle = false
 enabled = true
 max_concurrent_threads_per_session = 1
 hide_spawn_agent_metadata = true
-expose_spawn_agent_model_overrides = false
+expose_spawn_agent_model_overrides = true
 multi_agent_mode_hint_text = "Qwendex uses explicit-only delegation until Qdex applies the immutable launch AgentPolicy. Do not proactively spawn workers; delegate only when the user, applicable AGENTS.md instructions, or an active skill explicitly requires it."
 root_agent_usage_hint_text = "You are the root Qwendex orchestrator. Keep the root as the default sole writer and integrator, and use bounded independent workers when they save context or improve quality. Qwendex planning and lifecycle records are advisory; follow the user instruction and Codex permissions. Do not ask workers to delegate recursively. Call wait_agent only while list_agents shows a running worker; after a timeout inspect once, and if none is running do not retry wait_agent."
 subagent_usage_hint_text = "You are a bounded Qwendex worker. Execute the assigned lane, do not spawn or manage subagents, and respect any explicitly read-only scope. Return a concise outcome with evidence, validation, blockers, and remaining risk when available; a structured FINAL_REPORT is optional."
+subagent_developer_instructions = "You are a bounded Qwendex worker. Execute only the assigned lane, do not spawn or manage subagents, and respect the declared read-only or write scope. Treat the root as the sole integrator. Return concise evidence, changed paths, validation, blockers, and remaining risk; ordinary clear output is accepted."
 
 [history]
 persistence = "none"
@@ -468,10 +469,19 @@ link_codex_identity() {
 
 prepare() {
   ensure_layout
+  local prepare_lock_fd=""
+  if command -v flock >/dev/null 2>&1; then
+    exec {prepare_lock_fd}>"$WORK_ROOT/prepare.lock"
+    flock "$prepare_lock_fd"
+  fi
   write_codex_config
   write_wrappers
   write_env_files
   link_codex_identity
+  if [[ -n "$prepare_lock_fd" ]]; then
+    flock -u "$prepare_lock_fd"
+    exec {prepare_lock_fd}>&-
+  fi
 }
 
 summary_json() {
@@ -677,7 +687,7 @@ write_validated_codex_build_receipt() {
   local source_receipt="$META_ROOT/codex_build.json"
   local output="$1"
   local run_id="$2"
-  local binary="${QWENDEX_DEV_CODEX_BIN:-$DEV_CODEX_DEFAULT}"
+  local binary="$DEV_CODEX_DEFAULT"
   local code_mode_host
   code_mode_host="$(dirname "$binary")/codex-code-mode-host"
   [[ -f "$source_receipt" ]] || die "missing Codex build receipt: run qwendex-dev codex-source build"
@@ -893,7 +903,8 @@ PY
 write_dev_status_json() {
   local mode="${1:-status}"
   local reported_status_file="${2:-$STATUS_FILE}"
-  python3 - "$DEV_STATUS_JSON" "$mode" "$DEV_ROOT" "$SOURCE_ROOT" "$WORK_ROOT" "$STATE_DB" "$PERFORMANCE_DB" "$LEDGER_DB" "$LOCAL_HARNESS_LEDGER_DB" "$RESULTS_ROOT" "$reported_status_file" "$CODEX_SOURCE_DIR" "$DEV_CODEX_DEFAULT" "$DEV_CODE_MODE_HOST_DEFAULT" "$MAIN_CODEX_BIN" <<'PY'
+  local output_path="${3:-$DEV_STATUS_JSON}"
+  python3 - "$output_path" "$mode" "$DEV_ROOT" "$SOURCE_ROOT" "$WORK_ROOT" "$STATE_DB" "$PERFORMANCE_DB" "$LEDGER_DB" "$LOCAL_HARNESS_LEDGER_DB" "$RESULTS_ROOT" "$reported_status_file" "$CODEX_SOURCE_DIR" "$DEV_CODEX_DEFAULT" "$DEV_CODE_MODE_HOST_DEFAULT" "$MAIN_CODEX_BIN" <<'PY'
 import json
 import os
 import shutil
@@ -919,6 +930,7 @@ from pathlib import Path
     dev_code_mode_host,
     main_codex,
 ) = sys.argv[1:16]
+stdout_only = out == "-"
 out = Path(out)
 paths = {k: Path(v) for k, v in {
     "dev_root": dev_root,
@@ -1045,9 +1057,13 @@ if not active_hook_sources and global_hook_sources:
 data["blockers"] = blockers
 data["warnings"] = warnings
 data["status"] = "pass" if not blockers else "blocked"
-out.parent.mkdir(parents=True, exist_ok=True)
-out.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-print(f"status-json: {data['status']} - {out}")
+rendered = json.dumps(data, indent=2, sort_keys=True) + "\n"
+if stdout_only:
+    print(rendered, end="")
+else:
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(rendered, encoding="utf-8")
+    print(f"status-json: {data['status']} - {out}")
 PY
 }
 
@@ -1225,8 +1241,9 @@ cmd_doctor() {
 }
 
 cmd_status_json() {
-  prepare
-  write_dev_status_json status
+  # Observation must not bootstrap, reinstall wrappers, or rewrite shared
+  # state. Explicit sync/bootstrap commands own those mutations.
+  write_dev_status_json status "$STATUS_FILE" -
 }
 
 cmd_preflight() {
@@ -1240,7 +1257,15 @@ cmd_preflight() {
 write_codex_patch_preflight_json() {
   local output="${1:-$META_ROOT/codex_patch_preflight.json}"
   local require_dev="${2:-0}"
-  local codex_bin="${QWENDEX_DEV_CODEX_BIN:-$DEV_CODEX_DEFAULT}"
+  local codex_bin=""
+  if [[ "$require_dev" -eq 1 ]]; then
+    # Release evidence is bound to the canonical build output. An ambient
+    # override must not substitute an unrelated binary that happens to report
+    # the supported semantic version.
+    codex_bin="$DEV_CODEX_DEFAULT"
+  else
+    codex_bin="${QWENDEX_DEV_CODEX_BIN:-$DEV_CODEX_DEFAULT}"
+  fi
   if [[ ! -x "$codex_bin" ]]; then
     if [[ "$require_dev" -eq 1 ]]; then
       die "release verification requires a built dev Codex binary: $codex_bin"
@@ -2214,9 +2239,15 @@ cmd_verify() {
       --require-live-bridge \
       --json > "$run_meta_root/local_qwen_reliability.json"
     require_json_pass "$run_meta_root/local_qwen_reliability.json"
-    local live_codex_bin="${QWENDEX_DEV_CODEX_BIN:-$DEV_CODEX_DEFAULT}"
-    if [[ ! -x "$live_codex_bin" ]]; then
-      live_codex_bin="$MAIN_CODEX_BIN"
+    local live_codex_bin=""
+    if [[ "$tier" == "release" ]]; then
+      live_codex_bin="$DEV_CODEX_DEFAULT"
+      [[ -x "$live_codex_bin" ]] || die "release live verification requires the built dev Codex binary: $live_codex_bin"
+    else
+      live_codex_bin="${QWENDEX_DEV_CODEX_BIN:-$DEV_CODEX_DEFAULT}"
+      if [[ ! -x "$live_codex_bin" ]]; then
+        live_codex_bin="$MAIN_CODEX_BIN"
+      fi
     fi
     [[ -x "$live_codex_bin" ]] || die "live verification requires an executable Codex binary"
     python3 scripts/validate_local_qwen_codex_acceptance.py \

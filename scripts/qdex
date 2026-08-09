@@ -3,8 +3,8 @@ set -euo pipefail
 
 QWENDEX_DEV_ROOT="${QWENDEX_DEV_ROOT:-$HOME/qwendex-dev}"
 QWENDEX_ENV="$QWENDEX_DEV_ROOT/.qwendex-dev/env.sh"
-QWENDEX_YOLO_FLAG="${QWENDEX_YOLO_FLAG:---dangerously-bypass-approvals-and-sandbox}"
-QWENDEX_HOOK_TRUST_FLAG="${QWENDEX_HOOK_TRUST_FLAG:---dangerously-bypass-hook-trust}"
+readonly QWENDEX_YOLO_FLAG='--dangerously-bypass-approvals-and-sandbox'
+readonly QWENDEX_HOOK_TRUST_FLAG='--dangerously-bypass-hook-trust'
 QWENDEX_CODEX_MAX_CONCURRENT_THREADS=9
 QWENDEX_CODEX_MAX_WAIT_TIMEOUT_MS=120000
 QWENDEX_CODEX_STATUS_LINE='["model-with-reasoning","current-dir","qwendex-manager"]'
@@ -206,14 +206,14 @@ import sys
 from pathlib import Path
 
 
-VALID = {"workspace-write", "yolo"}
+VALID = {"workspace-write", "auto-review", "yolo"}
 cli_value, published_path, operator_path = sys.argv[1:]
 
 
 def fail(scope, value):
     print(
         f"qdex: invalid permission_mode from {scope}: {value!r}; "
-        "expected workspace-write or yolo",
+        "expected workspace-write, auto-review, or yolo",
         file=sys.stderr,
     )
     raise SystemExit(2)
@@ -374,8 +374,8 @@ while [[ $# -gt 0 ]]; do
       ;;
     --qdex-permission-mode)
       shift
-      if [[ $# -eq 0 || ( "$1" != "yolo" && "$1" != "workspace-write" ) ]]; then
-        printf 'qdex: --qdex-permission-mode requires yolo or workspace-write\n' >&2
+      if [[ $# -eq 0 || ( "$1" != "yolo" && "$1" != "auto-review" && "$1" != "workspace-write" ) ]]; then
+        printf 'qdex: --qdex-permission-mode requires workspace-write, auto-review, or yolo\n' >&2
         exit 2
       fi
       cli_permission_mode="$1"
@@ -451,12 +451,24 @@ reject_deferred_codex_controls() {
       --)
         break
         ;;
+      -a|-a?*|--ask-for-approval|--ask-for-approval=*|-s|-s?*|--sandbox|--sandbox=*|--approve-for-me|--approve-for-me=*|--not-so-yolo|--not-so-yolo=*|--yolo|--yolo=*|"$QWENDEX_YOLO_FLAG"|"$QWENDEX_YOLO_FLAG"=*)
+        printf 'qdex: native permission override %s is unavailable; select workspace-write, auto-review, or yolo with --qdex-permission-mode so the reported posture matches the launch.\n' "${codex_args[$arg_index]}" >&2
+        exit 2
+        ;;
+      "$QWENDEX_HOOK_TRUST_FLAG"|"$QWENDEX_HOOK_TRUST_FLAG"=*)
+        printf 'qdex: native hook-trust bypass is unavailable; Qdex preserves Codex trust checks across home, project, config-layer, and plugin hooks.\n' >&2
+        exit 2
+        ;;
       -p|--profile|--profile=*)
         printf 'qdex: Codex --profile is unavailable while Qwendex defers native role configuration.\n' >&2
         exit 2
         ;;
       --remote|--remote=*)
         printf 'qdex: Codex remote app-server connections are unavailable while Qwendex defers history and memory lifecycle controls.\n' >&2
+        exit 2
+        ;;
+      --full-auto)
+        printf 'qdex: Codex 0.147 removed exec --full-auto; use --qdex-permission-mode auto-review, which maps to --approve-for-me.\n' >&2
         exit 2
         ;;
       --enable)
@@ -481,6 +493,12 @@ reject_deferred_codex_controls() {
       -c|--config)
         config_override="${codex_args[$((arg_index + 1))]:-}"
         ;;
+      -c=*)
+        config_override="${codex_args[$arg_index]#-c=}"
+        ;;
+      -c?*)
+        config_override="${codex_args[$arg_index]#-c}"
+        ;;
       --config=*)
         config_override="${codex_args[$arg_index]#--config=}"
         ;;
@@ -498,7 +516,7 @@ reject_deferred_codex_controls() {
         exit 2
         ;;
       features.multi_agent_v2.expose_spawn_agent_model_overrides|features.multi_agent_v2.hide_spawn_agent_metadata)
-        printf 'qdex: native role-driven model and reasoning controls are deferred by the Qwendex release policy.\n' >&2
+        printf 'qdex: the native spawn schema is fixed by the Qwendex release policy; use Manager profile routing instead.\n' >&2
         exit 2
         ;;
       agents|agents.*)
@@ -510,6 +528,14 @@ reject_deferred_codex_controls() {
             exit 2
             ;;
         esac
+        ;;
+      approval_policy|approval_policy.*|approvals_reviewer|approvals_reviewer.*|default_permissions|default_permissions.*|permission_profile|permission_profile.*|permissions|permissions.*|sandbox_mode|sandbox_mode.*|sandbox_permissions|sandbox_permissions.*|sandbox_workspace_write|sandbox_workspace_write.*)
+        printf 'qdex: native permission config %s is unavailable; select the effective posture with --qdex-permission-mode.\n' "$config_key" >&2
+        exit 2
+        ;;
+      profile|profile.*|profiles|profiles.*)
+        printf 'qdex: native profile config %s is unavailable while Qwendex defers native role and profile activation.\n' "$config_key" >&2
+        exit 2
         ;;
     esac
   done
@@ -620,16 +646,8 @@ fi
 target_repo="$(cd "$target_repo" && pwd)"
 # Codex 0.145 discovers trusted project role files automatically. Tolerate
 # those passive project surfaces so existing repositories still launch. The
-# canonical Qwendex V2 patch keeps them outside the active lifecycle contract
-# by omitting role/model/reasoning/service-tier spawn inputs and inheriting
-# child settings from the root.
-target_repo_toml="$(python3 - "$target_repo" <<'PY'
-import json
-import sys
-
-print(json.dumps(sys.argv[1]))
-PY
-)"
+# canonical Qwendex V2 patch keeps roles and service tiers outside the active
+# lifecycle contract while allowing Codex-validated model/reasoning requests.
 export QWENDEX_MANAGER_TARGET_REPO="$target_repo"
 export QWENDEX_EXEC_CWD="$target_repo"
 # Runtime generations seal their source tree read-only. Keep mutable Manager
@@ -833,6 +851,7 @@ esac
 
 root_agent_usage_hint="You are the root Qwendex orchestrator operating under the ${agent_use:-Off} AgentPolicy. Keep the root as the default sole writer and integrator. Delegate independent, purpose-specific lanes within the ${codex_worker_cap}-worker ceiling when doing so saves context or improves quality, then integrate their results. Qwendex plans and lifecycle records are advisory; follow the user's instruction and your task judgment. Do not ask workers to delegate recursively. Call wait_agent only while list_agents shows a running worker. After a wait timeout, inspect list_agents once; if no worker is running, integrate available evidence or finalize. If verifier evidence becomes stale after a root edit, consider a bounded follow-up to that verifier when it would be useful."
 subagent_usage_hint="You are a bounded Qwendex worker. Execute the assigned lane, do not spawn or manage subagents, and respect any explicitly read-only scope. Return a concise outcome with evidence, changed paths, validation, blockers, and remaining risk when available. A structured FINAL_REPORT is optional; ordinary clear output is accepted."
+subagent_developer_instructions="You are a bounded Qwendex worker. Execute only the assigned lane, do not spawn or manage subagents, and respect the declared read-only or write scope. Treat the root as the sole integrator. Return concise evidence, changed paths, validation, blockers, and remaining risk; ordinary clear output is accepted."
 
 cmd=(
   "$QWENDEX_CODEX_RUNTIME"
@@ -855,38 +874,39 @@ codex_policy_args=(
   --config "features.multi_agent_v2.max_wait_timeout_ms=$codex_wait_timeout_ms"
   --config "features.multi_agent_v2.default_wait_timeout_ms=$codex_wait_default_timeout_ms"
   --config "features.multi_agent_v2.hide_spawn_agent_metadata=true"
-  --config "features.multi_agent_v2.expose_spawn_agent_model_overrides=false"
+  --config "features.multi_agent_v2.expose_spawn_agent_model_overrides=true"
   --config "features.multi_agent_v2.root_agent_usage_hint_text=$(toml_string "$root_agent_usage_hint")"
   --config "features.multi_agent_v2.subagent_usage_hint_text=$(toml_string "$subagent_usage_hint")"
+  --config "features.multi_agent_v2.subagent_developer_instructions=$(toml_string "$subagent_developer_instructions")"
 )
 if [[ "${QWENDEX_NATIVE_PROACTIVE_SOURCE:-}" != "native_ultra" ]]; then
   codex_policy_args+=(--config "features.multi_agent_v2.multi_agent_mode_hint_text=$(toml_string "$multi_agent_mode_hint")")
 fi
 if [[ "$permission_mode" == "yolo" ]]; then
-  yolo_present=0
-  for arg in "${codex_args[@]}"; do
-    [[ "$arg" == "$QWENDEX_YOLO_FLAG" ]] && yolo_present=1
-  done
-  [[ "$yolo_present" == "1" ]] || cmd+=("$QWENDEX_YOLO_FLAG")
+  cmd+=("$QWENDEX_YOLO_FLAG")
+elif [[ "$permission_mode" == "auto-review" ]]; then
+  cmd+=(--approve-for-me)
 else
   cmd+=(--sandbox workspace-write)
 fi
-if [[ "$manager_preflight_required" == "1" ]]; then
-  # Manager preflight verifies the generated Qwendex hook set before launch;
-  # tell Codex not to stop at a second interactive trust dialog.
-  hook_trust_present=0
-  for arg in "${codex_args[@]}"; do
-    [[ "$arg" == "$QWENDEX_HOOK_TRUST_FLAG" ]] && hook_trust_present=1
-  done
-  [[ "$hook_trust_present" == "1" ]] || cmd+=("$QWENDEX_HOOK_TRUST_FLAG")
-fi
-codex_policy_args+=(--config "projects={$target_repo_toml={trust_level=\"trusted\"}}")
 # Normal Qdex launches inherit the caller's working directory exactly like
 # Codex. Keep the older Qdex-only --repo option as a compatibility alias that
 # still needs an injected native -C; an operator-supplied -C/--cd is already in
 # codex_args and must remain byte-for-byte pass-through.
 if [[ "$codex_sets_cwd" == "0" && "$qdex_sets_repo" == "1" ]]; then
   cmd+=(-C "$target_repo")
+fi
+
+preflight_file="$qdex_launch_meta_root/manager_preflight.json"
+
+if [[ "$manager_preflight_required" == "1" ]]; then
+  preflight_rc=0
+  preflight_args=(manager preflight --interactive-prompt-unknown --json)
+  if [[ "$manager_preflight_dry_run" == "1" ]]; then
+    preflight_args+=(--dry-run)
+  fi
+  QWENDEX_MANAGER_TARGET_REPO="$target_repo" \
+    "$QWENDEX_QWENDEX_COMMAND" "${preflight_args[@]}" > "$preflight_file" || preflight_rc=$?
 fi
 
 # Codex 0.144 treats a global `--config` group before `exec` as lower-precedence
@@ -911,17 +931,7 @@ if (( policy_insert_at < ${#codex_args[@]} )); then
   final_cmd+=("${codex_args[@]:policy_insert_at}")
 fi
 
-preflight_file="$qdex_launch_meta_root/manager_preflight.json"
-
 if [[ "$manager_preflight_required" == "1" ]]; then
-  preflight_rc=0
-  preflight_args=(manager preflight --interactive-prompt-unknown --json)
-  if [[ "$manager_preflight_dry_run" == "1" ]]; then
-    preflight_args+=(--dry-run)
-  fi
-  QWENDEX_MANAGER_TARGET_REPO="$target_repo" \
-    "$QWENDEX_QWENDEX_COMMAND" "${preflight_args[@]}" > "$preflight_file" || preflight_rc=$?
-
   if [[ "$manager_preflight_dry_run" == "1" || "${QWENDEX_QDEX_DRY_RUN:-0}" == "1" ]]; then
     if [[ "$json_output" == "1" ]]; then
     python3 - "$preflight_file" "$target_repo" "${final_cmd[@]}" <<'PY'

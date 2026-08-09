@@ -8,25 +8,24 @@ live ripgrep evidence that a later candidate must preserve.
 
 from __future__ import annotations
 
+import csv
 import hashlib
 import importlib.util
 import json
 import os
 import re
-import signal
 import shutil
+import signal
 import sqlite3
 import subprocess
 import tempfile
 import threading
 import time
 import uuid
-import csv
 from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
-
 
 WORKLOAD_SCHEMA_VERSION = "qwendex.optimization_lab.workload.v1"
 BASELINE_RUN_SCHEMA_VERSION = "qwendex.optimization_lab.run.v1"
@@ -931,7 +930,6 @@ live_phase codex_process_start
 exec "$QWENDEX_LIVE_RUNTIME" \
   --no-alt-screen \
   --sandbox workspace-write \
-  --dangerously-bypass-hook-trust \
   --config "projects={$QWENDEX_LIVE_PROJECT={trust_level=\"trusted\"}}" \
   -c "model_reasoning_effort=$QWENDEX_LIVE_REASONING" \
   exec --ephemeral --json -C "$QWENDEX_LIVE_WORKTREE" -m "$QWENDEX_LIVE_MODEL" \
