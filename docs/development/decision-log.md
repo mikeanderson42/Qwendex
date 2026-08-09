@@ -1,5 +1,23 @@
 # Qwendex Development Decision Log
 
+## Codex 0.147 Sandboxed V8 Release Pair
+
+Decision: retrieve Codex 0.147's matching sandboxed Rusty V8 archive and
+generated binding from the official Codex release into Qwendex's ignored,
+isolated build directory; permit only the pinned Linux target and exact HTTPS
+release URL, independently pin the archive, binding, and manifest digests, and
+then require the downloaded manifest to agree before Cargo sees the pair. Bind
+the URL and artifact digests in the build receipt.
+
+Reason: Codex 0.147 enables the sandboxed Rusty V8 feature, while the upstream
+`rusty_v8` 150.4.0 Linux release does not provide the corresponding prebuilt
+archive. The matching `openai/codex` release does provide the verified archive
+and generated binding that its CI uses. Reusing a non-sandbox archive would
+silently weaken or mismatch the runtime; compiling the crate's incomplete V8
+source payload is heavier and less aligned with Codex's own release contract.
+The verified release pair avoids both outcomes without changing host packages
+or publishing local build material.
+
 ## Worktree Over Generated Copy
 
 Decision: `~/qwendex-dev` is a git worktree.
@@ -1134,3 +1152,25 @@ receipt lands outside the immutable tree.
 
 Release: Qwendex `v0.6.8` publishes this CLI-only hotfix while retaining the
 v0.6.7 Codex Apps patch and Codex `0.145.0` binary contract unchanged.
+
+## Codex 0.147 Source-Bound Rebase
+
+Decision: publish Qwendex `0.6.9` against official Codex `rust-v0.147.0` and
+bind its source commit, canonical full-index patch digest, normalized
+Cargo.lock digest, binary pair, and versioned models-cache file into one
+runtime contract. The rebase preserves the Qwendex footer, hotkeys, root-only
+V2 management, fixed child policy, no-child wait behavior, and narrow Codex
+Apps degraded-ready recovery. It adds the 0.147 Apps-cache client seam to the
+allowlist and source-patch footprint.
+
+The patcher records exact multi-site cardinalities for the two keymap conflict
+validators and four timeout assertions introduced by the 0.147 layout. Anchor
+or cardinality drift therefore fails before a write rather than silently
+duplicating a source edit. The upstream `config/mod.rs` compatibility behavior
+remains unpatched, but every rebased Qwendex V2 and Apps path is required by
+the release build gate.
+
+Reason: source pins alone cannot prove a safe compatibility update when
+upstream moves implementation or test fixtures. A version-specific
+fail-closed patch, measured provenance, and a newly built immutable generation
+preserve the supported Qdex boundary without changing direct stock-Codex use.

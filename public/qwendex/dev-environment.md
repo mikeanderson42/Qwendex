@@ -106,14 +106,14 @@ captured upstream Codex binary with an explicit fallback diagnostic. Only
 `qdex` invokes this runtime and sets `QWENDEX_CODEX_HOME` as its child's
 `CODEX_HOME`. A selected dev binary must
 have an executable `codex-code-mode-host` companion in the same directory; the
-wrapper blocks before launch when that Codex 0.145.0 runtime contract is
+wrapper blocks before launch when that Codex 0.147.0 runtime contract is
 incomplete.
 
 The isolated Qwendex Codex home links the operator's authentication file for
 login continuity. Its version cache and installation identity are local copies,
 so Qdex version checks cannot rewrite the upstream Codex home's cache.
 
-For Codex 0.145, the generated home sets `history.persistence = "none"`,
+For Codex 0.147, the generated home sets `history.persistence = "none"`,
 disables the `memories`, `external_agent_memory_import`, and `chronicle`
 features, and disables memory generation, use, and dedicated tools. Qdex
 reasserts those values on every launch after caller options and rejects caller
@@ -213,6 +213,15 @@ installs both of these sibling files:
 ~/qwendex-dev/.qwendex-dev/codex-build/bin/codex
 ~/qwendex-dev/.qwendex-dev/codex-build/bin/codex-code-mode-host
 ```
+
+For Codex 0.147, Qwendex retrieves the sandboxed Rusty V8 archive and generated
+binding from the matching official Codex release into that ignored, isolated
+build directory. This is intentional: the generic `rusty_v8` 150.4.0 Linux
+release lacks the sandbox archive that Codex 0.147 requests. Qwendex permits
+only its pinned Linux target, HTTPS-only downloads from the exact Codex release,
+and independently pinned archive, binding, and manifest digests before Cargo
+sees the pair. It does not install or modify a host compiler or system package,
+and the build receipt binds the verified artifact digests and release URL.
 
 For an external patched build, place `codex-code-mode-host` beside the binary
 and export:

@@ -67,7 +67,7 @@ reports, validation, or hook wiring is reported without blocking root work.
 ## Certified Boundary
 
 The production-hardening claim is deliberately limited to the tested Linux and
-Codex `0.145.0` canonical-patch matrix. Qwendex orchestration policy is not an
+Codex `0.147.0` canonical-patch matrix. Qwendex orchestration policy is not an
 operating-system sandbox: normal Qdex defaults to `workspace-write`, while
 Yolo is an explicit CLI, environment, or ignored operator-local opt-in that
 adds Codex's bypass flag once. A Manager preflight may snapshot the resolved
@@ -75,7 +75,7 @@ mode and source for diagnostics; it does not grant or revoke permission.
 `qwendex-dev` bare-launch bypass mode is development-only. Stock Codex
 and its normal home remain independent and provide the Off-mode recovery path.
 
-For Qdex launches, Codex 0.145 history persistence, experimental memories,
+For Qdex launches, Codex 0.147 history persistence, experimental memories,
 external-agent memory import, and passive-screen Chronicle memory are disabled
 at the generated-home and per-launch boundaries. Chronicle's legacy
 `telepathy` alias is rejected with the same feature policy. Native role and

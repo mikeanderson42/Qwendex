@@ -33,10 +33,30 @@ CODEX_SOURCE_DIR="$WORK_ROOT/codex-source/codex"
 QWENDEX_CODEX_YOLO_FLAG="--dangerously-bypass-approvals-and-sandbox"
 QWENDEX_RELEASE_CODEX_SOURCE_REPO="https://github.com/openai/codex.git"
 QWENDEX_CODEX_SOURCE_REPO="${QWENDEX_CODEX_SOURCE_REPO:-$QWENDEX_RELEASE_CODEX_SOURCE_REPO}"
-QWENDEX_RELEASE_CODEX_VERSION="0.145.0"
-QWENDEX_RELEASE_CODEX_SOURCE_COMMIT="25af12f7e61572b0bc18ddb1008be543b91519b0"
-QWENDEX_RELEASE_CODEX_PATCH_SHA256="16fbf12253db058320f5c262d4e3b0ad3d7a9d779ae21d1f0483acf5bdd7e914"
-QWENDEX_RELEASE_CODEX_CARGO_LOCK_SHA256="ffa26a770e6bce911f93f2e170d8a76bf27abb4c4696bb81a9a65940de1f217e"
+QWENDEX_RELEASE_CODEX_VERSION="0.147.0"
+QWENDEX_RELEASE_CODEX_SOURCE_COMMIT="be6e8eac029b183056b7e4402879f15d2c85f61b"
+QWENDEX_RELEASE_CODEX_PATCH_SHA256="fa38c6481923dd24fc07092602c3be3bef428d43bb298ec8ae285b21b42b6819"
+QWENDEX_RELEASE_CODEX_CARGO_LOCK_SHA256="bc4fe450de929afe82928734f860ca83e5f9dc5f9f1211b0974ea47b57af77ca"
+# Codex 0.147 enables Rusty V8's sandboxed code-mode runtime. Its own pinned
+# release publishes the verified archive/binding pair that the generic Rusty
+# V8 release omits; never substitute the non-sandbox archive or build an
+# unverified dependency copy.
+QWENDEX_RELEASE_CODEX_V8_VERSION="150.4.0"
+QWENDEX_RELEASE_CODEX_V8_RELEASE_TAG="rusty-v8-v$QWENDEX_RELEASE_CODEX_V8_VERSION"
+QWENDEX_RELEASE_CODEX_V8_PROFILE="ptrcomp_sandbox_release"
+QWENDEX_RELEASE_CODEX_V8_BASE_URL="https://github.com/openai/codex/releases/download/$QWENDEX_RELEASE_CODEX_V8_RELEASE_TAG"
+# This build lane supports the exact Codex-provided sandbox pair for the
+# release host. Keep the independently pinned names and digests here rather
+# than trusting a mutable release manifest to authenticate its own downloads.
+QWENDEX_RELEASE_CODEX_V8_TARGET="x86_64-unknown-linux-gnu"
+QWENDEX_RELEASE_CODEX_V8_ARCHIVE_NAME="librusty_v8_ptrcomp_sandbox_release_x86_64-unknown-linux-gnu.a.gz"
+QWENDEX_RELEASE_CODEX_V8_ARCHIVE_SHA256="a35c75d1f26e6a983885a45b33490a4ebe54f05050568b32b89cfb421b30b583"
+QWENDEX_RELEASE_CODEX_V8_BINDING_NAME="src_binding_ptrcomp_sandbox_release_x86_64-unknown-linux-gnu.rs"
+QWENDEX_RELEASE_CODEX_V8_BINDING_SHA256="7727826ae479bdb645e807239fb12d1f8e2e23de7a6cf16f5ee592690d1d8506"
+QWENDEX_RELEASE_CODEX_V8_CHECKSUMS_NAME="rusty_v8_ptrcomp_sandbox_release_x86_64-unknown-linux-gnu.sha256"
+QWENDEX_RELEASE_CODEX_V8_CHECKSUMS_SHA256="6774b42c9424c098c72a805c08d4e94be17c591cf02b1dc2633060255a8a61be"
+QWENDEX_RELEASE_CODEX_V8_BUILD_MODE="verified-codex-release-archive"
+QWENDEX_RELEASE_CODEX_V8_BUILD_REASON="codex-rusty-v8-sandbox-pair"
 QWENDEX_CODEX_SOURCE_REF="${QWENDEX_CODEX_SOURCE_REF:-rust-v$QWENDEX_RELEASE_CODEX_VERSION}"
 QWENDEX_MODELS_CACHE_FILE="models_cache.qwendex-$QWENDEX_RELEASE_CODEX_VERSION.json"
 
@@ -1338,6 +1358,144 @@ cmd_codex_source() {
           CARGO_HOME="$isolated_cargo_home" \
           cargo metadata --format-version 1 >/dev/null
       )
+      # Codex 0.147's code-mode host enables the sandboxed Rusty V8 profile.
+      # Fetch the exact archive and generated binding from the pinned Codex
+      # release, verify the manifest before Cargo sees either input, and keep
+      # the pair inside this disposable build root.
+      local v8_target
+      local v8_archive_name
+      local v8_binding_name
+      local v8_checksums_name
+      local v8_assets_dir
+      local v8_archive_path
+      local v8_binding_path
+      local v8_checksums_path
+      # Do not exit the consumer early: with pipefail that would turn rustc's
+      # harmless SIGPIPE into a false build failure.
+      v8_target="$(rustc -vV | awk '/^host: / { print $2 }')"
+      [[ -n "$v8_target" ]] || die "could not resolve the Rust target for the pinned Codex V8 artifacts"
+      [[ "$v8_target" == "$QWENDEX_RELEASE_CODEX_V8_TARGET" ]] || die "unsupported Rust target for the pinned Codex V8 artifacts: $v8_target"
+      v8_archive_name="$QWENDEX_RELEASE_CODEX_V8_ARCHIVE_NAME"
+      v8_binding_name="$QWENDEX_RELEASE_CODEX_V8_BINDING_NAME"
+      v8_checksums_name="$QWENDEX_RELEASE_CODEX_V8_CHECKSUMS_NAME"
+      v8_assets_dir="$isolated_build_root/rusty-v8"
+      v8_archive_path="$v8_assets_dir/$v8_archive_name"
+      v8_binding_path="$v8_assets_dir/$v8_binding_name"
+      v8_checksums_path="$v8_assets_dir/$v8_checksums_name"
+      mkdir -p "$v8_assets_dir"
+      curl --fail --location --proto '=https' --proto-redir '=https' --silent --show-error --retry 3 \
+        "$QWENDEX_RELEASE_CODEX_V8_BASE_URL/$v8_archive_name" \
+        -o "$v8_archive_path"
+      curl --fail --location --proto '=https' --proto-redir '=https' --silent --show-error --retry 3 \
+        "$QWENDEX_RELEASE_CODEX_V8_BASE_URL/$v8_binding_name" \
+        -o "$v8_binding_path"
+      curl --fail --location --proto '=https' --proto-redir '=https' --silent --show-error --retry 3 \
+        "$QWENDEX_RELEASE_CODEX_V8_BASE_URL/$v8_checksums_name" \
+        -o "$v8_checksums_path"
+      python3 - \
+        "$META_ROOT/codex_v8_artifacts.json" \
+        "$v8_archive_path" \
+        "$v8_binding_path" \
+        "$v8_checksums_path" \
+        "$QWENDEX_RELEASE_CODEX_V8_VERSION" \
+        "$QWENDEX_RELEASE_CODEX_V8_RELEASE_TAG" \
+        "$QWENDEX_RELEASE_CODEX_V8_PROFILE" \
+        "$v8_target" \
+        "$QWENDEX_RELEASE_CODEX_V8_BASE_URL" \
+        "$QWENDEX_RELEASE_CODEX_V8_TARGET" \
+        "$QWENDEX_RELEASE_CODEX_V8_ARCHIVE_NAME" \
+        "$QWENDEX_RELEASE_CODEX_V8_ARCHIVE_SHA256" \
+        "$QWENDEX_RELEASE_CODEX_V8_BINDING_NAME" \
+        "$QWENDEX_RELEASE_CODEX_V8_BINDING_SHA256" \
+        "$QWENDEX_RELEASE_CODEX_V8_CHECKSUMS_NAME" \
+        "$QWENDEX_RELEASE_CODEX_V8_CHECKSUMS_SHA256" <<'PY'
+import hashlib
+import json
+import re
+import sys
+from datetime import UTC, datetime
+from pathlib import Path
+
+(
+    output,
+    archive_raw,
+    binding_raw,
+    checksums_raw,
+    crate_version,
+    release_tag,
+    profile,
+    target,
+    base_url,
+    expected_target,
+    expected_archive_name,
+    expected_archive_sha256,
+    expected_binding_name,
+    expected_binding_sha256,
+    expected_checksums_name,
+    expected_checksums_sha256,
+) = sys.argv[1:17]
+archive = Path(archive_raw)
+binding = Path(binding_raw)
+checksums = Path(checksums_raw)
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+if target != expected_target:
+    raise SystemExit("Codex Rusty V8 target does not match the pinned release target")
+if archive.name != expected_archive_name or binding.name != expected_binding_name:
+    raise SystemExit("Codex Rusty V8 artifact names do not match the pinned release pair")
+if checksums.name != expected_checksums_name:
+    raise SystemExit("Codex Rusty V8 checksum manifest name does not match the pinned release pair")
+lines = [line.strip() for line in checksums.read_text(encoding="utf-8").splitlines() if line.strip()]
+if len(lines) != 2:
+    raise SystemExit("Codex Rusty V8 checksum manifest must contain exactly two entries")
+declared: dict[str, str] = {}
+for line in lines:
+    match = re.fullmatch(r"([0-9a-f]{64})\s+\*?([^\s]+)", line)
+    if not match:
+        raise SystemExit("Codex Rusty V8 checksum manifest has an invalid entry")
+    digest, filename = match.groups()
+    if Path(filename).name != filename or filename in declared:
+        raise SystemExit("Codex Rusty V8 checksum manifest has an unsafe or duplicate filename")
+    declared[filename] = digest
+expected_digests = {
+    expected_archive_name: expected_archive_sha256,
+    expected_binding_name: expected_binding_sha256,
+}
+if declared != expected_digests:
+    raise SystemExit("Codex Rusty V8 checksum manifest does not bind the expected archive and binding")
+if sha256_file(checksums) != expected_checksums_sha256:
+    raise SystemExit("Codex Rusty V8 checksum manifest digest does not match the pinned release pair")
+for path in (archive, binding):
+    if not path.is_file() or path.stat().st_size <= 0:
+        raise SystemExit(f"Codex Rusty V8 artifact is missing or empty: {path.name}")
+    if sha256_file(path) != declared[path.name]:
+        raise SystemExit(f"Codex Rusty V8 checksum mismatch: {path.name}")
+payload = {
+    "schema_version": "qwendex.dev.codex_v8_artifacts.v1",
+    "generated_at": datetime.now(UTC).isoformat(),
+    "status": "pass",
+    "provider": "openai/codex",
+    "crate_version": crate_version,
+    "release_tag": release_tag,
+    "profile": profile,
+    "target": target,
+    "base_url": base_url,
+    "download_policy": "https-only-no-insecure-redirects",
+    "archive": {"name": archive.name, "sha256": sha256_file(archive), "bytes": archive.stat().st_size},
+    "binding": {"name": binding.name, "sha256": sha256_file(binding), "bytes": binding.stat().st_size},
+    "checksums": {"name": checksums.name, "sha256": sha256_file(checksums), "bytes": checksums.stat().st_size},
+}
+Path(output).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+      require_json_pass "$META_ROOT/codex_v8_artifacts.json"
       CARGO_HOME="$isolated_cargo_home" python3 - \
         "$META_ROOT/codex_build_inputs.json" \
         "$CODEX_SOURCE_DIR" \
@@ -1345,7 +1503,10 @@ cmd_codex_source() {
         "$QWENDEX_RELEASE_CODEX_SOURCE_COMMIT" \
         "$QWENDEX_RELEASE_CODEX_SOURCE_REPO" \
         "$QWENDEX_RELEASE_CODEX_PATCH_SHA256" \
-        "$QWENDEX_RELEASE_CODEX_CARGO_LOCK_SHA256" <<'PY'
+        "$QWENDEX_RELEASE_CODEX_CARGO_LOCK_SHA256" \
+        "$QWENDEX_RELEASE_CODEX_V8_BUILD_MODE" \
+        "$QWENDEX_RELEASE_CODEX_V8_BUILD_REASON" \
+        "$META_ROOT/codex_v8_artifacts.json" <<'PY'
 import hashlib
 import json
 import os
@@ -1362,12 +1523,16 @@ from pathlib import Path
     expected_source_origin,
     expected_patch_sha256,
     expected_lock_sha256,
-) = sys.argv[1:8]
+    v8_build_mode,
+    v8_build_reason,
+    v8_artifacts,
+) = sys.argv[1:11]
 source_path = Path(source)
 allowed_changes = {
     "codex-rs/Cargo.lock",
     "codex-rs/codex-mcp/src/connection_manager.rs",
     "codex-rs/codex-mcp/src/connection_manager_tests.rs",
+    "codex-rs/codex-mcp/src/rmcp_client.rs",
     "codex-rs/config/src/tui_keymap.rs",
     "codex-rs/core/src/config/config_tests.rs",
     "codex-rs/core/src/config/mod.rs",
@@ -1442,6 +1607,10 @@ if source_ref == "rust-v0.145.0":
     # formerly patched in this file, so its canonical patch intentionally
     # leaves it untouched.
     required_patch_paths -= {"codex-rs/core/src/config/mod.rs"}
+elif source_ref == "rust-v0.147.0":
+    # 0.147 retains the upstream config/mod.rs behavior but rebases the full
+    # Qwendex V2 and Apps-cache patch surface, including rmcp_client.rs.
+    required_patch_paths -= {"codex-rs/core/src/config/mod.rs"}
 else:
     # These role/default guards rely on the 0.145 V2 spawn implementation.
     required_patch_paths -= {
@@ -1475,6 +1644,11 @@ cargo_home_configs = [
     if path.exists()
 ]
 project_cargo_config = source_path / "codex-rs" / ".cargo" / "config.toml"
+v8_artifacts_path = Path(v8_artifacts)
+try:
+    v8_artifacts_payload = json.loads(v8_artifacts_path.read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError):
+    v8_artifacts_payload = {}
 blockers = []
 if head != ref_target:
     blockers.append("source HEAD does not match the configured Codex source ref")
@@ -1496,6 +1670,8 @@ if source_patch_sha256 != expected_patch_sha256:
     blockers.append("Codex source patch does not match the canonical Qwendex patch digest")
 if cargo_lock_sha256 != expected_lock_sha256:
     blockers.append("Codex Cargo.lock does not match the canonical release digest")
+if not isinstance(v8_artifacts_payload, dict) or v8_artifacts_payload.get("status") != "pass":
+    blockers.append("verified Codex Rusty V8 artifact receipt is missing or invalid")
 data = {
     "schema_version": "qwendex.dev.codex_build_inputs.v1",
     "generated_at": datetime.now(UTC).isoformat(),
@@ -1528,6 +1704,9 @@ data = {
         "sha256": sha256_file(project_cargo_config) if project_cargo_config.is_file() else "",
     },
     "dependency_fetch_policy": "locked-network-fetch-with-registry-checksums",
+    "v8_build_mode": v8_build_mode,
+    "v8_build_reason": v8_build_reason,
+    "v8_artifacts": v8_artifacts_payload,
     "blockers": blockers,
 }
 Path(out).write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -1555,8 +1734,14 @@ PY
           -u RUSTDOCFLAGS \
           -u RUSTFLAGS \
           -u RUSTUP_TOOLCHAIN \
+          -u RUSTY_V8_ARCHIVE \
+          -u RUSTY_V8_MIRROR \
+          -u RUSTY_V8_SRC_BINDING_PATH \
+          -u V8_FROM_SOURCE \
           CARGO_HOME="$isolated_cargo_home" \
           CARGO_TARGET_DIR="$isolated_build_root/target" \
+          RUSTY_V8_ARCHIVE="$v8_archive_path" \
+          RUSTY_V8_SRC_BINDING_PATH="$v8_binding_path" \
           cargo build \
             --locked \
             --release \
@@ -1662,6 +1847,9 @@ data = {
     "cargo_home_config_files": build_inputs_payload.get("cargo_home_config_files"),
     "project_cargo_config": build_inputs_payload.get("project_cargo_config"),
     "dependency_fetch_policy": build_inputs_payload.get("dependency_fetch_policy"),
+    "v8_build_mode": build_inputs_payload.get("v8_build_mode"),
+    "v8_build_reason": build_inputs_payload.get("v8_build_reason"),
+    "v8_artifacts": build_inputs_payload.get("v8_artifacts"),
     "build_inputs_sha256": sha256_file(build_inputs_path),
     "binary": str(binary_path),
     "binary_bytes": binary_path.stat().st_size,
