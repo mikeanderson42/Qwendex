@@ -298,7 +298,8 @@ def release_fixture(tmp_path: Path) -> dict[str, object]:
     write_json(repo / "config/qwendex/qwendex.json", {"version": "1.2.3"})
     write_json(repo / "config/qwendex/qwendex.sample.json", {"version": "1.2.3"})
     (repo / "README.md").write_text(
-        "This checkout is seeded as `v1.2.3`. The installer requires `@openai/codex@0.144.4`.\n",
+        "# Qwendex\n\nQwendex 1.2.3 is the fixture release. "
+        "The installer requires `@openai/codex@0.144.4`.\n",
         encoding="utf-8",
     )
     (repo / "RELEASE.md").write_text(

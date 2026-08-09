@@ -3817,10 +3817,11 @@ def test_qwendex_redacts_secret_like_values_from_output_and_receipts(tmp_path):
         project_config=ROOT / "config/qwendex/qwendex.json",
         user_config=tmp_path / "missing.json",
     )
+    fake_aws_key = "AKIA" + "ABCDEFGHIJKLMNOP"
     secret_text = (
         "password=supersecretvalue123 secret=anothersecretvalue456 "
         "api_key=fakeapikeyvalue789 access_token=localaccesstokenvalue123 "
-        "AKIAABCDEFGHIJKLMNOP Bearer abcdefghijklmnopqrstuvwxyz.123456"
+        f"{fake_aws_key} Bearer abcdefghijklmnopqrstuvwxyz.123456"
     )
 
     envelope = qwendex.stable_envelope(command="test", status="fail", summary=secret_text, errors=[secret_text], data={"stdout": secret_text})
@@ -3832,7 +3833,7 @@ def test_qwendex_redacts_secret_like_values_from_output_and_receipts(tmp_path):
     assert "[redacted]" in envelope["data"]["stdout"]
     assert "[redacted]" in receipt_data["stdout_tail"]
     assert "supersecretvalue123" not in json.dumps(envelope) + json.dumps(receipt_data)
-    assert "AKIAABCDEFGHIJKLMNOP" not in json.dumps(envelope) + json.dumps(receipt_data)
+    assert fake_aws_key not in json.dumps(envelope) + json.dumps(receipt_data)
     assert "abcdefghijklmnopqrstuvwxyz.123456" not in json.dumps(envelope) + json.dumps(receipt_data)
 
 

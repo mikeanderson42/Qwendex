@@ -960,7 +960,11 @@ def version_sources(
             value = ""
         sources[name] = {"value": value, "sha256": sha256_bytes(raw)}
     patterns = (
-        ("readme", "README.md", r"seeded as `v([^`]+)`"),
+        (
+            "readme",
+            "README.md",
+            r"(?m)(?:^Qwendex[ \t]+|seeded as `v)([0-9]+\.[0-9]+\.[0-9]+)(?=`|\b)",
+        ),
         (
             "release_notes",
             "public/qwendex/release-notes.md",

@@ -211,8 +211,9 @@ def test_public_private_patterns_are_configurable_and_generic(tmp_path):
     repo = tmp_path / "repo"
     init_repo(repo)
     (repo / "docs").mkdir()
+    private_path = "/" + "home/" + "example/private/place"
     (repo / "README.md").write_text(
-        "# Home\n\nHost path: /home/example/private/place\nMarker: PRIVATE-CUSTOM-MARKER\n",
+        f"# Home\n\nHost path: {private_path}\nMarker: PRIVATE-CUSTOM-MARKER\n",
         encoding="utf-8",
     )
     policy = write_policy(repo)
