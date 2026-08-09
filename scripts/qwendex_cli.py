@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.6.8"
+VERSION = "0.6.9"
 CONFIG_DIR = ROOT / "config" / "qwendex"
 DEFAULT_PROJECT_CONFIG = CONFIG_DIR / "qwendex.json"
 DEFAULT_USER_CONFIG = Path.home() / ".config" / "qwendex" / "config.json"
@@ -782,6 +782,42 @@ CODEX_PATCH_MANIFESTS["0.145.0"] = {
         "Keep the native Qwendex V2 schema and handler aligned by sealing every per-child override field.",
         "Reconcile Codex unit and integration tests plus the generated config schema with the Qwendex V2 and TUI keymap contracts.",
         "Treat a failed hosted Codex Apps refresh with a non-empty shared tool cache as degraded-ready, warn clearly, and keep reconnecting without reporting a hard MCP startup failure.",
+    ],
+}
+CODEX_PATCH_MANIFESTS["0.147.0"] = {
+    **CODEX_PATCH_MANIFESTS["0.145.0"],
+    "codex_tag": "rust-v0.147.0",
+    # 0.147.0 keeps the Qwendex V2 contract, but upstream moved the models
+    # cache implementation and renamed a resume-test assertion.
+    "source_anchors": [
+        {
+            **spec,
+            "anchors": ["const MODEL_CACHE_FILE", "FileModelsCache::new("],
+        }
+        if spec["path"] == "codex-rs/models-manager/src/manager.rs"
+        else {
+            **spec,
+            "anchors": [
+                "const FOLLOWUP_TASK",
+                "follow-up should reload the surviving sibling",
+            ],
+        }
+        if spec["path"] == "codex-rs/core/tests/suite/multi_agent_resume.rs"
+        else spec
+        for spec in CODEX_PATCH_MANIFESTS["0.145.0"]["source_anchors"]
+    ]
+    + [
+        {
+            "path": "codex-rs/codex-mcp/src/rmcp_client.rs",
+            "anchors": [
+                "pub(crate) struct AsyncManagedClient",
+                "pub(crate) fn has_cached_tools",
+            ],
+        },
+    ],
+    "required_source_edits": [
+        *CODEX_PATCH_MANIFESTS["0.145.0"]["required_source_edits"],
+        "Require a non-empty account-scoped Codex Apps cache before reclassifying a failed hosted refresh as degraded-ready.",
     ],
 }
 
@@ -5471,7 +5507,9 @@ def codex_source_patch_specs(version: str) -> list[dict[str, Any]]:
     if version not in CODEX_PATCH_MANIFESTS:
         return []
     listed_agent_legacy_field = (
-        "            last_task_message: None,\n" if version != "0.145.0" else ""
+        "            last_task_message: None,\n"
+        if version not in {"0.145.0", "0.147.0"}
+        else ""
     )
     specs = [
         {
@@ -6373,7 +6411,98 @@ max_threads = 2
             ],
         },
     ]
-    if version == "0.145.0":
+    if version == "0.147.0":
+        resume_child_nested_response = """        sse(vec![
+            ev_response_created("resp-worker-1"),
+            ev_function_call_with_namespace(
+                NESTED_CALL_ID,
+                COLLABORATION_NAMESPACE,
+                "spawn_agent",
+                r#"{"message":"inspect the nested repository","task_name":"grandchild","fork_turns":"none"}"#,
+            ),
+            ev_completed("resp-worker-1"),
+        ]),
+"""
+        resume_child_completion_response = """        sse(vec![
+            ev_response_created("resp-worker-1"),
+            ev_assistant_message("msg-worker-1", "initial worker task complete"),
+            ev_completed("resp-worker-1"),
+        ]),
+"""
+        resume_nested_setup = """    let nested_mock = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            body_contains(request, NESTED_TASK)
+                && request_has_input_type(request, "agent_message")
+                && !body_contains(request, NESTED_CALL_ID)
+        },
+        sse(vec![ev_completed("resp-parent-turn-assistant")]),
+    )
+    .await;
+    for (text, is_subagent) in [(NESTED_CALL_ID, true), (QUEUE_CALL_ID, false)] {
+        mount_sse_once_match(
+            &server,
+            move |request: &wiremock::Request| {
+                body_contains(request, text)
+                    && request_has_input_type(request, "agent_message") == is_subagent
+            },
+            sse(vec![ev_completed("resp-parent-turn-assistant")]),
+        )
+        .await;
+    }
+"""
+        resume_queue_setup = """    mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            body_contains(request, QUEUE_CALL_ID)
+                && !request_has_input_type(request, "agent_message")
+        },
+        sse(vec![ev_completed("resp-parent-turn-assistant")]),
+    )
+    .await;
+"""
+        resume_sibling_lookup = """    let grandchild = nested_mock.last_request().expect("grandchild").body_json();
+    let nested_id = &grandchild["client_metadata"]["thread_id"];
+    let sibling_thread_id = initial
+        .thread_manager
+        .list_thread_ids()
+        .await
+        .into_iter()
+        .find(|id| ![root_thread_id, worker_thread_id].contains(id) && &json!(id) != nested_id)
+        .ok_or_else(|| anyhow::anyhow!("spawned sibling should be registered"))?;
+"""
+        resume_sibling_lookup_without_nested = """    let sibling_thread_id = initial
+        .thread_manager
+        .list_thread_ids()
+        .await
+        .into_iter()
+        .find(|id| ![root_thread_id, worker_thread_id].contains(id))
+        .ok_or_else(|| anyhow::anyhow!("spawned sibling should be registered"))?;
+"""
+        resume_parent_metadata = """    let nested_parent = initial_child["client_metadata"]["turn_id"]
+        .as_str()
+        .expect("nested worker parent turn");
+    for (body, parent_thread, parent_turn) in [
+        (&initial_root, None, None),
+        (&queue_root, None, None),
+        (&followup_root, None, None),
+        (&initial_child, Some(root_thread_id), Some(initial_parent)),
+        (&followup_child, Some(root_thread_id), Some(followup_parent)),
+        (&grandchild, Some(worker_thread_id), Some(nested_parent)),
+    ] {
+"""
+        resume_parent_metadata_without_nested = """    for (body, parent_thread, parent_turn) in [
+        (&initial_root, None, None),
+        (&queue_root, None, None),
+        (&followup_root, None, None),
+        (&initial_child, Some(root_thread_id), Some(initial_parent)),
+        (&followup_child, Some(root_thread_id), Some(followup_parent)),
+    ] {
+"""
+        mcp_tests_anchor = """#[tokio::test]
+async fn list_all_tools_uses_shared_codex_apps_cache_when_client_startup_fails() {
+"""
+    if version in {"0.145.0", "0.147.0"}:
         redundant_v2_config_paths = {
             "codex-rs/core/src/config/mod.rs",
             "codex-rs/core/src/config/config_tests.rs",
@@ -7870,6 +7999,806 @@ async fn list_all_tools_uses_shared_codex_apps_cache_when_client_startup_fails()
                         ),
                     ],
                 },
+                *(
+                    [
+                {
+                    "path": "codex-rs/codex-mcp/src/rmcp_client.rs",
+                    "replacements": [
+                        (
+                            """    pub(crate) fn has_cached_tools(&self) -> bool {
+        self.codex_apps_tools_cache_context
+            .as_ref()
+            .is_some_and(ConnectorRuntimeContext::has_current_tools)
+            || self
+                .tool_catalog_cache_context
+                .as_ref()
+                .is_some_and(McpToolCatalogCacheContext::has_tools)
+    }
+""",
+                            f"""    pub(crate) fn has_cached_tools(&self) -> bool {{
+        self.codex_apps_tools_cache_context
+            .as_ref()
+            .is_some_and(ConnectorRuntimeContext::has_current_tools)
+            || self
+                .tool_catalog_cache_context
+                .as_ref()
+                .is_some_and(McpToolCatalogCacheContext::has_tools)
+    }}
+
+    // {QWENDEX_CODEX_PATCH_MARKER}: startup readiness can only be degraded
+    // when the account-scoped hosted Apps cache has at least one tool.
+    pub(crate) fn has_non_empty_codex_apps_tools_cache(&self) -> bool {{
+        self.codex_apps_tools_cache_context
+            .as_ref()
+            .and_then(ConnectorRuntimeContext::current_tools)
+            .is_some_and(|tools| !tools.is_empty())
+    }}
+""",
+                        ),
+                    ],
+                },
+                {
+                    "path": "codex-rs/core/src/tools/spec_plan_tests.rs",
+                    "replacements": [
+                        (
+                            """    for (model, model_multi_agent_version, supports_delegation) in [
+""",
+                            """    for (model, model_multi_agent_version, _supports_delegation) in [
+""",
+                        ),
+                        (
+                            """        if supports_delegation {
+            plan.assert_visible_contains(&["agents"]);
+            plan.assert_registered_contains(&[&spawn_agent_name, &followup_task_name]);
+        } else {
+            plan.assert_visible_lacks(&["agents"]);
+            plan.assert_registered_lacks(&[&spawn_agent_name, &followup_task_name]);
+        }
+""",
+                            f"""        // {QWENDEX_CODEX_PATCH_MARKER}: V2 workers never receive
+        // collaboration-management tools, even when their model supports V2.
+        plan.assert_visible_lacks(&["agents"]);
+        plan.assert_registered_lacks(&[&spawn_agent_name, &followup_task_name]);
+""",
+                        ),
+                    ],
+                },
+                {
+                    "path": "codex-rs/core/tests/suite/multi_agent_resume.rs",
+                    "replacements": [
+                        (
+                            "const NESTED_CALL_ID: &str = \"spawn-grandchild\";\n",
+                            "",
+                        ),
+                        (
+                            "const NESTED_TASK: &str = \"inspect the nested repository\";\n",
+                            "",
+                        ),
+                        (
+                            resume_child_nested_response,
+                            resume_child_completion_response,
+                        ),
+                        (
+                            resume_nested_setup,
+                            resume_queue_setup,
+                        ),
+                        (
+                            resume_sibling_lookup,
+                            resume_sibling_lookup_without_nested,
+                        ),
+                        (
+                            """    assert!(!initial_child_request.body_contains_text(ROLE_DEVELOPER_INSTRUCTIONS));
+    assert!(!initial_child_request.body_contains_text(SUBAGENT_DEVELOPER_INSTRUCTIONS));
+    let initial_root_body = initial_root_request.body_json();
+""",
+                            """    assert!(!initial_child_request.body_contains_text(ROLE_DEVELOPER_INSTRUCTIONS));
+    assert!(!initial_child_request.body_contains_text(SUBAGENT_DEVELOPER_INSTRUCTIONS));
+    assert!(
+        !initial_child_request.body_contains_text("\\\"spawn_agent\\\""),
+        "Qwendex V2 workers must not be offered nested spawn_agent",
+    );
+    let initial_root_body = initial_root_request.body_json();
+""",
+                        ),
+                        (
+                            resume_parent_metadata,
+                            resume_parent_metadata_without_nested,
+                        ),
+                    ],
+                },
+                {
+                    "path": "codex-rs/codex-mcp/src/connection_manager_tests.rs",
+                    "qwendex_147_native_mcp_tests": True,
+                    "replacements": [
+                        (
+                            mcp_tests_anchor,
+                            f"""#[test]
+fn failed_codex_apps_startup_uses_cache_without_masking_other_states() {{
+    let reconnect_factory = Arc::new(|| {{
+        futures::future::pending::<std::result::Result<ManagedClient, StartupOutcomeError>>()
+            .boxed()
+            .shared()
+    }});
+    let failed = Err(StartupOutcomeError::Failed {{
+        error: "transient tools/list failure".to_string(),
+        is_authentication_required: false,
+    }});
+    let cached = create_test_manager_with_failed_apps_startup(
+        vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "cached_search")],
+        Arc::clone(&reconnect_factory),
+    );
+    let cached_client = cached.test_client(CODEX_APPS_MCP_SERVER_NAME);
+
+    // {QWENDEX_CODEX_PATCH_MARKER}
+    assert!(startup_failure_uses_cached_codex_apps_tools(
+        cached_client,
+        &failed,
+    ));
+    assert!(cached_client.has_non_empty_codex_apps_tools_cache());
+    let empty = create_test_manager_with_failed_apps_startup(Vec::new(), reconnect_factory);
+    assert!(!startup_failure_uses_cached_codex_apps_tools(
+        empty.test_client(CODEX_APPS_MCP_SERVER_NAME),
+        &failed,
+    ));
+    assert!(!startup_failure_uses_cached_codex_apps_tools(
+        cached_client,
+        &Err(StartupOutcomeError::Cancelled),
+    ));
+    let authentication_required = Err(StartupOutcomeError::Failed {{
+        error: "login required".to_string(),
+        is_authentication_required: true,
+    }});
+    assert!(!startup_failure_uses_cached_codex_apps_tools(
+        cached_client,
+        &authentication_required,
+    ));
+}}
+
+#[tokio::test]
+async fn failed_codex_apps_startup_reports_cached_degraded_ready_events() -> anyhow::Result<()> {{
+    let codex_home = tempdir()?;
+    let cache_key = ConnectorRuntimeContextKey::personal(
+        Some("startup-event-account".to_string()),
+        Some("startup-event-user".to_string()),
+    );
+    let cache_manager = ConnectorRuntimeManager::<ToolInfo>::default();
+    let cache_context = cache_manager.context(codex_home.path().to_path_buf(), cache_key.clone());
+    store_current_tools(
+        &cache_context,
+        vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "cached_search")],
+    );
+    let server_config: McpServerConfig =
+        serde_json::from_value(serde_json::json!({{ "url": "http://127.0.0.1:1" }}))?;
+    let mut config = crate::mcp::tests::test_mcp_config(codex_home.path().to_path_buf());
+    let mut catalog = crate::ResolvedMcpCatalog::builder();
+    catalog.register(crate::McpServerRegistration::from_compatibility(
+        CODEX_APPS_MCP_SERVER_NAME.to_string(),
+        "qwendex-cached-startup-test",
+        server_config.clone(),
+    ));
+    config.mcp_server_catalog = catalog.build();
+    let cancel_token = CancellationToken::new();
+    let (tx_event, rx_event) = async_channel::bounded(16);
+    let manager = McpConnectionSet::new(
+        /*previous*/ None,
+        McpPublicationGate::already_published(),
+        McpRuntimeInput {{
+            config: Arc::new(config),
+            plugins_available: false,
+            ready_selected_capability_roots: Vec::new(),
+            mcp_servers: HashMap::from([(
+                CODEX_APPS_MCP_SERVER_NAME.to_string(),
+                EffectiveMcpServer::configured(server_config),
+            )]),
+            submit_id: "qwendex-cached-startup-test".to_string(),
+            tx_event: Some(tx_event),
+            startup_cancellation_token: cancel_token.clone(),
+            runtime_context: McpRuntimeContext::new(
+                Arc::new(environment_manager_without_environments()),
+                codex_home.path().to_path_buf(),
+            ),
+            codex_apps_tools_cache: cache_manager,
+            tool_catalog_cache: McpToolCatalogCache::default(),
+            codex_apps_tools_cache_key: cache_key,
+            client_mcp_extensions: ClientMcpExtensions::default(),
+            auth: None,
+            codex_apps_auth_manager: None,
+            elicitation_reviewer: None,
+            elicitation_lifecycle: None,
+        }},
+        ElicitationRequestRouter::default(),
+    )
+    .await;
+
+    let mut saw_starting = false;
+    let mut saw_ready = false;
+    let mut saw_cached_warning = false;
+    let summary = loop {{
+        let event = tokio::time::timeout(Duration::from_secs(2), rx_event.recv())
+            .await
+            .expect("startup event timeout")
+            .expect("startup event channel closed");
+        match event.msg {{
+            EventMsg::McpStartupUpdate(update) if update.server == CODEX_APPS_MCP_SERVER_NAME => {{
+                saw_starting |= matches!(update.status, McpStartupStatus::Starting);
+                saw_ready |= matches!(update.status, McpStartupStatus::Ready);
+                assert!(!matches!(update.status, McpStartupStatus::Failed {{ .. }}));
+            }}
+            EventMsg::Warning(warning) => {{
+                saw_cached_warning |= warning
+                    .message
+                    .contains("Cached tool definitions are loaded");
+            }}
+            EventMsg::McpStartupComplete(summary) => break summary,
+            _ => {{}}
+        }}
+    }};
+
+    assert!(saw_starting);
+    assert!(saw_ready);
+    assert!(saw_cached_warning);
+    assert!(summary
+        .ready
+        .contains(&CODEX_APPS_MCP_SERVER_NAME.to_string()));
+    assert!(summary.failed.is_empty());
+    assert!(summary.cancelled.is_empty());
+    assert_eq!(manager.list_all_tools().await.len(), 1);
+    cancel_token.cancel();
+    Ok(())
+}}
+
+{mcp_tests_anchor}""",
+                        ),
+                    ],
+                },
+                    ] if version == "0.147.0" else []
+                ),
+            ]
+        )
+    if version == "0.147.0":
+        # Codex 0.147.0 added a side-conversation key after raw output, moved
+        # the Apps cache helper, and made V2 child policy more explicit. Keep
+        # the Qwendex contract intact while preserving those upstream paths.
+        side_config_field = (
+            "    /// Switch between a side conversation and its parent without closing either.\n"
+            "    pub toggle_side_conversation: Option<KeybindingsSpec>,\n"
+        )
+        side_app_field = (
+            "    /// Switch between a side conversation and its parent without closing either.\n"
+            "    pub(crate) toggle_side_conversation: Vec<KeyBinding>,\n"
+        )
+        side_resolution = (
+            "            toggle_side_conversation: if side_toggle_default_is_shadowed {\n"
+            "                Vec::new()\n"
+            "            } else {\n"
+            "                resolve_bindings(\n"
+            "                    keymap.global.toggle_side_conversation.as_ref(),\n"
+            "                    &defaults.app.toggle_side_conversation,\n"
+            "                    \"tui.keymap.global.toggle_side_conversation\",\n"
+            "                )?\n"
+            "            },\n"
+        )
+        side_config_binding = (
+            "            (\n"
+            "                keymap.global.toggle_side_conversation.as_ref(),\n"
+            "                app.toggle_side_conversation.as_slice(),\n"
+            "            ),\n"
+        )
+        side_default = (
+            "                toggle_side_conversation: default_bindings![ctrl(KeyCode::Char('/'))],\n"
+        )
+        side_action_binding = (
+            "                (\"toggle_side_conversation\", side_toggle_bindings.as_slice()),\n"
+        )
+        current_v2_arm = """        MultiAgentVersion::V2 => {
+            turn_context.session_source.get_agent_path().is_none()
+                || turn_context.model_info.multi_agent_version == Some(MultiAgentVersion::V2)
+        }
+"""
+        current_spawn_setup = """    let args: SpawnAgentArgs = parse_arguments(&arguments)?;
+    let fork_mode = args.fork_mode()?;
+    let message = message_content(args.message)?;
+    let role_name = args
+        .agent_type
+        .as_deref()
+        .map(str::trim)
+        .filter(|role| !role.is_empty());
+
+    let session_source = turn.session_source.clone();
+    let child_depth = next_thread_spawn_depth(&session_source);
+    let mut config = build_agent_spawn_config(
+        &session.get_base_instructions().await,
+        turn.as_ref(),
+        step_context.environments.primary(),
+    )?;
+    if let Some(service_tier) = args.service_tier.as_ref() {
+        config.service_tier = Some(service_tier.clone());
+    }
+    let is_full_history_fork = matches!(fork_mode, Some(SpawnAgentForkMode::FullHistory));
+    if is_full_history_fork {
+        reject_full_fork_agent_type_override(role_name)?;
+    }
+    apply_requested_spawn_agent_model_overrides(
+        &session,
+        turn.as_ref(),
+        &mut config,
+        args.model.as_deref(),
+        args.reasoning_effort.clone(),
+    )
+    .await?;
+    if !is_full_history_fork {
+        apply_spawn_agent_role(&session, &mut config, role_name).await?;
+    }
+    apply_spawn_agent_service_tier(
+        &session,
+        &mut config,
+        turn.config.service_tier.as_deref(),
+        args.service_tier.as_deref(),
+    )
+    .await?;
+"""
+        qwendex_spawn_setup = f"""    let args: SpawnAgentArgs = parse_arguments(&arguments)?;
+    let fork_mode = args.fork_mode()?;
+    {marker}
+    let role_name: Option<&str> = None;
+
+    let message = message_content(args.message)?;
+    let session_source = turn.session_source.clone();
+    let child_depth = next_thread_spawn_depth(&session_source);
+    let mut config = build_agent_spawn_config(
+        &session.get_base_instructions().await,
+        turn.as_ref(),
+        step_context.environments.primary(),
+    )?;
+    apply_requested_spawn_agent_model_overrides(&session, turn.as_ref(), &mut config, None, None)
+        .await?;
+    apply_spawn_agent_service_tier(
+        &session,
+        &mut config,
+        turn.config.service_tier.as_deref(),
+        None,
+    )
+    .await?;
+"""
+        rebased_specs: list[dict[str, Any]] = []
+        for spec in specs:
+            path = str(spec["path"])
+            # The 0.145 MCP tests construct APIs that 0.147 removed.  Keep
+            # the production rebase, then inject 0.147-native coverage below.
+            if (
+                path == "codex-rs/codex-mcp/src/connection_manager_tests.rs"
+                and not spec.get("qwendex_147_native_mcp_tests")
+            ):
+                continue
+            replacements: list[tuple[str, str]] = []
+            expected_occurrences: dict[str, int] = {}
+            for old, new in spec["replacements"]:
+                if path == "codex-rs/config/src/tui_keymap.rs":
+                    if "pub toggle_raw_output: Option<KeybindingsSpec>" in old:
+                        old = old.replace("\n}\n", "\n" + side_config_field + "}\n")
+                        new = new.replace("\n}\n", "\n" + side_config_field + "}\n")
+                elif path == "codex-rs/tui/src/keymap.rs":
+                    if "pub(crate) toggle_raw_output: Vec<KeyBinding>" in old:
+                        old = old.replace("\n}\n", "\n" + side_app_field + "}\n")
+                        new = new.replace("\n}\n", "\n" + side_app_field + "}\n")
+                    elif "toggle_raw_output: resolve_bindings(" in old:
+                        old += side_resolution
+                        new += side_resolution
+                    elif "keymap.global.toggle_raw_output.as_ref()" in old:
+                        old += side_config_binding
+                        new += side_config_binding
+                    elif "toggle_raw_output: default_bindings" in old:
+                        old = old.replace("            },\n", side_default + "            },\n")
+                        new = new.replace("            },\n", side_default + "            },\n")
+                    elif "(\"toggle_raw_output\", self.app.toggle_raw_output.as_slice())," in old:
+                        raw_binding = "                (\"toggle_raw_output\", self.app.toggle_raw_output.as_slice()),\n"
+                        old = old.replace(raw_binding, raw_binding + side_action_binding)
+                        new = new.replace(raw_binding, raw_binding + side_action_binding)
+                        if "(\"chat.interrupt_turn\", self.chat.interrupt_turn.as_slice())," in old:
+                            # 0.147 validates app bindings in both the
+                            # uniqueness and reserved-key passes.
+                            expected_occurrences[old] = 2
+                elif path == "codex-rs/core/src/tools/spec_plan.rs":
+                    if old == "        MultiAgentVersion::V2 => true,\n":
+                        old = current_v2_arm
+                        new = f"""        {marker}
+        MultiAgentVersion::V2 => !turn_context.session_source.is_non_root_agent(),
+"""
+                elif path == "codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs":
+                    if old.startswith("    let args: SpawnAgentArgs = parse_arguments(&arguments)?;"):
+                        old = current_spawn_setup
+                        new = qwendex_spawn_setup
+                elif path == "codex-rs/core/tests/suite/multi_agent_resume.rs":
+                    if old.startswith('const ROLE_MODEL: &str = "gpt-5.4";'):
+                        old = old.replace("gpt-5.4", "gpt-5.6-sol")
+                        new = new.replace("gpt-5.4", "gpt-5.6-sol")
+                    elif old.startswith("use codex_protocol::models::PermissionProfile;"):
+                        new = (
+                            "use codex_protocol::models::PermissionProfile;\n"
+                            f"// {QWENDEX_CODEX_PATCH_MARKER}: V2 resume coverage verifies inherited policy, not native roles.\n"
+                        )
+                    elif old.startswith("    assert!(initial_child_request.requests().iter().any"):
+                        old = """    assert!(initial_child_request.requests().iter().any(|request| {
+        request.body_contains_text(INITIAL_TASK)
+            && request.body_contains_text(ROLE_DEVELOPER_INSTRUCTIONS)
+            && request.body_contains_text(\"<permission_profile type=\\\"disabled\\\">\")
+            && !request.body_contains_text(SUBAGENT_DEVELOPER_INSTRUCTIONS)
+    }));
+    let initial_worker_config = worker_thread.config_snapshot().await;
+    let initial_worker_role_config = (
+        initial_worker_config.model,
+        initial_worker_config.model_provider_id,
+        initial_worker_config.reasoning_effort,
+        initial_worker_config.permission_profile,
+    );
+    assert_eq!(
+        initial_worker_role_config,
+        (
+            ROLE_MODEL.to_string(),
+            ROLE_MODEL_PROVIDER_ID.to_string(),
+            Some(ReasoningEffort::High),
+            PermissionProfile::Disabled,
+        )
+    );
+"""
+                        new = new.replace(
+                            "    assert!(!initial_child_request.body_contains_text(ROLE_DEVELOPER_INSTRUCTIONS));\n",
+                            "    assert!(!initial_child_request.body_contains_text(ROLE_DEVELOPER_INSTRUCTIONS));\n"
+                            "    assert!(!initial_child_request.body_contains_text(SUBAGENT_DEVELOPER_INSTRUCTIONS));\n",
+                        )
+                    elif old.startswith("    assert!(followup_child_request.requests().iter().any"):
+                        old = """    assert!(followup_child_request.requests().iter().any(|request| {
+        request.body_contains_text(FOLLOWUP_TASK)
+            && request.body_contains_text(ROLE_DEVELOPER_INSTRUCTIONS)
+            && request.body_contains_text(\"<permission_profile type=\\\"disabled\\\">\")
+            && !request.body_contains_text(SUBAGENT_DEVELOPER_INSTRUCTIONS)
+    }));
+"""
+                        new = new.replace(
+                            "            && !request.body_contains_text(ROLE_DEVELOPER_INSTRUCTIONS)\n",
+                            "            && !request.body_contains_text(ROLE_DEVELOPER_INSTRUCTIONS)\n"
+                            "            && !request.body_contains_text(SUBAGENT_DEVELOPER_INSTRUCTIONS)\n",
+                        )
+                elif path == "codex-rs/core/src/tools/handlers/multi_agents_tests.rs":
+                    if old.startswith("async fn multi_agent_v2_spawn_rejects_child_model_from_different_backend"):
+                        continue
+                    if old.startswith("        .expect(\"model from a different multi-agent backend should be rejected\")"):
+                        continue
+                    if old.startswith("#[tokio::test]\nasync fn multi_agent_v2_full_history_fork_accepts_explicit_service_tier"):
+                        old = old.replace(
+                            ".start_thread((*turn.config).clone())",
+                            ".start_thread(StartThreadOptions::new((*turn.config).clone()))",
+                        )
+                    new = new.replace(
+                        ".start_thread((*turn.config).clone())",
+                        ".start_thread(StartThreadOptions::new((*turn.config).clone()))",
+                    )
+                    if old == "            message: \"Wait timed out.\".to_string(),\n":
+                        # All four timeout coverage cases exercise the same
+                        # Qwendex timeout guidance in 0.147.
+                        expected_occurrences[old] = 4
+                elif path == "codex-rs/codex-mcp/src/connection_manager.rs":
+                    if old.startswith("fn should_share_codex_apps_tools_cache"):
+                        old = "pub use tool_catalog::tool_is_model_visible;\n"
+                        new = f"""pub use tool_catalog::tool_is_model_visible;
+
+// {QWENDEX_CODEX_PATCH_MARKER}
+fn startup_failure_uses_cached_codex_apps_tools(
+    client: &AsyncManagedClient,
+    outcome: &std::result::Result<ManagedClient, StartupOutcomeError>,
+) -> bool {{
+    client.is_codex_apps_mcp_server
+        && matches!(
+            outcome,
+            Err(StartupOutcomeError::Failed {{
+                is_authentication_required: false,
+                ..
+            }})
+        )
+        && client.has_non_empty_codex_apps_tools_cache()
+}}
+"""
+                replacements.append((old, new))
+            spec["replacements"] = replacements
+            if expected_occurrences:
+                spec["expected_occurrences"] = expected_occurrences
+            rebased_specs.append(spec)
+        specs = rebased_specs
+        legacy_items_test = """#[tokio::test]
+async fn multi_agent_v2_spawn_rejects_legacy_items_field() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    let root = manager
+        .start_thread(StartThreadOptions::new((*turn.config).clone()))
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.thread_id = root.thread_id;
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    set_turn_config(&mut turn, config);
+
+    let invocation = invocation(
+        Arc::new(session),
+        Arc::new(turn),
+        "spawn_agent",
+        function_payload(json!({
+            "message": "inspect this repo",
+            "items": [{"type": "text", "text": "inspect this repo"}],
+            "task_name": "worker"
+        })),
+    );
+    let Err(err) = SpawnAgentHandlerV2::default().handle(invocation).await else {
+        panic!("legacy items field should be rejected");
+    };
+    let FunctionCallError::RespondToModel(message) = err else {
+        panic!("legacy items field should surface as a model-facing error");
+    };
+    assert!(message.contains("unknown field `items`"));
+}
+
+"""
+        resume_child_nested_response = """        sse(vec![
+            ev_response_created("resp-worker-1"),
+            ev_function_call_with_namespace(
+                NESTED_CALL_ID,
+                COLLABORATION_NAMESPACE,
+                "spawn_agent",
+                r#"{"message":"inspect the nested repository","task_name":"grandchild","fork_turns":"none"}"#,
+            ),
+            ev_completed("resp-worker-1"),
+        ]),
+"""
+        resume_child_completion_response = """        sse(vec![
+            ev_response_created("resp-worker-1"),
+            ev_assistant_message("msg-worker-1", "initial worker task complete"),
+            ev_completed("resp-worker-1"),
+        ]),
+"""
+        resume_nested_setup = """    let nested_mock = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            body_contains(request, NESTED_TASK)
+                && request_has_input_type(request, "agent_message")
+                && !body_contains(request, NESTED_CALL_ID)
+        },
+        sse(vec![ev_completed("resp-parent-turn-assistant")]),
+    )
+    .await;
+    for (text, is_subagent) in [(NESTED_CALL_ID, true), (QUEUE_CALL_ID, false)] {
+        mount_sse_once_match(
+            &server,
+            move |request: &wiremock::Request| {
+                body_contains(request, text)
+                    && request_has_input_type(request, "agent_message") == is_subagent
+            },
+            sse(vec![ev_completed("resp-parent-turn-assistant")]),
+        )
+        .await;
+    }
+"""
+        resume_queue_setup = """    mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            body_contains(request, QUEUE_CALL_ID)
+                && !request_has_input_type(request, "agent_message")
+        },
+        sse(vec![ev_completed("resp-parent-turn-assistant")]),
+    )
+    .await;
+"""
+        resume_sibling_lookup = """    let grandchild = nested_mock.last_request().expect("grandchild").body_json();
+    let nested_id = &grandchild["client_metadata"]["thread_id"];
+    let sibling_thread_id = initial
+        .thread_manager
+        .list_thread_ids()
+        .await
+        .into_iter()
+        .find(|id| ![root_thread_id, worker_thread_id].contains(id) && &json!(id) != nested_id)
+        .ok_or_else(|| anyhow::anyhow!("spawned sibling should be registered"))?;
+"""
+        resume_sibling_lookup_without_nested = """    let sibling_thread_id = initial
+        .thread_manager
+        .list_thread_ids()
+        .await
+        .into_iter()
+        .find(|id| ![root_thread_id, worker_thread_id].contains(id))
+        .ok_or_else(|| anyhow::anyhow!("spawned sibling should be registered"))?;
+"""
+        resume_parent_metadata = """    let nested_parent = initial_child["client_metadata"]["turn_id"]
+        .as_str()
+        .expect("nested worker parent turn");
+    for (body, parent_thread, parent_turn) in [
+        (&initial_root, None, None),
+        (&queue_root, None, None),
+        (&followup_root, None, None),
+        (&initial_child, Some(root_thread_id), Some(initial_parent)),
+        (&followup_child, Some(root_thread_id), Some(followup_parent)),
+        (&grandchild, Some(worker_thread_id), Some(nested_parent)),
+    ] {
+"""
+        resume_parent_metadata_without_nested = """    for (body, parent_thread, parent_turn) in [
+        (&initial_root, None, None),
+        (&queue_root, None, None),
+        (&followup_root, None, None),
+        (&initial_child, Some(root_thread_id), Some(initial_parent)),
+        (&followup_child, Some(root_thread_id), Some(followup_parent)),
+    ] {
+"""
+        mcp_tests_anchor = """#[tokio::test]
+async fn list_all_tools_uses_shared_codex_apps_cache_when_client_startup_fails() {
+"""
+        specs.extend(
+            [
+                {
+                    "path": "codex-rs/codex-mcp/src/connection_manager.rs",
+                    "replacements": [
+                        (
+                            """                if !publication_gate.wait().await {
+                    return (server_name, Err(StartupOutcomeError::Cancelled));
+                }
+""",
+                            """                if !publication_gate.wait().await {
+                    return (server_name, Err(StartupOutcomeError::Cancelled), false);
+                }
+""",
+                        ),
+                    ],
+                },
+                {
+                    "path": "codex-rs/core/src/tools/handlers/multi_agents_common.rs",
+                    "replacements": [
+                        (
+                            """    config.developer_instructions = turn.developer_instructions.clone();
+    if turn.multi_agent_version == MultiAgentVersion::V2
+        && let Some(developer_instructions) = turn
+            .config
+            .multi_agent_v2
+            .subagent_developer_instructions
+            .clone()
+    {
+        config.developer_instructions = Some(developer_instructions);
+    }
+""",
+                            f"""    config.developer_instructions = turn.developer_instructions.clone();
+    if turn.multi_agent_version == MultiAgentVersion::V2 {{
+        // {QWENDEX_CODEX_PATCH_MARKER}: Qwendex children inherit the root
+        // developer contract rather than a native per-child override.
+        config.multi_agent_v2.subagent_developer_instructions = None;
+    }}
+""",
+                        ),
+                    ],
+                },
+                {
+                    "path": "codex-rs/core/tests/suite/multi_agent_resume.rs",
+                    "replacements": [
+                        (
+                            """        |request: &wiremock::Request| {
+            request_has_model(request, ROLE_MODEL)
+                && request_has_input_type(request, \"agent_message\")
+                && body_contains(request, INITIAL_TASK)
+        },
+""",
+                            """        |request: &wiremock::Request| {
+            request_has_input_type(request, \"agent_message\")
+                && body_contains(request, INITIAL_TASK)
+        },
+""",
+                        ),
+                        (
+                            """    let sibling_spawn_args = serde_json::to_string(&json!({
+        \"message\": SIBLING_TASK,
+        \"task_name\": SIBLING_NAME,
+        \"agent_type\": ROLE_NAME,
+        \"fork_turns\": \"none\",
+    }))?;
+""",
+                            """    let sibling_spawn_args = serde_json::to_string(&json!({
+        \"message\": SIBLING_TASK,
+        \"task_name\": SIBLING_NAME,
+        \"fork_turns\": \"none\",
+    }))?;
+""",
+                        ),
+                        (
+                            """        |request: &wiremock::Request| {
+            request_has_model(request, ROLE_MODEL)
+                && request_has_input_type(request, \"agent_message\")
+                && body_contains(request, SIBLING_TASK)
+        },
+""",
+                            """        |request: &wiremock::Request| {
+            request_has_input_type(request, \"agent_message\") && body_contains(request, SIBLING_TASK)
+        },
+""",
+                        ),
+                        (
+                            """        |request: &wiremock::Request| {
+            request_has_model(request, ROLE_MODEL)
+                && request_has_input_type(request, \"agent_message\")
+                && body_contains(request, FOLLOWUP_TASK)
+                && body_contains(request, QUEUED_MESSAGE)
+        },
+""",
+                            """        |request: &wiremock::Request| {
+            request_has_input_type(request, \"agent_message\")
+                && body_contains(request, FOLLOWUP_TASK)
+                && body_contains(request, QUEUED_MESSAGE)
+        },
+""",
+                        ),
+                        (
+                            """        |request: &wiremock::Request| {
+            request_has_model(request, ROLE_MODEL)
+                && request_has_input_type(request, \"agent_message\")
+                && body_contains(request, SIBLING_FOLLOWUP_TASK)
+        },
+""",
+                            """        |request: &wiremock::Request| {
+            request_has_input_type(request, \"agent_message\")
+                && body_contains(request, SIBLING_FOLLOWUP_TASK)
+        },
+""",
+                        ),
+                        (
+                            """    assert!(sibling_followup_request.requests().iter().any(|request| {
+        request.body_contains_text(SIBLING_FOLLOWUP_TASK)
+            && request.body_contains_text(ROLE_DEVELOPER_INSTRUCTIONS)
+    }));
+""",
+                            """    assert!(sibling_followup_request.requests().iter().any(|request| {
+        request.body_contains_text(SIBLING_FOLLOWUP_TASK)
+            && !request.body_contains_text(ROLE_DEVELOPER_INSTRUCTIONS)
+            && !request.body_contains_text(SUBAGENT_DEVELOPER_INSTRUCTIONS)
+    }));
+""",
+                        ),
+                    ],
+                },
+                {
+                    "path": "codex-rs/core/src/tools/handlers/multi_agents_tests.rs",
+                    "replacements": [
+                        (
+                            legacy_items_test,
+                            legacy_items_test
+                                + """#[tokio::test]
+async fn multi_agent_v2_spawn_rejects_model_override() {
+    let (session, mut turn) = make_session_and_context().await;
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect(\"test config should allow feature update\");
+    set_turn_config(&mut turn, config);
+
+    let err = SpawnAgentHandlerV2::default()
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            \"spawn_agent\",
+            function_payload(json!({
+                \"message\": \"inspect this repo\",
+                \"task_name\": \"model_override\",
+                \"model\": \"gpt-5.4\"
+            })),
+        ))
+        .await
+        .err()
+        .expect(\"Qwendex V2 should reject model overrides\");
+    let FunctionCallError::RespondToModel(message) = err else {
+        panic!(\"expected a model-facing validation error\");
+    };
+    assert!(message.contains(\"unknown field `model`\"));
+}
+
+""",
+                        ),
+                    ],
+                },
             ]
         )
     return specs
@@ -7881,39 +8810,90 @@ def apply_codex_source_patch(source: Path, version: str, *, dry_run: bool = Fals
     errors: list[str] = []
     specs = codex_source_patch_specs(version)
     if not specs:
-        return {"changed": False, "changes": changes, "errors": [f"no source patch is available for Codex {version}"]}
+        return {
+            "changed": False,
+            "changes": changes,
+            "errors": [f"no source patch is available for Codex {version}"],
+        }
+
+    # Keep the rebase fail-closed: validate every source replacement before
+    # writing any file.  The 0.147.0 contract also requires unique anchors so
+    # a broad fragment cannot silently duplicate a patched Rust test.
+    strict_anchor_cardinality = version == "0.147.0"
+    original_texts: dict[str, str] = {}
+    updated_texts: dict[str, str] = {}
     for spec in specs:
         rel = str(spec["path"])
         path = root / rel
         if not path.is_file():
             errors.append(f"missing file: {rel}")
-            changes.append({"path": rel, "changed": False, "replacements": 0, "error": "missing file"})
+            changes.append(
+                {
+                    "path": rel,
+                    "changed": False,
+                    "replacements": 0,
+                    "error": "missing file",
+                }
+            )
             continue
-        text = path.read_text(encoding="utf-8", errors="replace")
+        if rel not in original_texts:
+            original_texts[rel] = path.read_text(encoding="utf-8", errors="replace")
+            updated_texts[rel] = original_texts[rel]
+        text = updated_texts[rel]
         updated = text
         replacements = 0
         missing: list[str] = []
+        ambiguous: list[str] = []
+        expected_occurrences = spec.get("expected_occurrences", {})
         for old, new in spec["replacements"]:
             if new in updated:
                 continue
-            if old not in updated:
-                missing.append(old.splitlines()[0] if old.splitlines() else old[:80])
+            occurrences = updated.count(old)
+            anchor = old.splitlines()[0] if old.splitlines() else old[:80]
+            if occurrences == 0:
+                missing.append(anchor)
                 continue
-            updated = updated.replace(old, new)
+            expected_count = int(expected_occurrences.get(old, 1))
+            if strict_anchor_cardinality and occurrences != expected_count:
+                ambiguous.append(
+                    f"{anchor} (found {occurrences} times; expected {expected_count})"
+                )
+                continue
+            updated = updated.replace(
+                old,
+                new,
+                expected_count if strict_anchor_cardinality else -1,
+            )
             replacements += 1
         if missing:
             errors.extend(f"{rel}: missing replacement anchor: {item}" for item in missing)
+        if ambiguous:
+            errors.extend(
+                f"{rel}: ambiguous replacement anchor: {item}" for item in ambiguous
+            )
         changed = updated != text
-        if changed and not dry_run:
-            path.write_text(updated, encoding="utf-8")
-        changes.append({
-            "path": rel,
-            "changed": changed,
-            "replacements": replacements,
-            "dry_run": dry_run,
-            "missing": missing,
-        })
-    return {"changed": any(change["changed"] for change in changes), "changes": changes, "errors": errors}
+        updated_texts[rel] = updated
+        changes.append(
+            {
+                "path": rel,
+                "changed": changed,
+                "replacements": replacements,
+                "dry_run": dry_run,
+                "missing": missing,
+                "ambiguous": ambiguous,
+            }
+        )
+    if errors:
+        return {"changed": False, "changes": changes, "errors": errors}
+    if not dry_run:
+        for rel, updated in updated_texts.items():
+            if updated != original_texts[rel]:
+                (root / rel).write_text(updated, encoding="utf-8")
+    return {
+        "changed": any(change["changed"] for change in changes),
+        "changes": changes,
+        "errors": errors,
+    }
 
 
 def codex_patch_payload(args: argparse.Namespace) -> dict[str, Any]:

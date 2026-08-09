@@ -67,12 +67,17 @@ def test_codex_build_contract_requires_the_current_canonical_patch_surface():
     assert codex_145_v2_paths.isdisjoint(
         release_gate.codex_required_patch_paths("0.144.4")
     )
+    codex_147_required = release_gate.codex_required_patch_paths("0.147.0")
+    assert codex_145_v2_paths <= codex_147_required
+    assert "codex-rs/codex-mcp/src/rmcp_client.rs" in codex_147_required
+    assert "codex-rs/core/src/config/mod.rs" not in codex_147_required
     dev_env = (ROOT / "scripts" / "qwendex_dev_env").read_text(encoding="utf-8")
     for path in {
         "codex-rs/codex-mcp/src/connection_manager.rs",
         "codex-rs/codex-mcp/src/connection_manager_tests.rs",
     }:
         assert dev_env.count(f'"{path}"') == 2
+    assert dev_env.count('"codex-rs/codex-mcp/src/rmcp_client.rs"') == 1
 
 
 def run(*args: str, cwd: Path) -> str:
@@ -355,6 +360,20 @@ def release_fixture(tmp_path: Path) -> dict[str, object]:
                     "sha256": "7" * 64,
                 },
                 "dependency_fetch_policy": "locked-network-fetch-with-registry-checksums",
+                "v8_build_mode": "prebuilt",
+                "v8_build_reason": "fixture-prebuilt",
+                "v8_artifacts": {
+                    "schema_version": "qwendex.dev.codex_v8_artifacts.v1",
+                    "status": "pass",
+                    "provider": "fixture",
+                    "crate_version": "fixture",
+                    "release_tag": "fixture",
+                    "profile": "fixture",
+                    "target": "x86_64-unknown-linux-gnu",
+                    "archive": {"name": "fixture.a.gz", "sha256": "8" * 64, "bytes": 1},
+                    "binding": {"name": "fixture.rs", "sha256": "9" * 64, "bytes": 1},
+                    "checksums": {"name": "fixture.sha256", "sha256": "a" * 64, "bytes": 1},
+                },
                 "blockers": [],
             }
             payload = {
@@ -384,6 +403,9 @@ def release_fixture(tmp_path: Path) -> dict[str, object]:
                 "cargo_home_config_files": build_inputs["cargo_home_config_files"],
                 "project_cargo_config": build_inputs["project_cargo_config"],
                 "dependency_fetch_policy": build_inputs["dependency_fetch_policy"],
+                "v8_build_mode": build_inputs["v8_build_mode"],
+                "v8_build_reason": build_inputs["v8_build_reason"],
+                "v8_artifacts": build_inputs["v8_artifacts"],
                 "build_inputs_sha256": "4" * 64,
                 "build_inputs": build_inputs,
                 "binary": str(binary),
@@ -487,6 +509,106 @@ def release_fixture(tmp_path: Path) -> dict[str, object]:
     write_fake_gh(Path(fixture["fake_gh"]))
     write_ci_attestation(fixture)
     return fixture
+
+
+def test_codex_147_v8_release_pair_is_independently_pinned():
+    release_gate = load_release_gate()
+    dev_env = (ROOT / "scripts" / "qwendex_dev_env").read_text(encoding="utf-8")
+
+    assert release_gate.CODEX_147_V8_PROVIDER == "openai/codex"
+    assert release_gate.CODEX_147_V8_VERSION == "150.4.0"
+    assert release_gate.CODEX_147_V8_RELEASE_TAG == "rusty-v8-v150.4.0"
+    assert release_gate.CODEX_147_V8_TARGET == "x86_64-unknown-linux-gnu"
+    assert release_gate.CODEX_147_V8_BASE_URL == (
+        "https://github.com/openai/codex/releases/download/rusty-v8-v150.4.0"
+    )
+    assert release_gate.CODEX_147_V8_ARTIFACTS["archive"]["sha256"] == (
+        "a35c75d1f26e6a983885a45b33490a4ebe54f05050568b32b89cfb421b30b583"
+    )
+    assert release_gate.CODEX_147_V8_ARTIFACTS["binding"]["sha256"] == (
+        "7727826ae479bdb645e807239fb12d1f8e2e23de7a6cf16f5ee592690d1d8506"
+    )
+    assert release_gate.CODEX_147_V8_ARTIFACTS["checksums"]["sha256"] == (
+        "6774b42c9424c098c72a805c08d4e94be17c591cf02b1dc2633060255a8a61be"
+    )
+    assert 'QWENDEX_RELEASE_CODEX_V8_TARGET="x86_64-unknown-linux-gnu"' in dev_env
+    assert "QWENDEX_RELEASE_CODEX_V8_ARCHIVE_SHA256=" in dev_env
+    assert "QWENDEX_RELEASE_CODEX_V8_BINDING_SHA256=" in dev_env
+    assert "QWENDEX_RELEASE_CODEX_V8_CHECKSUMS_SHA256=" in dev_env
+    assert "--proto '=https' --proto-redir '=https'" in dev_env
+
+
+def test_release_gate_rejects_unpinned_codex_147_v8_artifacts(tmp_path):
+    fixture = release_fixture(tmp_path)
+    release_gate = load_release_gate()
+    payload = json.loads(
+        (Path(fixture["meta_root"]) / "codex_build.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    build_inputs = payload["build_inputs"]
+    payload["source_ref"] = "rust-v0.147.0"
+    build_inputs["source_ref"] = "rust-v0.147.0"
+    payload["binary_version"] = "codex-cli 0.147.0"
+    artifacts = {
+        "schema_version": "qwendex.dev.codex_v8_artifacts.v1",
+        "status": "pass",
+        "provider": release_gate.CODEX_147_V8_PROVIDER,
+        "crate_version": release_gate.CODEX_147_V8_VERSION,
+        "release_tag": release_gate.CODEX_147_V8_RELEASE_TAG,
+        "profile": release_gate.CODEX_147_V8_PROFILE,
+        "target": release_gate.CODEX_147_V8_TARGET,
+        "base_url": release_gate.CODEX_147_V8_BASE_URL,
+        "download_policy": release_gate.CODEX_147_V8_DOWNLOAD_POLICY,
+        **{
+            name: {**expected, "bytes": 1}
+            for name, expected in release_gate.CODEX_147_V8_ARTIFACTS.items()
+        },
+    }
+    payload["v8_build_mode"] = "verified-codex-release-archive"
+    build_inputs["v8_build_mode"] = "verified-codex-release-archive"
+    payload["v8_build_reason"] = "codex-rusty-v8-sandbox-pair"
+    build_inputs["v8_build_reason"] = "codex-rusty-v8-sandbox-pair"
+    payload["v8_artifacts"] = artifacts
+    build_inputs["v8_artifacts"] = json.loads(json.dumps(artifacts))
+
+    def validate(candidate: dict) -> tuple[dict, list[str]]:
+        return release_gate.validate_codex_build_receipt(
+            candidate,
+            "0.147.0",
+            CANONICAL_CODEX_SOURCE_COMMIT,
+            CANONICAL_CODEX_SOURCE_ORIGIN,
+            CANONICAL_CODEX_PATCH_SHA256,
+            CANONICAL_CODEX_CARGO_LOCK_SHA256,
+        )
+
+    checks, blockers = validate(payload)
+    assert blockers == []
+    assert checks["v8_artifact_pair_verified"] is True
+
+    mutations = {
+        "provider": "other/provider",
+        "target": "aarch64-unknown-linux-gnu",
+        "base_url": "https://example.invalid/release",
+        "download_policy": "redirects-unrestricted",
+        "archive.sha256": "0" * 64,
+        "binding.name": "different-binding.rs",
+        "checksums.sha256": "f" * 64,
+    }
+    for field, value in mutations.items():
+        candidate = json.loads(json.dumps(payload))
+        for artifact_payload in (
+            candidate["v8_artifacts"],
+            candidate["build_inputs"]["v8_artifacts"],
+        ):
+            parent = artifact_payload
+            *parts, leaf = field.split(".")
+            for part in parts:
+                parent = parent[part]
+            parent[leaf] = value
+        checks, blockers = validate(candidate)
+        assert blockers == ["Codex build contract did not pass"]
+        assert checks["v8_artifact_pair_verified"] is False
 
 
 def invoke(

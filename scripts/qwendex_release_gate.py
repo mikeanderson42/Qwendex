@@ -25,6 +25,30 @@ SUMMARY_DIGEST_FIELD = "receipt_sha256"
 RECEIPT_BINDING_SCHEMA = "qwendex.dev.receipt_binding.v1"
 CI_ATTESTATION_SCHEMA = "qwendex.ci.attestation.v1"
 CODEX_BUILD_INPUTS_SCHEMA = "qwendex.dev.codex_build_inputs.v1"
+CODEX_147_V8_PROVIDER = "openai/codex"
+CODEX_147_V8_VERSION = "150.4.0"
+CODEX_147_V8_RELEASE_TAG = "rusty-v8-v150.4.0"
+CODEX_147_V8_PROFILE = "ptrcomp_sandbox_release"
+CODEX_147_V8_BASE_URL = (
+    "https://github.com/openai/codex/releases/download/"
+    f"{CODEX_147_V8_RELEASE_TAG}"
+)
+CODEX_147_V8_DOWNLOAD_POLICY = "https-only-no-insecure-redirects"
+CODEX_147_V8_TARGET = "x86_64-unknown-linux-gnu"
+CODEX_147_V8_ARTIFACTS = {
+    "archive": {
+        "name": "librusty_v8_ptrcomp_sandbox_release_x86_64-unknown-linux-gnu.a.gz",
+        "sha256": "a35c75d1f26e6a983885a45b33490a4ebe54f05050568b32b89cfb421b30b583",
+    },
+    "binding": {
+        "name": "src_binding_ptrcomp_sandbox_release_x86_64-unknown-linux-gnu.rs",
+        "sha256": "7727826ae479bdb645e807239fb12d1f8e2e23de7a6cf16f5ee592690d1d8506",
+    },
+    "checksums": {
+        "name": "rusty_v8_ptrcomp_sandbox_release_x86_64-unknown-linux-gnu.sha256",
+        "sha256": "6774b42c9424c098c72a805c08d4e94be17c591cf02b1dc2633060255a8a61be",
+    },
+}
 REQUIRED_RECEIPTS = {
     "bootstrap": "bootstrap.json",
     "static_gate": "static_gate.json",
@@ -111,6 +135,7 @@ CODEX_ALLOWED_BUILD_PATHS = {
     "codex-rs/Cargo.lock",
     "codex-rs/codex-mcp/src/connection_manager.rs",
     "codex-rs/codex-mcp/src/connection_manager_tests.rs",
+    "codex-rs/codex-mcp/src/rmcp_client.rs",
     "codex-rs/config/src/tui_keymap.rs",
     "codex-rs/core/src/config/config_tests.rs",
     "codex-rs/core/src/config/mod.rs",
@@ -159,6 +184,7 @@ CODEX_145_ONLY_PATCH_PATHS = {
     "codex-rs/core/config.schema.json",
 }
 CODEX_145_UPSTREAM_PATCH_PATHS = {"codex-rs/core/src/config/mod.rs"}
+CODEX_147_UPSTREAM_PATCH_PATHS = {"codex-rs/core/src/config/mod.rs"}
 GUARD_MARKERS = (
     "LOCAL_MODEL_TOOL_CALL_TOO_LARGE",
     "LOCAL_MODEL_TOOL_CALL_TRUNCATED",
@@ -1309,6 +1335,10 @@ def codex_required_patch_paths(version: str) -> set[str]:
         # Upstream 0.145 incorporates the config/mod.rs compatibility behavior,
         # while Qwendex adds the V2 role/default hardening files.
         required -= CODEX_145_UPSTREAM_PATCH_PATHS
+    elif version == "0.147.0":
+        # Upstream supplies config/mod.rs compatibility, while the 0.147
+        # rebase requires the complete Qwendex V2 and Apps-cache footprint.
+        required -= CODEX_147_UPSTREAM_PATCH_PATHS
     else:
         required -= CODEX_145_ONLY_PATCH_PATHS
     return required
@@ -1353,6 +1383,65 @@ def validate_codex_build_receipt(
         and sha256_file(binary_path) == binary_sha
     )
     nested = build_inputs if isinstance(build_inputs, dict) else {}
+    expected_v8_build_mode = (
+        "verified-codex-release-archive"
+        if required_version == "0.147.0"
+        else str(nested.get("v8_build_mode") or "")
+    )
+    v8_artifacts = nested.get("v8_artifacts")
+    v8_artifacts_data = v8_artifacts if isinstance(v8_artifacts, dict) else {}
+    v8_archive = v8_artifacts_data.get("archive")
+    v8_binding = v8_artifacts_data.get("binding")
+    v8_checksums = v8_artifacts_data.get("checksums")
+    v8_artifact_files = (v8_archive, v8_binding, v8_checksums)
+    v8_artifacts_valid = (
+        v8_artifacts_data.get("schema_version")
+        == "qwendex.dev.codex_v8_artifacts.v1"
+        and v8_artifacts_data.get("status") == "pass"
+        and bool(str(v8_artifacts_data.get("provider") or ""))
+        and bool(str(v8_artifacts_data.get("crate_version") or ""))
+        and bool(str(v8_artifacts_data.get("release_tag") or ""))
+        and bool(str(v8_artifacts_data.get("profile") or ""))
+        and bool(str(v8_artifacts_data.get("target") or ""))
+        and all(
+            isinstance(item, dict)
+            and bool(str(item.get("name") or ""))
+            and is_sha256(item.get("sha256"))
+            and isinstance(item.get("bytes"), int)
+            and not isinstance(item.get("bytes"), bool)
+            and item.get("bytes", 0) > 0
+            for item in v8_artifact_files
+        )
+    )
+    if required_version == "0.147.0":
+        v8_target = str(v8_artifacts_data.get("target") or "")
+        v8_artifacts_valid = v8_artifacts_valid and all(
+            (
+                v8_artifacts_data.get("provider") == CODEX_147_V8_PROVIDER,
+                v8_artifacts_data.get("crate_version") == CODEX_147_V8_VERSION,
+                v8_artifacts_data.get("release_tag") == CODEX_147_V8_RELEASE_TAG,
+                v8_artifacts_data.get("profile") == CODEX_147_V8_PROFILE,
+                v8_target == CODEX_147_V8_TARGET,
+                v8_artifacts_data.get("base_url") == CODEX_147_V8_BASE_URL,
+                v8_artifacts_data.get("download_policy")
+                == CODEX_147_V8_DOWNLOAD_POLICY,
+                isinstance(v8_archive, dict)
+                and all(
+                    v8_archive.get(key) == value
+                    for key, value in CODEX_147_V8_ARTIFACTS["archive"].items()
+                ),
+                isinstance(v8_binding, dict)
+                and all(
+                    v8_binding.get(key) == value
+                    for key, value in CODEX_147_V8_ARTIFACTS["binding"].items()
+                ),
+                isinstance(v8_checksums, dict)
+                and all(
+                    v8_checksums.get(key) == value
+                    for key, value in CODEX_147_V8_ARTIFACTS["checksums"].items()
+                ),
+            )
+        )
     changed_paths = nested.get("changed_paths")
     clean_inputs = all(
         isinstance(nested.get(key), list) and not nested.get(key)
@@ -1432,6 +1521,10 @@ def validate_codex_build_receipt(
             if isinstance(nested.get("project_cargo_config"), dict)
             else ""
         ),
+        *(
+            item.get("sha256") if isinstance(item, dict) else ""
+            for item in v8_artifact_files
+        ),
         preflight.get("sha256") if isinstance(preflight, dict) else "",
     )
     copies_match = all(
@@ -1454,6 +1547,9 @@ def validate_codex_build_receipt(
             == nested.get("project_cargo_config"),
             payload.get("dependency_fetch_policy")
             == nested.get("dependency_fetch_policy"),
+            payload.get("v8_build_mode") == nested.get("v8_build_mode"),
+            payload.get("v8_build_reason") == nested.get("v8_build_reason"),
+            payload.get("v8_artifacts") == nested.get("v8_artifacts"),
             payload.get("source_patch_paths") == nested.get("changed_paths"),
         )
     )
@@ -1529,6 +1625,13 @@ def validate_codex_build_receipt(
         and is_sha256(nested.get("project_cargo_config", {}).get("sha256")),
         "dependency_fetch_locked": nested.get("dependency_fetch_policy")
         == "locked-network-fetch-with-registry-checksums",
+        "v8_build_mode_matches": expected_v8_build_mode
+        in {"prebuilt", "verified-codex-release-archive"}
+        and nested.get("v8_build_mode") == expected_v8_build_mode
+        and payload.get("v8_build_mode") == expected_v8_build_mode,
+        "v8_build_reason_present": bool(str(nested.get("v8_build_reason") or ""))
+        and payload.get("v8_build_reason") == nested.get("v8_build_reason"),
+        "v8_artifact_pair_verified": v8_artifacts_valid,
     }
     required_checks = {
         key: value for key, value in checks.items() if key != "expected_version"

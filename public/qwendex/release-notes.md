@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 0.6.9
+
+- Rebased the canonical source patch to official Codex `0.147.0`, including
+  its changed side-conversation keymap, model-cache implementation, V2 resume
+  fixtures, and Codex Apps cache client surface.
+- Bound the official source commit, full-index patch digest, normalized
+  Cargo.lock digest, matching `codex-code-mode-host`, and versioned models
+  cache into the 0.147 runtime contract; the sandboxed Rusty V8 archive,
+  generated binding, checksum manifest, target, and HTTPS release URL are
+  independently pinned and recorded in the build receipt.
+- Made the release gate require the complete rebased Apps/V2 footprint and
+  updated the installer, manager acceptance, runtime fixtures, and public
+  support claims to the new supported version.
+- Kept stock Codex as the independent Off-mode recovery path and retained all
+  previous release notes as historical records.
+
 ## 0.6.8
 
 - Fixed no-flag `scripts/qwendex eval` execution from sealed runtime

@@ -9,7 +9,7 @@ instead of mutating the binary in place.
 
 With stock Codex, the standalone Qwendex CLI, checks, routing, receipts, and
 offline evals remain supported. Native patched behavior requires the canonical
-Linux/Codex `0.145.0` patch, its matching `codex-code-mode-host`, and one
+Linux/Codex `0.147.0` patch, its matching `codex-code-mode-host`, and one
 validated runtime generation. Managed hooks remain optional observability.
 Unknown versions or anchor drift fail closed for patch/build claims, not for
 ordinary root prompts, tools, publication, or final responses.
@@ -124,7 +124,7 @@ frozen. Projects that want the upstream Git package can install it separately fr
 
 ## Source Locations
 
-For the current Codex `0.145.0` target (`rust-v0.145.0`), the patch touches
+For the current Codex `0.147.0` target (`rust-v0.147.0`), the patch touches
 these source areas. Earlier compatibility manifests retain their own
 version-specific anchor sets:
 
@@ -158,6 +158,7 @@ version-specific anchor sets:
 - `codex-rs/models-manager/src/manager.rs`
 - `codex-rs/codex-mcp/src/connection_manager.rs`
 - `codex-rs/codex-mcp/src/connection_manager_tests.rs`
+- `codex-rs/codex-mcp/src/rmcp_client.rs`
 
 Inspect the active manifest with:
 
@@ -169,7 +170,7 @@ The Manager-specific edits add canonical `task_name` and parent identity to
 `SubagentStart`, remove collaboration-management tools from child V2 threads,
 make V2 return immediately when no child is running, and prove that Qdex's
 explicit V2 session cap takes precedence over the legacy
-`[agents].max_threads` alias. For the deferred 0.145 role boundary, the V2
+`[agents].max_threads` alias. For the deferred 0.147 role boundary, the V2
 spawn schema omits native role/model/reasoning/service-tier overrides and V2
 children ignore native `[agents]` model/reasoning defaults. Passive role files
 in a trusted project are therefore tolerated for launch compatibility but are
