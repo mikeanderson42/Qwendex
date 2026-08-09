@@ -1927,6 +1927,14 @@ def test_ci_workflow_emits_attestation_and_runs_actual_artifact_and_downstream_i
     ]
     assert len(system_install_lines) == 2
     assert all("bubblewrap" in line.split() for line in system_install_lines)
+    assert all("apparmor-profiles" in line.split() for line in system_install_lines)
+    assert all("apparmor-utils" in line.split() for line in system_install_lines)
+    assert workflow.count(
+        "/usr/share/apparmor/extra-profiles/bwrap-userns-restrict"
+    ) == 2
+    assert workflow.count(
+        "apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict"
+    ) == 2
 
     pinned_uses = re.findall(r"(?m)^\s+uses:\s+(\S+)", workflow)
     assert pinned_uses == [

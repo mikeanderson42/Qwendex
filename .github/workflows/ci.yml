@@ -22,7 +22,13 @@ jobs:
           python-version: "3.11"
 
       - name: Install required system runtimes
-        run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends bubblewrap ripgrep
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends apparmor-profiles apparmor-utils bubblewrap ripgrep
+          sudo install -m 0644 \
+            /usr/share/apparmor/extra-profiles/bwrap-userns-restrict \
+            /etc/apparmor.d/bwrap-userns-restrict
+          sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
 
       - name: Install pinned validation tools
         run: python3 -m pip install --disable-pip-version-check jsonschema==4.26.0 pytest==9.0.3 ruff==0.15.20
@@ -53,7 +59,13 @@ jobs:
           python-version: "3.12"
 
       - name: Install required system runtimes
-        run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends bubblewrap ripgrep
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends apparmor-profiles apparmor-utils bubblewrap ripgrep
+          sudo install -m 0644 \
+            /usr/share/apparmor/extra-profiles/bwrap-userns-restrict \
+            /etc/apparmor.d/bwrap-userns-restrict
+          sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
 
       - name: Install validation tools
         run: python3 -m pip install --disable-pip-version-check jsonschema==4.26.0 pytest==9.0.3 ruff==0.15.20
