@@ -571,7 +571,7 @@ def model_sandbox_command() -> list[str] | None:
         "usr/lib",
         "/lib",
         "--symlink",
-        "usr/lib",
+        "usr/lib64",
         "/lib64",
         "--proc",
         "/proc",

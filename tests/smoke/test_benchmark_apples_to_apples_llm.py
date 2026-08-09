@@ -273,6 +273,13 @@ def test_bubblewrap_command_has_fail_closed_isolation_controls() -> None:
     ):
         assert required in command
     assert command[command.index("--ro-bind") + 1 : command.index("--ro-bind") + 3] == ["/usr", "/usr"]
+    symlink_pairs = [
+        command[index + 1 : index + 3]
+        for index, argument in enumerate(command)
+        if argument == "--symlink"
+    ]
+    assert ["usr/lib", "/lib"] in symlink_pairs
+    assert ["usr/lib64", "/lib64"] in symlink_pairs
     assert command[-2] == "--"
     assert benchmark.trusted_root_owned_executable(
         command[-1],
