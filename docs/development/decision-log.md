@@ -645,12 +645,15 @@ operator stack aligned without increasing model memory pressure.
 
 ## Local Endpoint And Target-Repository Binding
 
-Decision: the local Codex launcher derives one canonical bridge base from the
-routing contract, exports exactly `<base>/v1` as `CODEX_OSS_BASE_URL`, and
-blocks a conflicting inherited endpoint. `qdex --repo` uses the selected
-repository as the manager scope, execution directory, Codex add-dir, and MCP
-trusted root while retaining the generated isolated `CODEX_HOME` unless the
-operator explicitly opts into preserving a caller home.
+Historical decision, superseded by the v0.7 Qdex contract: the local Codex
+launcher derives one canonical bridge base from the routing contract, exports
+exactly `<base>/v1` as `CODEX_OSS_BASE_URL`, and blocks a conflicting inherited
+endpoint. The earlier launcher also treated `qdex --repo` as an implicit Codex
+add-dir and allowed a caller-home preservation path. In v0.7, `--repo` is only
+a compatibility alias that may inject `-C`; it does not synthesize
+`--add-dir`, and Qdex always uses its generated isolated `CODEX_HOME`. A caller
+may still pass native `--add-dir` explicitly, where it remains visible in the
+forwarded command.
 
 Reason: probing one endpoint and executing against another invalidates live
 evidence. Likewise, launching Qwendex for a downstream repository must not make
@@ -707,12 +710,11 @@ should therefore match `codex` rather than contain a redundant wrapper-created
 directory option, while the control-plane scope must still follow an explicit
 native Codex working root end to end.
 
-For Manager launches, the same verified preflight authorizes Codex's explicit
-hook-trust bypass. This avoids a redundant interactive review dialog while
-keeping non-Manager launches on Codex's normal trust behavior.
-The canonical target is also passed as a per-launch trusted project; this trust
-is bounded to the same explicit Qdex repository and prevents an automation
-primer's first Enter from being consumed by Codex onboarding.
+Historical decision, superseded by the v0.7 trust contract: Manager preflight
+previously authorized Codex's global hook-trust bypass and injected the
+canonical target as a per-launch trusted project. Qdex v0.7 does neither.
+Native Codex hook trust remains active across home, project, config-layer, and
+plugin sources, and project trust remains entirely Codex-owned.
 
 ## Qdex Permission Resolution And Snapshot
 
@@ -1177,8 +1179,9 @@ preserve the supported Qdex boundary without changing direct stock-Codex use.
 ## Repository-Owned Documentation Quality And Generated Hub
 
 Decision: Qwendex owns a standard-library, Git-tracked documentation audit with
-repository TOML policies and stable JSON findings. Jarvis owns any private
-multi-workspace manifest and generated local site output. Domain repositories
+repository TOML policies and stable JSON findings. The downstream repository
+owning a private hub owns its multi-workspace manifest and generated local site
+output. Domain repositories
 retain their own quality commands and state authority; Qwendex may consume
 their read-only receipts but does not duplicate or mutate domain logic. MkDocs
 Material is an explicit, isolated optional dependency used only for manual
@@ -1191,3 +1194,59 @@ policies and manifests with their owners avoids a second documentation
 hierarchy, while the optional generated view improves discovery without making
 routine verification depend on a site generator, daemon, database, or private
 workspace layout.
+
+## Qwendex 0.7 Product, Routing, Trust, And Validation Contract
+
+Decision: define Qwendex as a source-distributed Codex customization and
+operator harness with four named surfaces: `qwendex`, `qdex`, optional
+`llmstack`, and source-install/build/release tooling through `qwendex-dev`.
+Publish `about --json`, a CLI reference, a compatibility matrix, and an
+authoritative development product specification. Keep stock Codex as the
+independent recovery plane and keep the compiled Codex integration optional and
+version-pinned.
+
+For Codex 0.147 Manager V2, expose only Codex-validated child model and
+reasoning fields. Use Terra/high for ordinary hosted workers and Terra/xhigh
+for review/release lanes; keep native roles and service tiers sealed. Luna/max
+remains a one-shot execution seat because the inspected 0.147 catalog exposes
+Luna through V1 rather than Manager V2. Local Qwen uses a separate
+`qwendex_exec` dispatch only for allowlisted profiles, and planning eligibility
+must not be reported as execution-backed token saving.
+
+Expose Codex `--approve-for-me` as Qdex `auto-review`, reject all caller-native
+permission flags/config plus the removed `exec --full-auto`, and leave project
+trust to Codex. Never add the global hook-trust bypass: Codex 0.147 applies it
+to project, config-layer, and plugin hooks beyond the generated-home inventory.
+Retain exact generated-hook-set detection as a diagnostic only and keep native
+Codex trust in force.
+
+Manager status, check, doctor, and Codex status no longer reconcile lifecycle
+rows as a side effect. Explicit close/repair commands own mutation. Terminal
+validation requires a trusted bounded regular JSON receipt with valid schema,
+digest, and repository/task/agent binding. Hash the exact bytes parsed. An
+explicit validation waiver requires an actor and records the reason, target,
+source, and timestamp but never pretends evidence passed. Codex patch preflight
+requires every generated post-edit replacement signature, including each edit
+within multiply patched files. Release checks bind the canonical dev Codex
+binary so an ambient same-version binary cannot substitute for the built
+artifact.
+
+Reason: Qwendex 0.6.9 proved the pinned Codex 0.147 runtime baseline, but its
+worker routing, trust behavior, validation-debt resolution, status mutation,
+and public identity were either sealed or ambiguous. The 0.7 contract connects
+each new public claim to state/config, CLI behavior, tests/receipts, and docs
+without adopting unrelated upstream capabilities merely because they exist.
+
+## Local Structured-Tool Sampling Defaults
+
+Decision: align the public local-model reference catalog with the shipped 32k
+runtime contract: context window 32768, compact limit 28672, and deterministic
+tool temperature 0.0. Keep free-form backend generation defaults separate from
+the bridge's structured-tool sampling policy. Optional seed, thinking threshold,
+thinking suppression, and native-thinking templates are operator-selected
+compatibility controls, not model-quality claims.
+
+Reason: structured tool envelopes need deterministic parsing and explicit
+schema validation, while a backend's general sampling defaults serve a
+different plane. Publishing divergent reference values without naming those
+planes creates a false compatibility promise.

@@ -67,7 +67,7 @@ Published `qwendex.json` and `qwendex.sample.json` both set:
 
 Qdex resolves this one launch setting in a deliberately narrow order:
 
-1. `--qdex-permission-mode workspace-write|yolo`
+1. `--qdex-permission-mode workspace-write|auto-review|yolo`
 2. `QWENDEX_QDEX_PERMISSION_MODE`
 3. `${XDG_CONFIG_HOME:-$HOME/.config}/qwendex/qdex.json`
 4. published `qdex.permission_mode`
@@ -78,9 +78,18 @@ runtime-generation or release artifacts. For example, a local Yolo opt-in is
 only `{ "permission_mode": "yolo" }`. Invalid explicit CLI, environment, or
 operator-local values fail before Qdex invokes Codex. `yolo` appends
 `--dangerously-bypass-approvals-and-sandbox` exactly once; `workspace-write`
-does not append it. Preflight, dry-run, status, and Manager receipt JSON expose
-`qdex_permission_mode` and `qdex_permission_source`; an active Manager session
-uses its snapshotted values until it is relaunched.
+uses the configured sandbox; `auto-review` appends Codex 0.147's
+`--approve-for-me` without an explicit sandbox/Yolo flag. Raw native sandbox,
+approval, automatic-review, Yolo, hook-trust-bypass, and permission-config
+overrides stop before launch; this includes `approval_policy`,
+`approvals_reviewer`, `default_permissions`, `permission_profile`,
+`permissions.*`, `sandbox_mode`, `sandbox_workspace_write.*`, legacy
+`sandbox_permissions`, and profile activation in every supported `-c` or
+`--config` encoding. Select the posture through Qdex instead. Codex 0.147
+removed `exec --full-auto`, so Qdex reports the supported migration rather
+than forwarding it. Preflight, dry-run, status, and
+Manager receipt JSON expose the requested and effective permission posture; an
+active Manager session uses its snapshotted values until it is relaunched.
 
 ## LLMStack Config
 
@@ -107,7 +116,7 @@ Use a temporary DB for isolated probes:
 QWENDEX_STATE_DB=/tmp/qwendex.sqlite scripts/qwendex task status --json
 ```
 
-Manager state schema version 2 uses transactional migration, a pre-migration
+Manager state schema version 3 uses transactional migration, a pre-migration
 backup, WAL, and a bounded busy timeout. Each Manager decision and worker row
 records its runtime and hook generation; historical acceptance is visible but
 cannot satisfy a current source-bound gate.
@@ -228,22 +237,26 @@ preflight.
 
 Run `qdex` from the desired directory or use Codex's native
 `qdex -C <project>` form. The selected directory becomes the manager target,
-execution working directory, Codex add-dir, local-harness trusted root, and MCP
-trusted root. `qdex` always sets the generated isolated `CODEX_HOME` for its
+execution working directory, local-harness trusted root, and MCP trusted root.
+An explicit native `--add-dir` remains visible in the forwarded command and
+expands Codex writable roots without changing the reported permission-mode
+name. `qdex` always sets the generated isolated `CODEX_HOME` for its
 child while the caller's environment and ordinary upstream `codex` remain
 unchanged. By default, `qdex` uses the resolved `workspace-write` permission
-posture. Only an explicit CLI, environment, or operator-local selection of
-`yolo` adds
-`--dangerously-bypass-approvals-and-sandbox`; the repo binding is a
+posture. An explicit `auto-review` selection adds only `--approve-for-me`; an
+explicit `yolo` selection adds
+`--dangerously-bypass-approvals-and-sandbox`. The repo binding is a
 Qwendex/MCP routing boundary, not OS-level filesystem confinement. Without an
 explicit native directory option, Qdex inherits `$PWD` even outside git and
 does not synthesize `-C`. Native Codex `-C`/`--cd` selects both the Codex
 working directory and Qwendex manager scope and is forwarded unchanged. The
 older Qdex-only `--repo` option remains a compatibility alias. Other native
-arguments are forwarded unchanged. Help and version calls
-do not create Manager decisions or rewrite status state. Qdex passes the same
-canonical target as a per-launch Codex trusted-project override so an
-automation primer cannot be consumed by directory onboarding.
+arguments are forwarded unchanged. Help and version calls do not create
+Manager decisions or rewrite status state. Project trust remains Codex-native;
+Qdex does not mark every selected target trusted. Hook status reports an exact
+generated set separately from operational hook presence. Qdex never adds the
+global Codex hook-trust bypass because it also applies to project,
+config-layer, and plugin hook sources; native trust remains in force.
 For direct `exec --cwd`, the default artifact-queue MCP trusted write root is
 only that execution directory; adding any other root requires an explicit
 `QWENDEX_MCP_TRUSTED_ROOTS` override. Qwendex source is not included in those
@@ -273,6 +286,9 @@ is configured; it does not probe availability.
   while cross-cutting, security/protocol, release, and live-acceptance classes
   stay denied
 - `escalation_thresholds`: terms that move lanes to high or xhigh
+- `hosted_worker_routing`: Terra/high for ordinary explorer, implementer,
+  verifier, documentation, and scribe profiles; Terra/xhigh for reviewer and
+  release-manager profiles. Codex validates native V2 model/reasoning requests.
 - `stale_session_thresholds_minutes`: cleanup windows per mode
 
 The canonical cycle order and patched-TUI hotkeys are code/keymap contracts,

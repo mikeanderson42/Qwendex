@@ -93,7 +93,10 @@ scripts/qwendex codex-patch apply --source /path/to/codex --json
 
 The apply step is idempotent. It first checks the version manifest and source
 anchors, writes only the known TUI, keymap, model-cache, hook-identity, and V2
-policy edits, then reruns the source preflight state check. For a dry run:
+policy edits plus the bounded Codex Apps/MCP cached-startup recovery edits, then
+reruns the source preflight state check. Applied state requires every generated
+post-edit replacement signature, including every edit in a multiply patched
+file; a remaining file-level marker alone is insufficient. For a dry run:
 
 ```bash
 scripts/qwendex codex-patch apply --source /path/to/codex --dry-run --json
@@ -171,20 +174,22 @@ The Manager-specific edits add canonical `task_name` and parent identity to
 make V2 return immediately when no child is running, and prove that Qdex's
 explicit V2 session cap takes precedence over the legacy
 `[agents].max_threads` alias. For the deferred 0.147 role boundary, the V2
-spawn schema omits native role/model/reasoning/service-tier overrides and V2
-children ignore native `[agents]` model/reasoning defaults. Passive role files
-in a trusted project are therefore tolerated for launch compatibility but are
-not selectable through the canonical Qwendex V2 spawn schema. The patched
+spawn schema omits native role and service-tier overrides and V2 children
+ignore native `[agents]` model/reasoning defaults. It restores only
+Codex-validated per-child model/reasoning fields for the allowlisted Qwendex
+profiles and supplies native bounded-worker developer instructions. Passive
+role files in a project are therefore tolerated for launch compatibility but
+are not selectable through the canonical Qwendex V2 spawn schema. The patched
 Codex integration suite retains the upstream no-role V1 baseline and keeps a
 configured role in its V2 fixture while asserting that V2 hides it. Stock Codex
 remains a valid Off-mode recovery binary, but it does not provide those exact
 Qwendex guarantees.
 
-The same patch keeps the V2 tool schema and parser sealed to the same four
-per-child overrides. Its integration coverage proves that child threads cannot
-spawn descendants, child policy stays inherited across fresh and resumed
-threads, passive native roles do not alter V2 children, and no-child waits
-return immediately. It also exercises running-child timeout paths and
+The same patch keeps the V2 tool schema and parser sealed to model/reasoning
+only; roles and service tiers remain unavailable. Its integration coverage
+proves that child threads cannot spawn descendants, requested child model and
+reasoning do not come from passive native roles, and no-child waits return
+immediately. It also exercises running-child timeout paths and
 regenerates Codex's config schema for the Qwendex TUI key bindings.
 
 The Codex Apps coverage uses an unreachable local endpoint and a populated

@@ -1,10 +1,25 @@
 # Qwendex
 
-Qwendex is the public Codex-native harness for GPT-first operation with bounded
-local Qwen support. It exposes one operator surface:
+Qwendex is a source-distributed Codex customization and operator harness. Codex
+remains the execution plane; Qwendex adds four named surfaces:
+
+- `scripts/qwendex`: stable operator control plane and JSON contract.
+- `qdex`: isolated Codex launcher with Qwendex policy and optional compiled
+  integration.
+- `llmstack`: optional local-model lifecycle facade.
+- `qwendex-dev`: source-install, build, verification, and release tooling.
+
+The static product declaration is:
+
+```bash
+scripts/qwendex about --json
+```
+
+Use the command surfaces directly:
 
 ```bash
 scripts/qwendex check
+scripts/qwendex about --json
 scripts/qwendex up
 scripts/qwendex route
 scripts/qwendex exec "Reply exactly QWENDEX_OK"
@@ -19,6 +34,7 @@ scripts/qwendex codex-patch apply --source /path/to/codex
 scripts/qwendex_dev_env sync
 ./llmstack status
 scripts/qwendex eval
+scripts/qwendex docs audit --json
 ```
 
 Codex remains the execution plane. Token-saver routing can prefer local Qwen
@@ -31,6 +47,8 @@ seat for a run with `exec --seat <name>` or `exec --seat auto`.
 ## Start Here
 
 - [Quickstart](quickstart.md)
+- [CLI Reference](cli-reference.md)
+- [Compatibility](compatibility.md)
 - [Architecture](architecture.md)
 - [LLMStack](llmstack.md)
 - [Configuration](configuration.md)

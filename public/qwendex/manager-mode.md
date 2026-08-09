@@ -227,17 +227,19 @@ Every assigned lane records a context packet:
 - receipt path
 - context budget
 - model/reasoning assignment
-- spawn instruction naming the generic model class and reasoning
+- `native_spawn_arguments` for Codex V2 or a separate local dispatch command
+- spawn instruction naming the selected execution surface, model, and reasoning
 - review guidance
 
 Prompt hooks offer the root a Qwendex plan and lifecycle context; the root may
 delegate when that would save context or add useful independent evidence. When
 Kaveman is enabled, `SessionStart` and `UserPromptSubmit`
 additional context also includes the configured Kaveman directive.
-`SubagentStart` additional context supplies the generic inherited reasoning
-class and bounded assignment from the manager ledger. Hook-facing messages never
-name a configured GPT model; eligible low-risk token-saver lanes may still name
-`qwen-local` when local Qwen is enabled and usable.
+`SubagentStart` additional context supplies the validated hosted model/reasoning
+request and bounded assignment from the manager ledger. Hosted workers default
+to `gpt-5.6-terra` high, with xhigh for review/release lanes. Eligible local
+lanes instead expose a separate `qwendex exec --seat qwen` dispatch and are not
+passed to native `spawn_agent`.
 
 Subagent output is advisory until reviewed and backed by artifacts or tests.
 An ordinary worker message is a valid outcome: the native `SubagentStop`
@@ -266,7 +268,8 @@ Default manager settings:
 - Active subagent limits apply per canonical repository root, so independent
   repositories do not consume each other's lane capacity.
 - Close completed agents after findings are integrated.
-- Status refreshes reconcile idle read-only agents after the stale window.
+- Status, check, and doctor classify stale rows without closing them. Explicit
+  `close-stale` or `repair --safe` owns lifecycle mutation.
 - Do not close an active writer record until its changes are integrated or
   stopped; stale writer rows remain advisory in both daily and strict health.
 
@@ -382,9 +385,12 @@ Qwendex-managed entries in place while preserving unrelated handlers;
 use `agent hook ... --codex-hook-output`, which strips the diagnostic Qwendex
 envelope and emits only Codex-compatible hook stdout. They embed fixed Qwendex
 state, ledger, receipt, and runtime paths, while inheriting Qdex's private
-status/control paths; reinstall managed hooks after moving a dev home. Hooks
-and ledger associations are optional observability, so missing entries are
-reported without an override or admission gate.
+status/control paths; reinstall managed hooks after moving a dev home. Hook
+status distinguishes an exact generated set from a merely operational set, but
+Qdex never enables Codex's global hook-trust bypass because it spans project,
+config-layer, and plugin sources outside this inventory. Hooks and ledger
+associations are optional observability, so missing entries are reported
+without an admission gate.
 
 The CLI records `agent_id`, lane, task, owner, write surface, stop condition,
 artifacts, context packet, heartbeat time, validation status, stop reason, and
@@ -400,11 +406,22 @@ files, or non-pending validation open. Those lanes return an explicit
 Validation-debt visibility is separate from repair:
 
 ```bash
+scripts/qwendex manager validate --agent-id <id> --receipt-path <receipt.json> --json
+scripts/qwendex manager validate --agent-id <id> --receipt-path <receipt.json> --sha256 <file-sha256> --json
+scripts/qwendex manager validation-waive --agent-id <id> --actor <operator-id> --reason "operator disposition" --json
 scripts/qwendex manager reconcile --pending-validation --json
 scripts/qwendex manager reconcile --repair --dry-run --json
 ```
 
-Reconcile classifies sessions as `validated`,
+`validate` requires a trusted, regular, non-symlink JSON receipt within the
+attachment-size limit; verifies its Qwendex receipt digest, optional file
+digest, and repository/task/agent binding; hashes the same bytes it parses; and
+then records explicit pass/fail evidence. `validation-waive` requires and
+records an actor, reason, target identity, source, and timestamp without
+claiming evidence passed.
+
+Reconcile classifies sessions as `validated`, `validation_waived`,
+`validation_failed`,
 `closed_without_validation_evidence`, `stale_pending_validation`,
 `orphaned_session`, or `needs_manual_review`. It does not mark stale historical
 sessions validated without evidence.
@@ -425,10 +442,11 @@ High-value add: run qwendex eval --live --json before release; local Qwen is ava
 High-value add: escalate only the security-review lane to high; main session can stay user-selected.
 ```
 
-## Pattern Sources
+## Design Inspiration
 
-Qwendex keeps Codex CLI subagents and project roles as the runtime base. It
-borrows patterns from LangGraph persistence/memory, AutoGen teams/termination,
+Qwendex uses Codex CLI subagents as the runtime base. Its design was informed by
+patterns from LangGraph persistence/memory, AutoGen teams/termination,
 Anthropic effective agents/contextual retrieval, SWE-agent trajectories,
 OpenHands-style eval harnesses, SWE-bench Verified and tau-bench methodology,
 MCP security guidance, and Berkeley function-calling/tool-call eval ideas.
+These references are not compatibility or integration claims.

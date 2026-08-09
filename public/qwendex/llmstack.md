@@ -68,6 +68,28 @@ sample environment all use a 32768-token context with auto-compaction at
 28672. A local backend override may lower both values, but its compact limit
 must remain below the actual served context window.
 
+## Bridge Sampling And Thinking Controls
+
+Structured tool requests use deterministic bridge sampling by default:
+`CODEX_TEXTGEN_TOOL_TEMPERATURE=0.0`, top-p `0.95`, top-k `20`, and min-p `0`.
+`CODEX_TEXTGEN_TOOL_SEED` is an optional diagnostic-reproducibility control and
+should remain unset unless a task-specific A/B validates the seed across every
+acceptance case.
+
+Native thinking is also opt-in through
+`CODEX_TEXTGEN_ENABLE_THINKING`, `CODEX_TEXTGEN_PRESERVE_THINKING`, and
+`CODEX_TEXTGEN_THINKING_MIN_OUTPUT_TOKENS`. Setting
+`CODEX_TEXTGEN_DISABLE_THINKING_FOR_TOOLS=true` keeps tool-protocol requests
+concise even when thinking is enabled for sufficiently large non-tool outputs.
+The bridge validates the threshold against the maximum completion budget.
+
+`config/local_llm_stack/qwen3_5_native_thinking.jinja` is an optional template
+asset for a compatible Qwen tokenizer/GGUF and llama.cpp backend. It is not the
+default and its filename is a format hint, not a supported-model or quality
+claim. Select it explicitly with `LLAMACPP_CHAT_TEMPLATE`, then run offline and
+live bridge/fresh-home acceptance before promotion. Structural template and
+launcher tests do not establish model quality.
+
 ## Windows Launcher
 
 `scripts/windows/open.ps1` is a best-effort bring-your-own-WSL PowerShell

@@ -128,6 +128,11 @@ scripts/qwendex route --task-class exec --json
 scripts/qwendex exec "Reply exactly QWENDEX_OK" --seat auto --json
 ```
 
+Hosted Manager workers use a different plane: ordinary profiles request
+Terra/high, while review and release profiles request Terra/xhigh. Luna/max and
+Terra/high are also explicit one-shot seats. Codex validates native V2 worker
+requests; Luna is not used as a V2 worker in the 0.147 compatibility contract.
+
 ## Receipts
 
 Every Qwen run writes a receipt containing model, profile, task class, tool-call

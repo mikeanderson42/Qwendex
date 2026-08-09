@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+The 0.7.0 section remains candidate material until its source-bound release
+verification, publication, annotated tag, and activated-generation checks pass.
+
+## 0.7.0
+
+- Added a machine-readable `qwendex about --json` product and Codex 0.147
+  compatibility contract.
+- Configured native V2 worker requests through explicit Terra high/xhigh
+  profiles and added direct Luna Max and Terra seat command/receipt contracts.
+  Luna remains a one-shot seat because the inspected Codex 0.147 account
+  catalog exposes it through the V1 model family; live availability is not
+  inferred from configuration.
+- Added Qdex `auto-review` permission mode using Codex `--approve-for-me`,
+  rejected native permission overrides, removed blanket project-trust
+  injection, and retained native project trust. Qdex never adds Codex's global
+  hook-trust bypass because it also covers project, config-layer, and plugin
+  hook sources outside the generated-home inventory.
+- Removed automatic stale-row reconciliation from Manager status, Qwendex
+  check/doctor, Codex status, and dev status JSON. These commands may still
+  initialize/migrate their local state stores; lifecycle closure is confined to
+  explicit repair and close commands.
+- Added exact-byte-digest, repo/task/agent-bound Manager validation receipt
+  attachment, actor-attributed validation waivers, exact Codex 0.147 root
+  collaboration-tool assertions, and native child developer instructions.
+- Hardened anchored Codex version parsing, per-replacement patch-state
+  detection, and common token redaction while retaining memory/import, native
+  roles, service tiers, and MCP 2026 as documented boundaries.
+- Aligned the public local-model catalog with the shipped 32k/28,672 compact
+  contract and deterministic tool temperature, and documented optional seed,
+  thinking-threshold, tool-thinking suppression, and compatible-template
+  controls without making model-quality claims.
+
 ## 0.6.9
 
 - Rebased the canonical source patch to official Codex `0.147.0`, including

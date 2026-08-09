@@ -8,6 +8,8 @@ Qwendex seats define who can do what.
 | `qwen` | Bounded local Qwen work | No |
 | `audit` | Read-only review and security review | Yes |
 | `release` | Public release acceptance | Yes |
+| `luna` | Bounded hosted one-shot work at max reasoning | No |
+| `terra` | Bounded hosted work at high reasoning | No |
 | `sandbox` | Isolated local probes | No |
 
 Qwen is allowed for read-heavy audits, docs drafts, queue work, bounded patches,
@@ -19,11 +21,16 @@ Auto routing is available for cost control:
 ```bash
 scripts/qwendex route --task-class exec --json
 scripts/qwendex exec "Reply exactly QWENDEX_OK" --seat auto --json
+scripts/qwendex exec "Inspect a bounded input" --seat terra --json
+scripts/qwendex exec "Summarize a bounded input" --seat luna --json
 ```
 
 The auto route chooses `qwen` only when the configured local model is visible
 through the guarded Codex-facing endpoint. It falls back to `primary` when local
 Qwen is unavailable or when the task class requires GPT/Codex authority.
+Luna and Terra are explicit hosted seats rather than auto-route authority
+fallbacks. Account availability is proven only by a real run receipt. Luna is
+not passed to Codex 0.147 Manager V2; native workers use Terra profiles.
 
 Run:
 

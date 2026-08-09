@@ -18,7 +18,7 @@ scripts/qwendex docs audit \
 Audit every repository declared by a private, repository-owned hub manifest:
 
 ```bash
-scripts/qwendex docs audit --hub ../jarvis/qdex-hub.toml --json
+scripts/qwendex docs audit --hub ../downstream-docs/qdex-hub.toml --json
 ```
 
 The audit uses `git ls-files` by default. It does not need MkDocs and does not
@@ -93,8 +93,8 @@ export QWENDEX_MKDOCS_BIN="$PWD/.qwendex-dev/venvs/docs/bin/mkdocs"
 Then build or serve a repository-owned hub:
 
 ```bash
-scripts/qwendex docs build --hub ../jarvis/qdex-hub.toml --strict --json
-scripts/qwendex docs serve --hub ../jarvis/qdex-hub.toml
+scripts/qwendex docs build --hub ../downstream-docs/qdex-hub.toml --strict --json
+scripts/qwendex docs serve --hub ../downstream-docs/qdex-hub.toml
 ```
 
 The manifest uses schema `qwendex.docs.hub.v1`, portable sibling repository

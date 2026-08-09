@@ -118,12 +118,13 @@ disables the `memories`, `external_agent_memory_import`, and `chronicle`
 features, and disables memory generation, use, and dedicated tools. Qdex
 reasserts those values on every launch after caller options and rejects caller
 history/memory activation attempts, including Chronicle's legacy `telepathy`
-alias. It keeps native role/profile configuration and role-driven
-model/reasoning overrides unavailable: explicit role/profile controls and
+alias. It keeps native role/profile configuration and role-driven defaults
+unavailable: explicit role/profile controls and
 app-server/remote access are rejected, while passive project `.codex` role
 definitions are tolerated so existing repositories still launch. The canonical
-V2 patch does not expose those roles to `spawn_agent` and makes children inherit
-the root's model, reasoning, and service tier. Qwendex AgentPolicy remains the
+V2 patch does not expose those roles or service tiers to `spawn_agent`; it does
+expose Codex-validated Qwendex model/reasoning requests and supplies the fixed
+bounded-worker developer instructions. Qwendex AgentPolicy remains the
 supported delegation and lifecycle contract. This is a Qdex boundary; direct
 stock-Codex use remains independent.
 

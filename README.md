@@ -1,9 +1,9 @@
 # Qwendex
 
-Qwendex is a Codex-native operator harness for GPT-first work with bounded local
-Qwen support. Codex remains the execution plane; Qwendex adds routing, local
-runtime checks, receipts, manager state, validation gates, and optional Codex TUI
-integration around that plane.
+Qwendex 0.7.0 is a source-distributed Codex customization and operator harness.
+Codex remains the execution plane; Qwendex adds an isolated launcher, adaptive
+hosted/local routing, manager observability, receipts, runtime generations,
+validation gates, and optional version-pinned Codex integration around it.
 
 This repository is the public Qwendex build surface. It does not ship model
 weights, private runtime state, credentials, logs, transcripts, or host-specific
@@ -20,6 +20,9 @@ claims.
 The public contract is intentionally narrow:
 
 - `scripts/qwendex` is the primary CLI.
+- `qdex` is the isolated Codex launcher.
+- `llmstack` is an optional local-model lifecycle facade.
+- `qwendex-dev` is source-install, build, verification, and release tooling.
 - JSON commands return a stable envelope with status, summary, artifacts,
   next actions, errors, and version.
 - Local Qwen routes are advisory and receipt-backed.
@@ -32,8 +35,9 @@ The public contract is intentionally narrow:
 
 - Public `scripts/qwendex` CLI for checks, routing, seats, receipts, evals,
   state, queue, learning, manager controls, and Codex patch preflight.
-- Local Qwen routing through `primary`, `qwen`, `audit`, `release`, and
-  `sandbox` seats.
+- Hosted and local routing through `primary`, `qwen`, `audit`, `release`,
+  `luna`, `terra`, and `sandbox` seats. Luna/Terra are bounded execution seats,
+  not release authority.
 - LLMStack local runtime facade for optional backend launchers, LiteLLM, bridge
   checks, and stack receipts.
 - Guard markers, parser recovery, receipt validation, eval summaries, and local
@@ -67,7 +71,7 @@ Manager routing is per lane. The main Codex session keeps the user's selected
 model and reasoning. Low-risk bounded lanes may use local Qwen; high-risk lanes
 escalate to GPT/Codex authority.
 
-Qwendex `0.6.9` installs validated runtime generations side by side. Each
+Qwendex `0.7.0` installs validated runtime generations side by side. Each
 Qdex process is pinned to one immutable source/binary/config contract;
 activation affects only new sessions, and shell recovery can restore the prior
 known-good generation without invoking Qdex. Stock Codex supports Qwendex's
@@ -103,9 +107,8 @@ git fetch --tags origin
 git switch --detach <published-release-tag>
 ```
 
-The annotated `v0.6.9` tag is the publication boundary for this stable
-release; untagged source remains candidate material until the release gates
-create and push that tag.
+The annotated `v0.7.0` tag is the publication boundary. Before that tag exists,
+an untagged 0.7.0 tree is candidate material rather than a stable release.
 
 Qwendex is currently distributed as source; GitHub source archives and the
 matching git tag are the release artifact. It does not install as a Python or
@@ -158,12 +161,19 @@ explicit alias for the captured upstream binary. Run `qdex` from the desired
 directory or use Codex's native `qdex -C <project>` form to select Qwendex's
 isolated home, internal runtime, and Manager preflight. Native options such as
 `exec --json`, `-C`/`--cd`, `--add-dir`, and arguments after `--` pass through
-unchanged; the older `--repo` form remains a compatibility alias.
+unchanged; the older `--repo` form remains a compatibility alias. Because
+`--add-dir` explicitly expands Codex's writable roots, dry-run output preserves
+it visibly and the permission-mode label does not claim to enumerate roots.
 
 Qdex defaults to `workspace-write` permission mode from the published Qwendex
 config. An explicit `--qdex-permission-mode`,
 `QWENDEX_QDEX_PERMISSION_MODE`, or ignored operator-local Qdex config may
-select `yolo`; invalid explicit values stop before Codex starts. See
+select `auto-review` or `yolo`; invalid explicit values stop before Codex
+starts. `auto-review` maps to Codex `--approve-for-me`. Qdex rejects native
+permission-mode flags, their hidden aliases and attached short forms, and the
+Codex 0.147 permission/profile config families so its selected and reported
+mode stays authoritative. Native Codex hook trust remains enabled across home,
+project, config-layer, and plugin sources. See
 [Configuration](public/qwendex/configuration.md#qdex-launch-permission) for
 the exact precedence and local-config boundary.
 
@@ -338,6 +348,8 @@ claims require GPT/Codex review and the appropriate Qwendex verification tier.
 ## Documentation Map
 
 - [Public docs index](public/qwendex/README.md)
+- [CLI Reference](public/qwendex/cli-reference.md)
+- [Compatibility](public/qwendex/compatibility.md)
 - [Quickstart](public/qwendex/quickstart.md)
 - [Architecture](public/qwendex/architecture.md)
 - [Operations](public/qwendex/operations.md)
@@ -353,15 +365,17 @@ claims require GPT/Codex review and the appropriate Qwendex verification tier.
 - [Troubleshooting](public/qwendex/troubleshooting.md)
 - [Release Notes](public/qwendex/release-notes.md)
 - [0.6.0-rc.1 Manager production evidence](docs/validation/0.6.0-rc.1-manager-production-summary.md)
+- [Qwendex product specification](docs/development/product-specification.md)
+- [Codex 0.145-0.147 assessment](docs/development/codex-0.145-0.147-assessment.md)
 - [Development decision log](docs/development/decision-log.md)
 
 ## Current Release / Known Limits
 
-This checkout is seeded as `v0.6.9` and supports Codex `0.147.0`.
-It includes the supported-Codex update,
-state-schema/runtime isolation fixes, advisory Agent Management boundary, and
-validated Agent Manager/Kaveman/Local TUI controls described in the release
-notes. Its
+This 0.7.0 source line supports Codex `0.147.0`. Until the annotated tag and
+release exist, it remains a candidate layered on the published v0.6.9 baseline.
+It includes the supported-Codex update, state-schema/runtime isolation fixes,
+advisory Agent Management boundary, and Agent Manager/Kaveman/Local TUI controls
+described in the release notes. Its
 source-bound Manager production validation summary is generated only after the
 offline, live, self-hosting, fresh-install, upgrade, rollback, and release
 tiers pass. The annotated tag and GitHub release are created only after the

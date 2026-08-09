@@ -14,9 +14,8 @@ git switch --detach <published-release-tag>
 git status --short
 ```
 
-The annotated `v0.6.9` tag is the publication boundary for this stable
-release. Untagged source is candidate material until the release operation
-creates and pushes that tag.
+The annotated `v0.7.0` tag is the publication boundary for this release.
+Before that tag exists, an untagged 0.7.0 checkout is candidate material.
 
 Stop if `git status --short` prints unexpected files. Install the
 release-compatible dependencies, create isolated runtime wiring, and load the
@@ -50,19 +49,26 @@ exports that path, then rediscovers the real upstream Codex.
 Ensure `~/.local/bin` is on `PATH`; then run `qdex` from the selected project or
 use Codex's native `qdex -C <project>` form. By default `qdex` supplies
 the published `workspace-write` permission posture and does not add
-`--dangerously-bypass-approvals-and-sandbox`. To use Yolo for one launch, pass
-`--qdex-permission-mode yolo`; Qdex adds that native Codex flag exactly once
-without changing caller arguments. An ignored operator-local
+`--dangerously-bypass-approvals-and-sandbox`. To use Codex's automatic review
+for one launch, pass `--qdex-permission-mode auto-review`; Qdex adds only
+`--approve-for-me`. To use Yolo,
+pass `--qdex-permission-mode yolo`; Qdex adds the bypass flag exactly once.
+Caller-supplied native permission flags and permission config are rejected so
+the reported Qdex mode remains the actual launch posture.
+Codex 0.147 removed `exec --full-auto`, so Qdex reports the supported migration
+instead of forwarding it. An ignored operator-local
 `${XDG_CONFIG_HOME:-$HOME/.config}/qwendex/qdex.json` may select the same mode,
 but is never copied into a runtime generation or release artifact. In Manager
-Mode Qdex may supply `--dangerously-bypass-hook-trust` after its advisory
-preflight observes the managed hook set. Missing hooks reduce lifecycle
-observability but do not block launch. That project becomes
-the Qwendex manager target, execution directory, Codex add-dir, local-harness
-trusted root, and MCP trusted root. This repo binding limits those Qwendex/MCP
-scopes and supplies a per-launch Codex trusted-project override for the exact
-canonical target, avoiding an interactive onboarding prompt. Yolo mode is
-deliberately not OS-level filesystem confinement. `qdex` sets the generated
+Mode Qwendex reports whether its generated hook set is exact, but Qdex never
+adds Codex's global hook-trust bypass; native trust remains active for home,
+project, config-layer, and plugin hooks. Missing hooks still reduce lifecycle
+observability without blocking the Qdex launch. That project becomes
+the Qwendex manager target, execution directory, local-harness trusted root,
+and MCP trusted root. An explicit forwarded `--add-dir` separately expands
+Codex writable roots. This repo binding limits those Qwendex/MCP
+scopes. Native Codex still owns project trust; Qdex does not blanket-mark the
+target trusted. Yolo mode is deliberately not OS-level filesystem confinement.
+`qdex` sets the generated
 isolated `CODEX_HOME` only for its child process. Sourcing the environment
 leaves the caller's `CODEX_HOME` and ordinary upstream `codex` unchanged, so
 upstream Codex remains available for recovery; `codex-main` is an explicit
