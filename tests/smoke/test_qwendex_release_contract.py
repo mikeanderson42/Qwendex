@@ -1922,6 +1922,12 @@ def test_artifact_contract_blocks_macos_root_env_netrc_archives_and_binary_token
 def test_ci_workflow_emits_attestation_and_runs_actual_artifact_and_downstream_install_contracts():
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 
+    system_install_lines = [
+        line for line in workflow.splitlines() if "apt-get install" in line
+    ]
+    assert len(system_install_lines) == 2
+    assert all("bubblewrap" in line.split() for line in system_install_lines)
+
     pinned_uses = re.findall(r"(?m)^\s+uses:\s+(\S+)", workflow)
     assert pinned_uses == [
         "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10",

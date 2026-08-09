@@ -21,8 +21,8 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install required search runtime
-        run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends ripgrep
+      - name: Install required system runtimes
+        run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends bubblewrap ripgrep
 
       - name: Install pinned validation tools
         run: python3 -m pip install --disable-pip-version-check jsonschema==4.26.0 pytest==9.0.3 ruff==0.15.20
@@ -52,8 +52,8 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install required search runtime
-        run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends ripgrep
+      - name: Install required system runtimes
+        run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends bubblewrap ripgrep
 
       - name: Install validation tools
         run: python3 -m pip install --disable-pip-version-check jsonschema==4.26.0 pytest==9.0.3 ruff==0.15.20
