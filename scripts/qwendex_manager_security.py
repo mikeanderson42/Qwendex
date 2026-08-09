@@ -11,7 +11,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_TESTS = {
     "test_qdex_dry_run_wires_agent_policy_into_supported_v2_config",
@@ -70,7 +69,10 @@ def evaluate(run_id: str, junit: Path, routing_path: Path) -> dict[str, Any]:
         "normal_qdex_workspace_write_default_visible": '"permission_mode": "workspace-write"' in (ROOT / "config" / "qwendex" / "qwendex.json").read_text(encoding="utf-8"),
         "qdex_yolo_opt_in_contract_visible": 'if [[ "$permission_mode" == "yolo" ]]' in qdex_text,
         "workspace_write_contract_visible": "--sandbox workspace-write" in qdex_text,
-        "managed_hook_trust_boundary_visible": "--dangerously-bypass-hook-trust" in qdex_text,
+        "native_hook_trust_preserved": (
+            "native hook-trust bypass is unavailable" in qdex_text
+            and 'cmd+=("$QWENDEX_HOOK_TRUST_FLAG")' not in qdex_text
+        ),
         "isolated_codex_home_required": 'export CODEX_HOME="$QWENDEX_CODEX_HOME"' in qdex_text,
         "normal_stock_codex_fallback_separate": "codex-main" in dev_text,
         "development_bypass_named": "cmd_open_yolo" in dev_text and "open-yolo" in dev_text,

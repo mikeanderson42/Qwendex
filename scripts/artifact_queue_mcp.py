@@ -692,8 +692,15 @@ TOOL_HANDLERS.update(
 )
 
 
-def tool_schema(name: str, description: str, properties: dict[str, Any], required: list[str]) -> dict[str, Any]:
-    return {
+def tool_schema(
+    name: str,
+    description: str,
+    properties: dict[str, Any],
+    required: list[str],
+    *,
+    annotations: dict[str, bool] | None = None,
+) -> dict[str, Any]:
+    schema = {
         "name": name,
         "description": description,
         "inputSchema": {
@@ -703,6 +710,9 @@ def tool_schema(name: str, description: str, properties: dict[str, Any], require
             "required": required,
         },
     }
+    if annotations:
+        schema["annotations"] = annotations
+    return schema
 
 
 TOOLS = [
@@ -814,6 +824,7 @@ TOOLS = [
             },
         },
         ["query"],
+        annotations={"readOnlyHint": True},
     ),
     tool_schema(
         "local_qwen_run_report",

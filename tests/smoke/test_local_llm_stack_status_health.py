@@ -159,3 +159,37 @@ def test_http_health_requires_the_canonical_status_contract():
     assert invalid.error == "status payload did not report ready"
     assert valid.state == "healthy"
     assert valid.error == ""
+
+
+def test_gpu_summary_prefers_the_largest_live_llama_server_allocation(monkeypatch):
+    stack = load_stack_module()
+
+    def fake_run(args, **kwargs):
+        if args[1].startswith("--query-gpu="):
+            return SimpleNamespace(
+                returncode=0,
+                stdout=(
+                    "0, GPU-2060, NVIDIA GeForce RTX 2060, 6144, 900, 5244, 20\n"
+                    "1, GPU-3090, NVIDIA GeForce RTX 3090, 24576, 21800, 2776, 0\n"
+                ),
+                stderr="",
+            )
+        if args[1].startswith("--query-compute-apps="):
+            return SimpleNamespace(
+                returncode=0,
+                stdout=(
+                    "GPU-2060, 111, /opt/llama-server, 84\n"
+                    "GPU-3090, 111, /opt/llama-server, 20900\n"
+                ),
+                stderr="",
+            )
+        raise AssertionError(args)
+
+    monkeypatch.setattr(stack, "run", fake_run)
+
+    summary = stack.current_gpu_summary()
+
+    assert summary["gpu_index"] == 1
+    assert summary["name"] == "NVIDIA GeForce RTX 3090"
+    assert summary["llama_server_memory_mb"] == 20900
+    assert summary["selection"] == "largest llama-server allocation"

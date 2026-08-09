@@ -54,10 +54,41 @@ validate the selected runtime's supported flags before use. The vLLM launcher
 keeps remote model code disabled unless `VLLM_TRUST_REMOTE_CODE=1` is set
 explicitly.
 
+For a llama.cpp GGUF profile, `LLAMACPP_SPEC_TYPE` selects a supported
+speculative-decoding mode. Use `draft-mtp` only when the GGUF includes
+compatible MTP layers. `LLAMACPP_SPEC_DRAFT_N_MAX` sets a validated draft
+token cap without routing the value through free-form extra arguments. On a
+multi-GPU host, `LLAMACPP_DEVICE` and
+`LLAMACPP_MAIN_GPU` pin the backend to a device reported by
+`llama-server --list-devices`. When a llama.cpp backend is running,
+`llmstack status` reports the GPU with its largest `llama-server` allocation.
+
 The published 32k backend profile, local Qwendex seats, launcher fallback, and
 sample environment all use a 32768-token context with auto-compaction at
 28672. A local backend override may lower both values, but its compact limit
 must remain below the actual served context window.
+
+## Bridge Sampling And Thinking Controls
+
+Structured tool requests use deterministic bridge sampling by default:
+`CODEX_TEXTGEN_TOOL_TEMPERATURE=0.0`, top-p `0.95`, top-k `20`, and min-p `0`.
+`CODEX_TEXTGEN_TOOL_SEED` is an optional diagnostic-reproducibility control and
+should remain unset unless a task-specific A/B validates the seed across every
+acceptance case.
+
+Native thinking is also opt-in through
+`CODEX_TEXTGEN_ENABLE_THINKING`, `CODEX_TEXTGEN_PRESERVE_THINKING`, and
+`CODEX_TEXTGEN_THINKING_MIN_OUTPUT_TOKENS`. Setting
+`CODEX_TEXTGEN_DISABLE_THINKING_FOR_TOOLS=true` keeps tool-protocol requests
+concise even when thinking is enabled for sufficiently large non-tool outputs.
+The bridge validates the threshold against the maximum completion budget.
+
+`config/local_llm_stack/qwen3_5_native_thinking.jinja` is an optional template
+asset for a compatible Qwen tokenizer/GGUF and llama.cpp backend. It is not the
+default and its filename is a format hint, not a supported-model or quality
+claim. Select it explicitly with `LLAMACPP_CHAT_TEMPLATE`, then run offline and
+live bridge/fresh-home acceptance before promotion. Structural template and
+launcher tests do not establish model quality.
 
 ## Windows Launcher
 

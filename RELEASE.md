@@ -1,3 +1,31 @@
+# v0.7.0
+
+Candidate release notes until source-bound release verification, publication,
+and tag activation complete.
+
+Codex `0.147.0` product-contract and adaptive routing release.
+
+- Defines Qwendex as a source-distributed Codex customization and operator
+  harness with four named surfaces: `qwendex`, `qdex`, optional `llmstack`,
+  and source-install/build/release tooling through `qwendex-dev`.
+- Configures bounded Terra V2 worker routing, Luna Max one-shot execution,
+  explicit reasoning receipts, and Codex-validated native model/reasoning
+  overrides; live account availability remains an acceptance check.
+- Adds the `auto-review` Qdex permission posture backed by Codex
+  `--approve-for-me`, while preserving workspace-write and explicit Yolo and
+  rejecting native permission overrides that could outrank the recorded mode.
+- Removes implicit lifecycle reconciliation from Manager status and
+  diagnostics, adds digest-verified validation attachment and explicit
+  repo/task/agent-bound validation receipts, actor-attributed waivers, and
+  aligns the advertised root tool surface with Codex 0.147 MultiAgentV2.
+- Adopts native V2 child developer instructions, hardens source-patch/version
+  detection with per-replacement signatures, preserves native Codex hook trust
+  across every discovery layer, strengthens secret redaction, and retains
+  roles, service tiers, memory, and MCP 2026 as explicit deferred or
+  experimental boundaries.
+- Aligns local reference limits with the shipped 32k/28,672 runtime and
+  documents deterministic tool sampling plus opt-in thinking controls.
+
 # v0.6.9
 
 Codex `0.147.0` compatibility and runtime refresh.

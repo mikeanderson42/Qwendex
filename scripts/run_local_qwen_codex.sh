@@ -12,6 +12,7 @@ CALLER_LOCAL_QWEN_GUARD_PROFILE="${LOCAL_QWEN_GUARD_PROFILE+x}${LOCAL_QWEN_GUARD
 CALLER_LOCAL_QWEN_CODEX_MAX_WALL_TIME_SECONDS="${LOCAL_QWEN_CODEX_MAX_WALL_TIME_SECONDS+x}${LOCAL_QWEN_CODEX_MAX_WALL_TIME_SECONDS-}"
 CALLER_LOCAL_QWEN_CODEX_MAX_TOOL_CALLS="${LOCAL_QWEN_CODEX_MAX_TOOL_CALLS+x}${LOCAL_QWEN_CODEX_MAX_TOOL_CALLS-}"
 CALLER_LOCAL_QWEN_CODEX_SANDBOX_MODE="${LOCAL_QWEN_CODEX_SANDBOX_MODE+x}${LOCAL_QWEN_CODEX_SANDBOX_MODE-}"
+CALLER_LOCAL_QWEN_CODEX_HOME="${LOCAL_QWEN_CODEX_HOME+x}${LOCAL_QWEN_CODEX_HOME-}"
 CALLER_LOCAL_QWEN_HEALTH_LOG="${LOCAL_QWEN_HEALTH_LOG+x}${LOCAL_QWEN_HEALTH_LOG-}"
 CALLER_CODEX_TEXTGEN_CONTEXT_LIMIT_TOKENS="${CODEX_TEXTGEN_CONTEXT_LIMIT_TOKENS+x}${CODEX_TEXTGEN_CONTEXT_LIMIT_TOKENS-}"
 if [[ -f "$ENV_FILE" ]]; then
@@ -28,10 +29,22 @@ fi
 [[ "$CALLER_LOCAL_QWEN_CODEX_MAX_WALL_TIME_SECONDS" == x* ]] && LOCAL_QWEN_CODEX_MAX_WALL_TIME_SECONDS="${CALLER_LOCAL_QWEN_CODEX_MAX_WALL_TIME_SECONDS#x}"
 [[ "$CALLER_LOCAL_QWEN_CODEX_MAX_TOOL_CALLS" == x* ]] && LOCAL_QWEN_CODEX_MAX_TOOL_CALLS="${CALLER_LOCAL_QWEN_CODEX_MAX_TOOL_CALLS#x}"
 [[ "$CALLER_LOCAL_QWEN_CODEX_SANDBOX_MODE" == x* ]] && LOCAL_QWEN_CODEX_SANDBOX_MODE="${CALLER_LOCAL_QWEN_CODEX_SANDBOX_MODE#x}"
+[[ "$CALLER_LOCAL_QWEN_CODEX_HOME" == x* ]] && LOCAL_QWEN_CODEX_HOME="${CALLER_LOCAL_QWEN_CODEX_HOME#x}"
 [[ "$CALLER_LOCAL_QWEN_HEALTH_LOG" == x* ]] && LOCAL_QWEN_HEALTH_LOG="${CALLER_LOCAL_QWEN_HEALTH_LOG#x}"
 [[ "$CALLER_CODEX_TEXTGEN_CONTEXT_LIMIT_TOKENS" == x* ]] && CODEX_TEXTGEN_CONTEXT_LIMIT_TOKENS="${CALLER_CODEX_TEXTGEN_CONTEXT_LIMIT_TOKENS#x}"
 
-SAFE_HOME="${CODEX_HOME:-$HOME/.codex_qwendex_local_safe}"
+DEFAULT_SAFE_HOME="$HOME/.codex_qwendex_local_safe"
+# A nested local-Codex run must not inherit the parent Qwendex manager home:
+# that home enables multi-agent V2 and carries orchestration-only settings that
+# conflict with a standalone local `codex exec` process.  Operators can still
+# select a deliberate local home through LOCAL_QWEN_CODEX_HOME or --fresh-home.
+if [[ -n "${LOCAL_QWEN_CODEX_HOME:-}" ]]; then
+  SAFE_HOME="$LOCAL_QWEN_CODEX_HOME"
+elif [[ -n "${QWENDEX_RUNTIME_GENERATION_ID:-}" || -n "${QWENDEX_MANAGER_SESSION_ID:-}" ]]; then
+  SAFE_HOME="$DEFAULT_SAFE_HOME"
+else
+  SAFE_HOME="${CODEX_HOME:-$DEFAULT_SAFE_HOME}"
+fi
 CODEX_CWD="${LOCAL_QWEN_CODEX_CWD:-$ROOT}"
 
 # Use the stable bridge alias for Codex repo-agent work. The loaded backend may
@@ -185,6 +198,7 @@ Environment overrides:
   LOCAL_QWEN_CODEX_MAX_WALL_TIME_SECONDS default: -1 unlimited; positive integer wraps --exec in timeout
   LOCAL_QWEN_CODEX_MAX_TOOL_CALLS default: -1 unlimited; must match the already-running bridge status
   LOCAL_QWEN_CODEX_SANDBOX_MODE default: workspace-write; read-only is also supported
+  LOCAL_QWEN_CODEX_HOME  optional isolated CODEX_HOME for local-Qwen launches
   LOCAL_QWEN_CHECK_MCP_BINS default: 1; set 0 only for isolated bridge/model probes
   LOCAL_QWEN_MCP_BIN_ROOT default: ~/.codex/mcp-servers/node_modules/.bin
   LOCAL_QWEN_LOCAL_HARNESS_MCP default: scripts/artifact_queue_mcp.py in this repo
@@ -566,6 +580,11 @@ run_codex() {
     -c "mcp_servers.local-harness.cwd=\"$CODEX_CWD\""
     -c "mcp_servers.local-harness.env.ARTIFACT_QUEUE_MCP_TRUSTED_ROOTS=\"$mcp_trusted_roots\""
     -c 'mcp_servers.local-harness.env.SEARXNG_URL="http://127.0.0.1:6060"'
+    # `search_web` is declared read-only by the local MCP server, so `writes`
+    # runs only that loopback-pinned lookup without prompting. Artifact queue
+    # and write-capable harness tools stay hidden.
+    -c 'mcp_servers.local-harness.enabled_tools=["search_web"]'
+    -c 'mcp_servers.local-harness.tools.search_web.approval_mode="writes"'
   )
   if [[ "$mode" == "exec" && "$CODEX_EXEC_MINIMAL" == "1" ]]; then
     mcp_override_args=()

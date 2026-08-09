@@ -80,6 +80,7 @@ def test_bridge_status_payload_is_constructed_from_policy_module():
         tool_top_p=None,
         tool_top_k=None,
         tool_min_p=None,
+        tool_seed=42,
         tool_reasoning_effort="",
         enable_thinking=False,
         preserve_thinking=False,
@@ -98,6 +99,7 @@ def test_bridge_status_payload_is_constructed_from_policy_module():
     assert payload["status"] == "ok"
     assert payload["version"] == "test-version"
     assert payload["context_limit_tokens"] == 65536
+    assert payload["tool_seed"] == 42
     assert payload["effective_thinking_budget"] == 0
     assert payload["runtime_guard_version"] == "local-qwen-runtime-guard-v1"
     assert payload["guard_thresholds"]["turn_tool_call_cap"] == 17

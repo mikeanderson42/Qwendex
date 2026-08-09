@@ -196,6 +196,28 @@ def test_proposed_duplicate_read_gets_one_recovery_then_stops():
     assert second.loop_type == guard.LoopType.STALE_RECOVERY_LOOP
 
 
+def test_jq_with_quoted_comparison_is_read_only_and_duplicate_is_recovered():
+    guard = load_guard_module()
+    runtime_guard = guard.RuntimeGuard(guard.GuardConfig(profile="balanced"))
+    read_args = {"cmd": "jq '.items | map(select(.score > 0))' data.json"}
+    normalized = guard.normalize_tool_arguments_for_loop_key(
+        read_args, name="exec_command"
+    )
+    history = [
+        user_message("Inspect the JSON."),
+        call("call_1", arguments=read_args),
+        output("call_1", "[]\n"),
+    ]
+
+    assert guard.exec_command_looks_read_only(normalized)
+    assert not guard.exec_command_looks_mutating(normalized)
+    decision = runtime_guard.evaluate_proposed_call(
+        history, call("call_2", arguments=read_args)
+    )
+    assert decision.action == guard.GuardAction.RECOVER
+    assert decision.loop_type == guard.LoopType.DUPLICATE_READ_COMMAND
+
+
 def test_new_user_request_resets_duplicate_read_recovery_marker():
     guard = load_guard_module()
     runtime_guard = guard.RuntimeGuard(guard.GuardConfig(profile="max_safety"))

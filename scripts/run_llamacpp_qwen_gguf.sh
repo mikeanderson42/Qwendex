@@ -24,6 +24,8 @@ PORT="${LLAMACPP_PORT:-5000}"
 MODEL_ALIAS="${LLAMACPP_MODEL_ALIAS:-qwen-local}"
 MODEL_PATH="$(windows_to_wsl_path "${LLAMACPP_MODEL_PATH:-$HOME/models/qwen-coder/example-model.gguf}")"
 CHAT_TEMPLATE="$(windows_to_wsl_path "${LLAMACPP_CHAT_TEMPLATE:-$QWENDEX_ROOT/config/local_llm_stack/qwen3_codex_tool_plain.jinja}")"
+DEFAULT_CHAT_TEMPLATE_KWARGS='{"preserve_thinking":true}'
+CHAT_TEMPLATE_KWARGS="${LLAMACPP_CHAT_TEMPLATE_KWARGS:-$DEFAULT_CHAT_TEMPLATE_KWARGS}"
 CTX_SIZE="${LLAMACPP_CTX_SIZE:-32768}"
 BATCH_SIZE="${LLAMACPP_BATCH_SIZE:-4096}"
 UBATCH_SIZE="${LLAMACPP_UBATCH_SIZE:-2048}"
@@ -42,6 +44,10 @@ MIN_P="${LLAMACPP_MIN_P:-0.05}"
 REASONING="${LLAMACPP_REASONING:-off}"
 REASONING_FORMAT="${LLAMACPP_REASONING_FORMAT:-deepseek}"
 REASONING_BUDGET="${LLAMACPP_REASONING_BUDGET:-}"
+SPEC_TYPE="${LLAMACPP_SPEC_TYPE:-none}"
+SPEC_DRAFT_N_MAX="${LLAMACPP_SPEC_DRAFT_N_MAX:-}"
+DEVICE="${LLAMACPP_DEVICE:-}"
+MAIN_GPU="${LLAMACPP_MAIN_GPU:-}"
 EXTRA_ARGS="${LLAMACPP_EXTRA_ARGS:-}"
 
 if [[ ! -x "$SERVER" ]]; then
@@ -54,8 +60,31 @@ if [[ ! -f "$MODEL_PATH" ]]; then
   exit 1
 fi
 
-if [[ ! -f "$CHAT_TEMPLATE" ]]; then
+if [[ "$CHAT_TEMPLATE" != "embedded" && ! -f "$CHAT_TEMPLATE" ]]; then
   echo "Missing llama.cpp chat template: $CHAT_TEMPLATE" >&2
+  exit 1
+fi
+
+IFS=',' read -r -a spec_types <<< "$SPEC_TYPE"
+for spec_type in "${spec_types[@]}"; do
+  case "$spec_type" in
+    none|draft-simple|draft-eagle3|draft-mtp|draft-dflash|ngram-simple|ngram-map-k|ngram-map-k4v|ngram-mod|ngram-cache) ;;
+    *)
+      echo "Unsupported LLAMACPP_SPEC_TYPE=$SPEC_TYPE" >&2
+      exit 1
+      ;;
+  esac
+done
+
+if [[ -n "$SPEC_DRAFT_N_MAX" ]]; then
+  if [[ ! "$SPEC_DRAFT_N_MAX" =~ ^[1-9][0-9]*$ ]] || (( 10#$SPEC_DRAFT_N_MAX > 128 )); then
+    echo "LLAMACPP_SPEC_DRAFT_N_MAX must be an integer from 1 through 128, got: $SPEC_DRAFT_N_MAX" >&2
+    exit 1
+  fi
+fi
+
+if [[ -n "$MAIN_GPU" && ! "$MAIN_GPU" =~ ^[0-9]+$ ]]; then
+  echo "LLAMACPP_MAIN_GPU must be a numeric device index, got: $MAIN_GPU" >&2
   exit 1
 fi
 
@@ -83,11 +112,26 @@ cmd=(
   --reasoning "$REASONING"
   --reasoning-format "$REASONING_FORMAT"
   --jinja
-  --chat-template-file "$CHAT_TEMPLATE"
-  --chat-template-kwargs '{"preserve_thinking":true}'
-  --spec-type none
+  --spec-type "$SPEC_TYPE"
   -fit off
 )
+
+if [[ "$CHAT_TEMPLATE" != "embedded" ]]; then
+  cmd+=(--chat-template-file "$CHAT_TEMPLATE")
+fi
+cmd+=(--chat-template-kwargs "$CHAT_TEMPLATE_KWARGS")
+
+if [[ -n "$DEVICE" ]]; then
+  cmd+=(--device "$DEVICE")
+fi
+
+if [[ -n "$MAIN_GPU" ]]; then
+  cmd+=(--main-gpu "$MAIN_GPU")
+fi
+
+if [[ -n "$SPEC_DRAFT_N_MAX" ]]; then
+  cmd+=(--spec-draft-n-max "$SPEC_DRAFT_N_MAX")
+fi
 
 case "${CACHE_PROMPT,,}" in
   1|true|yes|on) cmd+=(--cache-prompt) ;;
@@ -111,7 +155,19 @@ echo "Model: $MODEL_PATH"
 echo "Alias: $MODEL_ALIAS"
 echo "Context: $CTX_SIZE"
 echo "KV cache: $CACHE_TYPE_K / $CACHE_TYPE_V"
+if [[ "$CHAT_TEMPLATE" == "embedded" ]]; then
+  echo "Chat template: embedded in GGUF"
+else
+  echo "Chat template: $CHAT_TEMPLATE"
+fi
 echo "Prompt cache RAM: ${CACHE_RAM} MiB"
+echo "Speculative decoding: $SPEC_TYPE"
+if [[ -n "$SPEC_DRAFT_N_MAX" ]]; then
+  echo "Speculative draft token cap: $SPEC_DRAFT_N_MAX"
+fi
+if [[ -n "$DEVICE" ]]; then
+  echo "GPU device: $DEVICE (main GPU: ${MAIN_GPU:-default})"
+fi
 echo "API: http://$HOST:$PORT/v1"
 
 if [[ "${LLAMACPP_DRY_RUN:-0}" == "1" ]]; then

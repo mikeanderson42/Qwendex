@@ -501,15 +501,14 @@ class RuntimeGuard:
         if threshold <= 0 or window_size <= 0:
             return GuardDecision.allow()
         recent: list[ToolRecord] = []
-        has_seen_non_read = False
+        has_seen_progress = False
         for record in records:
-            is_read = record_is_read_like(record)
-            if not is_read:
-                has_seen_non_read = True
+            if record_is_progress_like(record):
+                has_seen_progress = True
             recent.append(record)
             if len(recent) > window_size:
                 recent.pop(0)
-            if not has_seen_non_read or len(recent) < threshold:
+            if not has_seen_progress or len(recent) < threshold:
                 continue
             read_count = sum(1 for item in recent if record_is_read_like(item))
             if read_count >= threshold:
@@ -748,10 +747,16 @@ def exec_command_looks_mutating(normalized_arguments: str) -> bool:
         "git log",
         "pwd",
         "date",
+        "echo ",
+        "printf ",
+        "jq ",
+        "yq ",
         "python3 -m json.tool",
         "python -m json.tool",
     )
-    if compact.startswith(readonly_prefixes):
+    if compact.startswith(readonly_prefixes) and not command_has_unquoted_redirection(
+        cmd
+    ):
         return False
     mutating_patterns = (
         r"(^|[;&|]\s*)mkdir\b",
@@ -761,15 +766,37 @@ def exec_command_looks_mutating(normalized_arguments: str) -> bool:
         r"(^|[;&|]\s*)cp\b",
         r"(^|[;&|]\s*)chmod\b",
         r"(^|[;&|]\s*)git\s+(?:add|commit|push|checkout|reset|clean|mv|rm)\b",
-        r">\s*[^&]",
-        r">>",
         r"\btee\b",
         r"\bwrite_text\s*\(",
         r"\bopen\s*\([^)]*['\"][wa+]",
         r"\bjson\.dump\s*\(",
         r"\blocal_harness_document_section_upsert\.py\b",
     )
-    return any(re.search(pattern, compact) for pattern in mutating_patterns)
+    return command_has_unquoted_redirection(cmd) or any(
+        re.search(pattern, compact) for pattern in mutating_patterns
+    )
+
+
+def command_has_unquoted_redirection(cmd: str) -> bool:
+    quote = ""
+    escaped = False
+    for ch in cmd:
+        if escaped:
+            escaped = False
+            continue
+        if ch == "\\" and quote != "'":
+            escaped = True
+            continue
+        if quote:
+            if ch == quote:
+                quote = ""
+            continue
+        if ch in {"'", '"'}:
+            quote = ch
+            continue
+        if ch == ">":
+            return True
+    return False
 
 
 def exec_command_looks_read_only(normalized_arguments: str) -> bool:
@@ -794,6 +821,10 @@ def exec_command_looks_read_only(normalized_arguments: str) -> bool:
         "git log",
         "pwd",
         "date",
+        "echo ",
+        "printf ",
+        "jq ",
+        "yq ",
         "python3 -m json.tool",
         "python -m json.tool",
     )
@@ -832,6 +863,14 @@ def record_is_read_like(record: ToolRecord) -> bool:
     if record.name == "exec_command":
         return exec_command_looks_read_only(record.normalized_arguments)
     return False
+
+
+def record_is_progress_like(record: ToolRecord) -> bool:
+    if record.name == "exec_command":
+        return exec_command_looks_mutating(record.normalized_arguments)
+    return record.name.startswith(
+        ("apply_", "create_", "delete_", "edit_", "move_", "update_", "write_")
+    )
 
 
 def git_revision_token(token: str) -> bool:

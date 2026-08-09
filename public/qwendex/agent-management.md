@@ -83,6 +83,20 @@ repository; full-ledger validation debt remains visible separately. Legacy
 rows without scope are reported without being silently assigned or validated,
 and active legacy write metadata remains visible until reviewed.
 
+Attach or disposition terminal validation explicitly:
+
+```bash
+scripts/qwendex manager validate --agent-id <id> --receipt-path <receipt.json> --json
+scripts/qwendex manager validate --agent-id <id> --receipt-path <receipt.json> --sha256 <file-sha256> --json
+scripts/qwendex manager validation-waive --agent-id <id> --actor <operator-id> --reason "operator disposition" --json
+```
+
+Validation verifies the trusted-path, regular-file, size, JSON schema, receipt
+digest, exact parsed-file digest, explicit pass/fail state, and
+repository/task/agent binding. A waiver requires and records an actor and reason
+as visible audited provenance, not a passing receipt. Status and reconcile report
+`validation_failed` and `validation_waived` without mutating those rows.
+
 ## Manager Decision Ledger
 
 Normal non-Off `qdex` launches run `scripts/qwendex manager preflight` before
@@ -111,12 +125,12 @@ scripts/qwendex manager decision --agent-id <ledger-id> --json
 hook status, validation evidence, and final closeout can be recorded when
 available, but none of that metadata authorizes or blocks root work.
 
-Agent plan assignments expose `spawn_instruction` alongside `assign_command` so
-operators can see the generic model class and reasoning level to pass when
-creating the subagent. Managed hook messages intentionally do not name a
-configured GPT model. Eligible low-risk bounded artifact-summary lanes can
-surface `qwen-local`, low reasoning, and token-saver routing when local Qwen is
-enabled and usable.
+Agent plan assignments expose `spawn_instruction`, `execution_surface`, and
+`native_spawn_arguments` alongside `assign_command`. Native workers default to
+`gpt-5.6-terra` high and use xhigh for risk review/release lanes; Codex validates
+the requested V2 model and effort. Eligible low-risk local lanes instead expose
+an exact `qwendex exec --seat qwen` dispatch and never pass `qwen-local` to
+native `spawn_agent`.
 
 ## Execution Boundary
 
@@ -186,8 +200,9 @@ probe, so an unavailable startup duration is reported as `not_observed`.
 The hooks provide advisory delegation context and lifecycle observability:
 
 - prompt hooks inject the active mode, planner, lifecycle, and AgentPolicy
-  Kaveman output contracts when enabled; they never name a configured GPT model
-- subagent-start hooks inject a bounded assignment, generic inherited reasoning,
+  Kaveman output contracts when enabled
+- subagent-start hooks inject a bounded assignment and validated hosted
+  model/reasoning request or separate local dispatch,
   explicitly read-only child constraints, and the AgentPolicy Kaveman output
   policy; children cannot recursively manage agents
 - subagent-stop hooks record ordinary outcomes and understand structured

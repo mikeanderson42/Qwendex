@@ -3,11 +3,10 @@ import os
 import shlex
 import subprocess
 import textwrap
-import tomllib
 from pathlib import Path
 
 import pytest
-
+import tomllib
 
 ROOT = Path(__file__).resolve().parents[2]
 QDEX = ROOT / "scripts" / "qdex"
@@ -101,7 +100,7 @@ def qdex_fixture(
                     "data": {
                         "agent_use": agent_use,
                         "agent_policy": policy,
-                        "manager_preflight_required": policy.get("mode") == "manager",
+                        "manager_preflight_required": policy.get("mode") != "off",
                         "agent_policy_hash": policy.get("policy_hash", ""),
                         "status_file": str(target),
                         "session_state_file": os.environ.get(
@@ -121,7 +120,10 @@ def qdex_fixture(
                         "ledger_id": "ledger-1",
                         "root_agent_id": "root-1",
                         "routing_decision": {"selected_route": "manager"},
-                        "hook_status": {"verified": True},
+                        "hook_status": {
+                            "verified": True,
+                            "trust_bypass_safe": True,
+                        },
                         "exports": {
                             "QWENDEX_MANAGER_ROOT_AGENT_ID": "root-1",
                             "QWENDEX_MANAGER_POLICY_HASH": os.environ.get(
@@ -225,6 +227,7 @@ def test_qdex_dry_run_wires_agent_policy_into_supported_v2_config(
     payload = qdex_dry_run(repo, env, "--model", "selected-model", "--search")
     command = payload["command"]
     assert isinstance(command, list)
+    assert command.count("--dangerously-bypass-hook-trust") == 0
     overrides = command_config(command)
 
     assert overrides["suppress_unstable_features_warning"] is True
@@ -243,7 +246,7 @@ def test_qdex_dry_run_wires_agent_policy_into_supported_v2_config(
     assert overrides["memories.dedicated_tools"] is False
     assert overrides["features.multi_agent_v2.enabled"] is True
     assert overrides["features.multi_agent_v2.hide_spawn_agent_metadata"] is True
-    assert overrides["features.multi_agent_v2.expose_spawn_agent_model_overrides"] is False
+    assert overrides["features.multi_agent_v2.expose_spawn_agent_model_overrides"] is True
     assert (
         overrides["features.multi_agent_v2.max_concurrent_threads_per_session"]
         == expected_native_threads
@@ -258,6 +261,7 @@ def test_qdex_dry_run_wires_agent_policy_into_supported_v2_config(
     mode_hint = str(overrides["features.multi_agent_v2.multi_agent_mode_hint_text"])
     root_hint = str(overrides["features.multi_agent_v2.root_agent_usage_hint_text"])
     subagent_hint = str(overrides["features.multi_agent_v2.subagent_usage_hint_text"])
+    subagent_instructions = str(overrides["features.multi_agent_v2.subagent_developer_instructions"])
     if active_guidance:
         assert f"Qwendex {agent_use} delegation is active" in mode_hint
         assert "independently of reasoning effort" in mode_hint
@@ -269,6 +273,7 @@ def test_qdex_dry_run_wires_agent_policy_into_supported_v2_config(
     assert "Do not ask workers to delegate recursively" in root_hint
     assert "do not spawn or manage subagents" in subagent_hint
     assert "structured FINAL_REPORT is optional" in subagent_hint
+    assert "root as the sole integrator" in subagent_instructions
     if agent_use == "Manager":
         assert "never override the user's instruction" in mode_hint
     if agent_use == "Auto":
@@ -346,8 +351,8 @@ def test_qdex_immutable_policy_follows_exec_local_config_and_wins(tmp_path: Path
     [
         (("-c", 'agents.reviewer.description="review"'), "native [agents] role and default controls"),
         (("--config", 'agents.default_subagent_model="gpt-5.6"'), "native [agents] role and default controls"),
-        (("-c", "features.multi_agent_v2.expose_spawn_agent_model_overrides=true"), "role-driven model and reasoning"),
-        (("--config=features.multi_agent_v2.hide_spawn_agent_metadata=false",), "role-driven model and reasoning"),
+        (("-c", "features.multi_agent_v2.expose_spawn_agent_model_overrides=true"), "spawn schema is fixed"),
+        (("--config=features.multi_agent_v2.hide_spawn_agent_metadata=false",), "spawn schema is fixed"),
         (("-c", 'history.persistence="save-all"'), "history and memory controls"),
         (("--config", "memories.generate_memories=true"), "history and memory controls"),
         (("--config=features.memories=true",), "experimental Codex memories"),
@@ -452,7 +457,7 @@ def test_qdex_tolerates_passive_project_role_surfaces_under_qwendex_v2_policy(
     assert Path(payload["target_repo"]).resolve() == child.resolve()
     assert "native-role-marker" not in json.dumps(command)
     assert overrides["features.multi_agent_v2.hide_spawn_agent_metadata"] is True
-    assert overrides["features.multi_agent_v2.expose_spawn_agent_model_overrides"] is False
+    assert overrides["features.multi_agent_v2.expose_spawn_agent_model_overrides"] is True
     assert overrides["features.multi_agent_v2.max_concurrent_threads_per_session"] == 5
     assert overrides["tui.status_line"][-1] == "qwendex-manager"
 
@@ -719,6 +724,9 @@ def test_qdex_preserves_native_ultra_proactive_mode_without_weakening_qwendex_po
     assert "structured FINAL_REPORT is optional" in str(
         overrides["features.multi_agent_v2.subagent_usage_hint_text"]
     )
+    assert "root as the sole integrator" in str(
+        overrides["features.multi_agent_v2.subagent_developer_instructions"]
+    )
 
 
 def test_qdex_last_reasoning_override_controls_ultra_coexistence(tmp_path: Path) -> None:
@@ -837,12 +845,14 @@ def test_generated_codex_config_has_safe_v2_baseline(tmp_path: Path) -> None:
     assert "do not retry wait_agent" in v2["root_agent_usage_hint_text"]
     assert "do not spawn or manage subagents" in v2["subagent_usage_hint_text"]
     assert "structured FINAL_REPORT is optional" in v2["subagent_usage_hint_text"]
+    assert "root as the sole integrator" in v2["subagent_developer_instructions"]
     guidance = " ".join(
         v2[key]
         for key in (
             "multi_agent_mode_hint_text",
             "root_agent_usage_hint_text",
             "subagent_usage_hint_text",
+            "subagent_developer_instructions",
         )
     )
     assert "gpt-" not in guidance.lower()

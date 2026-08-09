@@ -66,12 +66,19 @@ reports, validation, or hook wiring is reported without blocking root work.
 
 ## Certified Boundary
 
-The production-hardening claim is deliberately limited to the tested Linux and
-Codex `0.147.0` canonical-patch matrix. Qwendex orchestration policy is not an
-operating-system sandbox: normal Qdex defaults to `workspace-write`, while
-Yolo is an explicit CLI, environment, or ignored operator-local opt-in that
-adds Codex's bypass flag once. A Manager preflight may snapshot the resolved
+The published v0.6.9 production-hardening evidence is limited to its tested
+Linux and Codex `0.147.0` canonical-patch matrix. Qwendex 0.7.0 requires a new
+source-bound release receipt before inheriting that claim. Qwendex
+orchestration policy is not an operating-system sandbox: normal Qdex defaults
+to `workspace-write`; `auto-review` maps only to Codex `--approve-for-me`; Yolo
+is an explicit CLI, environment, or ignored operator-local opt-in that adds
+Codex's bypass flag once. Caller-supplied native permission flags, hook-trust
+bypass, and permission-affecting config overrides are rejected; Qdex alone
+composes the selected posture. A Manager preflight may snapshot the resolved
 mode and source for diagnostics; it does not grant or revoke permission.
+Qdex never adds Codex's global hook-trust bypass: it spans project,
+config-layer, and plugin hooks that the generated-home inventory cannot
+certify. Native Codex hook and project trust therefore remain in force.
 `qwendex-dev` bare-launch bypass mode is development-only. Stock Codex
 and its normal home remain independent and provide the Off-mode recovery path.
 
@@ -83,9 +90,10 @@ profile configuration is deferred because it can load role-specific
 instructions or model settings outside the reviewed Manager lifecycle. Qdex
 rejects explicit role/profile activation, app-server/remote access, and caller
 history/memory activation attempts. It tolerates passive role definitions
-discovered in a trusted project so their mere presence cannot block launch;
-the canonical V2 patch omits the role/model/reasoning/service-tier spawn inputs
-that would activate them and keeps child settings inherited from the root.
+discovered in a project so their mere presence cannot block launch; project
+trust itself remains Codex-native. The canonical V2 patch omits role and
+service-tier spawn inputs, exposes only Codex-validated Qwendex model/reasoning
+requests, and supplies fixed child developer instructions.
 These safeguards do not apply to direct stock-Codex invocation outside Qdex.
 Qwendex shares the operator's authentication file intentionally, but keeps a
 generation-local copy of Codex's volatile `version.json` cache and installation

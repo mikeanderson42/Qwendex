@@ -9,7 +9,6 @@ import textwrap
 import unittest
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[2]
 QDEX = ROOT / "scripts" / "qdex"
 QWENDEX = ROOT / "scripts" / "qwendex"
@@ -50,7 +49,7 @@ def assert_qdex_v2_policy_prefix(test: unittest.TestCase, command: list[str]) ->
     test.assertIn("memories.dedicated_tools=false", values)
     test.assertIn("features.multi_agent_v2.enabled=true", values)
     test.assertIn("features.multi_agent_v2.hide_spawn_agent_metadata=true", values)
-    test.assertIn("features.multi_agent_v2.expose_spawn_agent_model_overrides=false", values)
+    test.assertIn("features.multi_agent_v2.expose_spawn_agent_model_overrides=true", values)
     test.assertTrue(any(value.startswith("features.multi_agent_v2.max_concurrent_threads_per_session=") for value in values))
     test.assertTrue(any(value.startswith("features.multi_agent_v2.min_wait_timeout_ms=") for value in values))
     test.assertTrue(any(value.startswith("features.multi_agent_v2.max_wait_timeout_ms=") for value in values))
@@ -59,6 +58,7 @@ def assert_qdex_v2_policy_prefix(test: unittest.TestCase, command: list[str]) ->
         "multi_agent_mode_hint_text",
         "root_agent_usage_hint_text",
         "subagent_usage_hint_text",
+        "subagent_developer_instructions",
     ):
         test.assertTrue(any(value.startswith(f"features.multi_agent_v2.{field}=") for value in values))
 

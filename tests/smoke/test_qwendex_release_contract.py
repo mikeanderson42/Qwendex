@@ -298,7 +298,8 @@ def release_fixture(tmp_path: Path) -> dict[str, object]:
     write_json(repo / "config/qwendex/qwendex.json", {"version": "1.2.3"})
     write_json(repo / "config/qwendex/qwendex.sample.json", {"version": "1.2.3"})
     (repo / "README.md").write_text(
-        "This checkout is seeded as `v1.2.3`. The installer requires `@openai/codex@0.144.4`.\n",
+        "# Qwendex\n\nQwendex 1.2.3 is the fixture release. "
+        "The installer requires `@openai/codex@0.144.4`.\n",
         encoding="utf-8",
     )
     (repo / "RELEASE.md").write_text(
@@ -1920,6 +1921,20 @@ def test_artifact_contract_blocks_macos_root_env_netrc_archives_and_binary_token
 
 def test_ci_workflow_emits_attestation_and_runs_actual_artifact_and_downstream_install_contracts():
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+
+    system_install_lines = [
+        line for line in workflow.splitlines() if "apt-get install" in line
+    ]
+    assert len(system_install_lines) == 2
+    assert all("bubblewrap" in line.split() for line in system_install_lines)
+    assert all("apparmor-profiles" in line.split() for line in system_install_lines)
+    assert all("apparmor-utils" in line.split() for line in system_install_lines)
+    assert workflow.count(
+        "/usr/share/apparmor/extra-profiles/bwrap-userns-restrict"
+    ) == 2
+    assert workflow.count(
+        "apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict"
+    ) == 2
 
     pinned_uses = re.findall(r"(?m)^\s+uses:\s+(\S+)", workflow)
     assert pinned_uses == [

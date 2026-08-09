@@ -8,7 +8,7 @@
   "properties": {
     "schema_version": {"const": "qwendex.config.v1"},
     "version": {"type": "string"},
-    "default_seat": {"enum": ["primary", "qwen", "audit", "release", "sandbox"]},
+    "default_seat": {"enum": ["primary", "qwen", "audit", "release", "luna", "terra", "sandbox"]},
     "routing": {
       "type": "object",
       "required": ["mode", "prefer_local_qwen_when_available", "local_probe_url", "local_model", "fallback_seat", "probe_timeout_seconds", "prefer_for_task_classes", "primary_required_for_task_classes"],
@@ -73,7 +73,7 @@
       "additionalProperties": false,
       "properties": {
         "permission_mode": {
-          "enum": ["workspace-write", "yolo"],
+          "enum": ["workspace-write", "auto-review", "yolo"],
           "default": "workspace-write"
         }
       }
@@ -125,7 +125,7 @@
     },
     "orchestration": {
       "type": "object",
-      "required": ["mode", "manager_deploy_policy", "local_subagents", "kaveman", "mode_profiles", "local_qwen_eligibility", "escalation_thresholds", "stale_session_thresholds_minutes"],
+      "required": ["mode", "manager_deploy_policy", "local_subagents", "hosted_worker_routing", "kaveman", "mode_profiles", "local_qwen_eligibility", "escalation_thresholds", "stale_session_thresholds_minutes"],
       "additionalProperties": false,
       "properties": {
         "mode": {"enum": ["manual", "off", "auto", "lite", "medium", "heavy", "manager", "manager_only"]},
@@ -136,6 +136,29 @@
           "additionalProperties": false,
           "properties": {
             "enabled": {"type": "boolean"}
+          }
+        },
+        "hosted_worker_routing": {
+          "type": "object",
+          "required": ["enabled", "default", "profiles"],
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "default": {"$ref": "#/$defs/hostedWorkerRoute"},
+            "profiles": {
+              "type": "object",
+              "required": ["explorer", "docs_researcher", "scribe", "implementer", "verifier", "reviewer", "release_manager"],
+              "additionalProperties": false,
+              "properties": {
+                "explorer": {"$ref": "#/$defs/hostedWorkerRoute"},
+                "docs_researcher": {"$ref": "#/$defs/hostedWorkerRoute"},
+                "scribe": {"$ref": "#/$defs/hostedWorkerRoute"},
+                "implementer": {"$ref": "#/$defs/hostedWorkerRoute"},
+                "verifier": {"$ref": "#/$defs/hostedWorkerRoute"},
+                "reviewer": {"$ref": "#/$defs/hostedWorkerRoute"},
+                "release_manager": {"$ref": "#/$defs/hostedWorkerRoute"}
+              }
+            }
           }
         },
         "kaveman": {
@@ -162,9 +185,14 @@
         },
         "local_qwen_eligibility": {
           "type": "object",
-          "required": ["allowed_task_classes", "denied_task_classes", "max_risk"],
+          "required": ["allowed_profiles", "allowed_task_classes", "denied_task_classes", "max_risk"],
           "additionalProperties": false,
           "properties": {
+            "allowed_profiles": {
+              "type": "array",
+              "items": {"enum": ["explorer", "docs_researcher", "scribe"]},
+              "uniqueItems": true
+            },
             "allowed_task_classes": {
               "type": "array",
               "items": {"type": "string", "minLength": 1}
@@ -208,18 +236,29 @@
     },
     "seats": {
       "type": "object",
-      "required": ["primary", "qwen", "audit", "release", "sandbox"],
+      "required": ["primary", "qwen", "audit", "release", "luna", "terra", "sandbox"],
       "additionalProperties": false,
       "properties": {
         "primary": {"$ref": "#/$defs/primarySeat"},
         "qwen": {"$ref": "#/$defs/qwenSeat"},
         "audit": {"$ref": "#/$defs/auditSeat"},
         "release": {"$ref": "#/$defs/releaseSeat"},
+        "luna": {"$ref": "#/$defs/hostedSeat"},
+        "terra": {"$ref": "#/$defs/hostedSeat"},
         "sandbox": {"$ref": "#/$defs/sandboxSeat"}
       }
     }
   },
   "$defs": {
+    "hostedWorkerRoute": {
+      "type": "object",
+      "required": ["model", "reasoning_effort"],
+      "additionalProperties": false,
+      "properties": {
+        "model": {"const": "gpt-5.6-terra"},
+        "reasoning_effort": {"enum": ["high", "xhigh"]}
+      }
+    },
     "managerModeProfile": {
       "type": "object",
       "required": ["label", "max_subagents"],
@@ -231,10 +270,11 @@
     },
     "primarySeat": {
       "type": "object",
-      "required": ["model", "authority", "backend", "context_window", "guard_profile"],
+      "required": ["model", "reasoning_effort", "authority", "backend", "context_window", "guard_profile"],
       "additionalProperties": false,
       "properties": {
         "model": {"type": "string", "minLength": 1},
+        "reasoning_effort": {"enum": ["high", "xhigh", "max"]},
         "authority": {"const": "release_review"},
         "backend": {"const": "codex"},
         "context_window": {"type": "integer", "minimum": 1024},
@@ -256,10 +296,11 @@
     },
     "auditSeat": {
       "type": "object",
-      "required": ["model", "authority", "backend", "context_window", "guard_profile"],
+      "required": ["model", "reasoning_effort", "authority", "backend", "context_window", "guard_profile"],
       "additionalProperties": false,
       "properties": {
         "model": {"type": "string", "minLength": 1},
+        "reasoning_effort": {"enum": ["high", "xhigh", "max"]},
         "authority": {"const": "read_only_review"},
         "backend": {"const": "codex"},
         "context_window": {"type": "integer", "minimum": 1024},
@@ -269,11 +310,26 @@
     },
     "releaseSeat": {
       "type": "object",
-      "required": ["model", "authority", "backend", "context_window", "guard_profile"],
+      "required": ["model", "reasoning_effort", "authority", "backend", "context_window", "guard_profile"],
       "additionalProperties": false,
       "properties": {
         "model": {"type": "string", "minLength": 1},
+        "reasoning_effort": {"enum": ["high", "xhigh", "max"]},
         "authority": {"const": "public_release_acceptance"},
+        "backend": {"const": "codex"},
+        "context_window": {"type": "integer", "minimum": 1024},
+        "compact_limit": {"type": "integer", "minimum": 1024},
+        "guard_profile": {"enum": ["balanced", "max_safety"]}
+      }
+    },
+    "hostedSeat": {
+      "type": "object",
+      "required": ["model", "reasoning_effort", "authority", "backend", "context_window", "guard_profile"],
+      "additionalProperties": false,
+      "properties": {
+        "model": {"enum": ["gpt-5.6-luna", "gpt-5.6-terra"]},
+        "reasoning_effort": {"enum": ["high", "xhigh", "max"]},
+        "authority": {"const": "bounded_hosted_operator"},
         "backend": {"const": "codex"},
         "context_window": {"type": "integer", "minimum": 1024},
         "compact_limit": {"type": "integer", "minimum": 1024},

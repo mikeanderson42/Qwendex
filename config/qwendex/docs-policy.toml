@@ -1,0 +1,68 @@
+schema_version = "qwendex.docs.policy.v1"
+repository_id = "qwendex"
+documentation_roots = [
+  "AGENTS.md",
+  "QWENDEX_STARTUP.md",
+  "README.md",
+  "public/qwendex",
+  "docs/development",
+]
+required_authority_documents = [
+  "AGENTS.md",
+  "QWENDEX_STARTUP.md",
+  "README.md",
+  "public/qwendex/README.md",
+  "docs/development/decision-log.md",
+]
+index_documents = ["README.md", "public/qwendex/README.md"]
+startup_documents = ["AGENTS.md", "QWENDEX_STARTUP.md", "README.md"]
+public_documentation_roots = ["."]
+local_documentation_roots = []
+include = ["*.md", "**/*.md"]
+exclude = []
+important_documents = [
+  "public/qwendex/cli-reference.md",
+  "public/qwendex/compatibility.md",
+  "public/qwendex/architecture.md",
+  "public/qwendex/operations.md",
+  "public/qwendex/security.md",
+  "public/qwendex/verification.md",
+  "docs/development/product-specification.md",
+  "docs/development/codex-0.145-0.147-assessment.md",
+  "docs/development/decision-log.md",
+]
+generated_private_patterns = [
+  ".qwendex/**",
+  ".qwendex-dev/**",
+  "results/**",
+]
+generated_inputs = []
+deliverable_manifest_roots = []
+forbidden_public_content_patterns = [
+  '(?i)(?:^|[^a-z0-9])jarvis(?:[^a-z0-9]|$)',
+  '\.\./jarvis/',
+]
+
+[responsibilities]
+workspace_policy = "AGENTS.md"
+startup = "QWENDEX_STARTUP.md"
+product_entrypoint = "README.md"
+public_documentation_index = "public/qwendex/README.md"
+architecture_decisions = "docs/development/decision-log.md"
+
+[responsibility_hierarchy]
+
+[verification]
+
+[severity_overrides]
+
+[deliverable_evidence]
+publish_states = ["publish_ready", "published", "sale_verified"]
+required_fields = [
+  "evidence.inventory",
+  "evidence.checksums",
+  "evidence.qa",
+  "human_approval.present",
+]
+state_field = "lifecycle_state"
+products_field = "products"

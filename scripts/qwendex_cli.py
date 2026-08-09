@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Public Qwendex CLI facade for Codex plus bounded local Qwen support."""
+"""Qwendex control plane for an isolated, customizable Codex CLI runtime."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ import re
 import shlex
 import shutil
 import sqlite3
+import stat
 import subprocess
 import sys
 import urllib.error
@@ -24,7 +25,31 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.6.9"
+VERSION = "0.7.0"
+SUPPORTED_CODEX_VERSION = "0.147.0"
+PRODUCT_DEFINITION = (
+    "A source-distributed Codex customization and operator harness with an "
+    "isolated qdex launcher, advisory orchestration, runtime generations, "
+    "diagnostics, and release validation."
+)
+PRODUCT_SURFACES = {
+    "qwendex": "Operator control plane and stable JSON CLI.",
+    "qdex": "Isolated Codex launcher with Qwendex policy and optional compiled integration.",
+    "llmstack": "Optional local-model lifecycle surface.",
+    "qwendex-dev": "Source-install, build, verification, and release tooling.",
+}
+CODEX_0147_FEATURE_POLICY = {
+    "worker_model_reasoning_overrides": "enabled",
+    "luna_max_one_shot_seat": "enabled_not_manager_v2",
+    "automatic_review_permission": "enabled",
+    "native_subagent_developer_instructions": "enabled",
+    "portable_plugins_and_skills": "native_passthrough",
+    "project_trust": "native",
+    "persistent_memories_and_import": "deferred",
+    "native_agent_roles": "deferred",
+    "spawn_service_tier_overrides": "deferred",
+    "mcp_2026_07_28": "experimental_opt_in",
+}
 CONFIG_DIR = ROOT / "config" / "qwendex"
 DEFAULT_PROJECT_CONFIG = CONFIG_DIR / "qwendex.json"
 DEFAULT_USER_CONFIG = Path.home() / ".config" / "qwendex" / "config.json"
@@ -37,6 +62,8 @@ LLMSTACK_LOCAL_CONFIG = LLMSTACK_CONFIG_DIR / "stack_manager.local.json"
 
 PUBLIC_DOC_FILES = (
     "README.md",
+    "cli-reference.md",
+    "compatibility.md",
     "quickstart.md",
     "architecture.md",
     "llmstack.md",
@@ -48,6 +75,7 @@ PUBLIC_DOC_FILES = (
     "manager-mode.md",
     "codex-patching.md",
     "dev-environment.md",
+    "documentation-quality.md",
     "testbench.md",
     "tool-server.md",
     "security.md",
@@ -62,6 +90,7 @@ REQUIRED_SURFACE_FILES = (
     "scripts/qdex",
     "scripts/qwendex",
     "scripts/qwendex_cli.py",
+    "scripts/qwendex_docs.py",
     "scripts/qwendex_release_gate.py",
     "scripts/qwendex_install_deps",
     "scripts/qwendex_dev_env",
@@ -85,6 +114,9 @@ REQUIRED_SURFACE_FILES = (
     "scripts/local_qwen_skillopt_wrapper.py",
     "config/qwendex/qwendex.schema.json",
     "config/qwendex/qwendex.json",
+    "config/qwendex/docs-policy.toml",
+    "config/qwendex/docs-policy.example.toml",
+    "config/qwendex/docs-requirements.txt",
     "config/qwendex/dependencies.json",
     "config/qwendex/profiles.json",
     "config/qwendex/model-catalog.json",
@@ -119,7 +151,9 @@ LLMSTACK_PRIVATE_PATTERNS = (
 
 SECRET_RE = re.compile(
     r"(sk-[A-Za-z0-9_-]{16,}|github_pat_[A-Za-z0-9_]+|ghp_[A-Za-z0-9_]+|"
-    r"(?i:password|secret|api[_-]?key)\s*[:=]\s*['\"]?[A-Za-z0-9_./+=-]{12,})"
+    r"(?:AKIA|ASIA)[A-Z0-9]{16}|(?i:bearer)\s+[A-Za-z0-9._~+/=-]{16,}|"
+    r"(?i:password|secret|api[_-]?key|access[_-]?token|refresh[_-]?token|auth[_-]?token|bearer[_-]?token)"
+    r"\s*[:=]\s*['\"]?[A-Za-z0-9_./+=-]{12,})"
 )
 PUBLIC_NAMING_PATTERNS = (
     (re.compile(r"\bQwenDex\b"), "Use Qwendex, not QwenDex."),
@@ -213,7 +247,14 @@ READ_ONLY_AGENT_PROFILES = {
     "reviewer",
     "verifier",
 }
-ROOT_ONLY_AGENT_TOOLS = {"spawn_agent", "close_agent", "wait_agent", "resume_agent", "agent_ledger_update_status"}
+ROOT_ONLY_AGENT_TOOLS = {
+    "spawn_agent",
+    "send_message",
+    "followup_task",
+    "wait_agent",
+    "interrupt_agent",
+    "list_agents",
+}
 WRITE_TOOL_NAMES = {"write", "edit", "apply_patch", "create_file", "delete_file", "move_file"}
 NON_FILESYSTEM_CONTROL_TOOL_NAMES = {"create_goal", "update_goal", "update_plan"}
 READ_ONLY_NON_SHELL_TOOL_NAMES = {
@@ -816,7 +857,17 @@ CODEX_PATCH_MANIFESTS["0.147.0"] = {
         },
     ],
     "required_source_edits": [
-        *CODEX_PATCH_MANIFESTS["0.145.0"]["required_source_edits"],
+        edit
+        for edit in CODEX_PATCH_MANIFESTS["0.145.0"]["required_source_edits"]
+        if edit not in {
+            "Keep Qwendex V2 spawn input free of native role, model, reasoning, and service-tier overrides.",
+            "Remove the V2-only reasoning override import that becomes unused under the fixed Qwendex worker contract.",
+            "Keep the native Qwendex V2 schema and handler aligned by sealing every per-child override field.",
+        }
+    ]
+    + [
+        "Expose Codex-validated per-child model and reasoning overrides while keeping native roles and service tiers sealed.",
+        "Keep Qwendex V2 explicit model/reasoning requests independent of passive native [agents] defaults.",
         "Require a non-empty account-scoped Codex Apps cache before reclassifying a failed hosted refresh as degraded-ready.",
     ],
 }
@@ -907,6 +958,22 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "local_subagents": {
             "enabled": True,
         },
+        "hosted_worker_routing": {
+            "enabled": True,
+            "default": {
+                "model": "gpt-5.6-terra",
+                "reasoning_effort": "high",
+            },
+            "profiles": {
+                "explorer": {"model": "gpt-5.6-terra", "reasoning_effort": "high"},
+                "docs_researcher": {"model": "gpt-5.6-terra", "reasoning_effort": "high"},
+                "scribe": {"model": "gpt-5.6-terra", "reasoning_effort": "high"},
+                "implementer": {"model": "gpt-5.6-terra", "reasoning_effort": "high"},
+                "verifier": {"model": "gpt-5.6-terra", "reasoning_effort": "high"},
+                "reviewer": {"model": "gpt-5.6-terra", "reasoning_effort": "xhigh"},
+                "release_manager": {"model": "gpt-5.6-terra", "reasoning_effort": "xhigh"},
+            },
+        },
         "kaveman": {
             "enabled": False,
             "directive": "Use terse output: short, direct, minimal prose, no optional explanation unless asked.",
@@ -920,6 +987,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "manager": {"label": "Manager Mode", "max_subagents": 4},
         },
         "local_qwen_eligibility": {
+            "allowed_profiles": ["explorer", "docs_researcher", "scribe"],
             "allowed_task_classes": [
                 "repository_mapping",
                 "read_heavy_investigation",
@@ -962,7 +1030,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "seats": {
         "primary": {
-            "model": "gpt-5.5",
+            "model": "gpt-5.6-terra",
+            "reasoning_effort": "high",
             "authority": "release_review",
             "backend": "codex",
             "context_window": 200000,
@@ -976,18 +1045,36 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "guard_profile": "balanced",
         },
         "audit": {
-            "model": "gpt-5.5",
+            "model": "gpt-5.6-terra",
+            "reasoning_effort": "xhigh",
             "authority": "read_only_review",
             "backend": "codex",
             "context_window": 200000,
             "guard_profile": "max_safety",
         },
         "release": {
-            "model": "gpt-5.5",
+            "model": "gpt-5.6-terra",
+            "reasoning_effort": "xhigh",
             "authority": "public_release_acceptance",
             "backend": "codex",
             "context_window": 200000,
             "guard_profile": "max_safety",
+        },
+        "luna": {
+            "model": "gpt-5.6-luna",
+            "reasoning_effort": "max",
+            "authority": "bounded_hosted_operator",
+            "backend": "codex",
+            "context_window": 200000,
+            "guard_profile": "balanced",
+        },
+        "terra": {
+            "model": "gpt-5.6-terra",
+            "reasoning_effort": "high",
+            "authority": "bounded_hosted_operator",
+            "backend": "codex",
+            "context_window": 200000,
+            "guard_profile": "balanced",
         },
         "sandbox": {
             "authority": "isolated_probe",
@@ -1106,25 +1193,44 @@ def qdex_permission_posture(
     env: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Return the launcher-snapshotted Qdex permission posture without paths."""
+    def posture(mode: str, source: str, valid: bool) -> dict[str, Any]:
+        effective = {
+            "workspace-write": {
+                "launch_flag": "--sandbox workspace-write",
+                "sandbox": "workspace-write",
+                "approval_policy": "codex-default",
+                "reviewer": "codex-default",
+            },
+            "auto-review": {
+                "launch_flag": "--approve-for-me",
+                "sandbox": "workspace-write",
+                "approval_policy": "on-request",
+                "reviewer": "automatic-review",
+            },
+            "yolo": {
+                "launch_flag": "--dangerously-bypass-approvals-and-sandbox",
+                "sandbox": "danger-full-access",
+                "approval_policy": "never",
+                "reviewer": "disabled",
+            },
+        }.get(mode, {})
+        return {"mode": mode, "source": source, "valid": valid, "effective": effective}
+
     source_env = os.environ if env is None else env
     launched_mode = str(source_env.get("QWENDEX_QDEX_PERMISSION_MODE") or "").strip()
     launched_source = str(source_env.get("QWENDEX_QDEX_PERMISSION_SOURCE") or "").strip()
-    valid_modes = {"workspace-write", "yolo"}
+    valid_modes = {"workspace-write", "auto-review", "yolo"}
     if launched_mode:
-        return {
-            "mode": launched_mode,
-            "source": launched_source or "launch-environment",
-            "valid": launched_mode in valid_modes,
-        }
+        return posture(
+            launched_mode,
+            launched_source or "launch-environment",
+            launched_mode in valid_modes,
+        )
     qdex = config.get("qdex") if isinstance(config.get("qdex"), Mapping) else {}
     published_mode = str(qdex.get("permission_mode") or "").strip()
     if published_mode:
-        return {
-            "mode": published_mode,
-            "source": "published-config",
-            "valid": published_mode in valid_modes,
-        }
-    return {"mode": "workspace-write", "source": "default", "valid": True}
+        return posture(published_mode, "published-config", published_mode in valid_modes)
+    return posture("workspace-write", "default", True)
 
 
 def normalize_manager_mode(value: Any) -> str:
@@ -1386,20 +1492,23 @@ def resolve_agent_policy(
     policy["tool_surface"] = {
         "root_management_tools": [
             "spawn_agent",
-            "send_input",
-            "resume_agent",
+            "send_message",
+            "followup_task",
             "wait_agent",
-            "close_agent",
+            "interrupt_agent",
             "list_agents",
+        ] if policy["root_can_spawn"] else [],
+        "qwendex_lifecycle_commands": [
             "agent_ledger_list",
             "agent_ledger_get",
             "agent_ledger_update_status",
             "agent_ledger_mark_required",
             "agent_ledger_resteer",
             "agent_ledger_tombstone",
-        ] if policy["root_can_spawn"] else [],
-        "child_management_tools": ["report_agent_result"] if mode != "lite" else [],
-        "denied_child_tools": ["spawn_agent", "close_agent", "wait_agent", "resume_agent", "agent_ledger_update_status"],
+        ],
+        "child_management_tools": [],
+        "denied_child_tools": sorted(ROOT_ONLY_AGENT_TOOLS),
+        "native_contract": "codex-0.147.0-multi-agent-v2",
     }
     return policy
 
@@ -1531,14 +1640,59 @@ def kaveman_directive(config: Mapping[str, Any]) -> str:
 
 
 def estimator_config(config: Mapping[str, Any]) -> dict[str, Any]:
-    primary_model = str(config.get("seats", {}).get("primary", {}).get("model") or "gpt-5.5")
+    primary_model = str(config.get("seats", {}).get("primary", {}).get("model") or "gpt-5.6-terra")
     return {
         "kind": "deterministic_heuristic",
         "implementation": "qwendex_cli_rules",
         "model_invoked": False,
         "skill_invoked": False,
         "recommendation_model": primary_model,
-        "default_reasoning": "medium",
+        "default_reasoning": "high",
+    }
+
+
+def hosted_worker_route(
+    config: Mapping[str, Any],
+    *,
+    profile: str = "",
+    lane: str = "",
+) -> dict[str, str]:
+    """Resolve the advisory hosted-worker model route from canonical config."""
+    routing = config.get("orchestration", {}).get("hosted_worker_routing", {})
+    if not isinstance(routing, Mapping) or not routing.get("enabled"):
+        return {
+            "model": estimator_config(config)["recommendation_model"],
+            "reasoning_effort": estimator_config(config)["default_reasoning"],
+            "profile": "default",
+        }
+    profiles = routing.get("profiles", {})
+    if not isinstance(profiles, Mapping):
+        profiles = {}
+    inferred_profile = profile.strip()
+    if not inferred_profile:
+        normalized_lane = lane.strip().lower()
+        inferred_profile = {
+            "exploration": "explorer",
+            "docs": "docs_researcher",
+            "docs-research": "docs_researcher",
+            "logging": "scribe",
+            "scribe": "scribe",
+            "implementation": "implementer",
+            "verification": "verifier",
+            "review": "reviewer",
+            "release": "release_manager",
+            "release-management": "release_manager",
+        }.get(normalized_lane, "")
+    selected = profiles.get(inferred_profile) if inferred_profile else None
+    if not isinstance(selected, Mapping):
+        selected = routing.get("default", {})
+        inferred_profile = "default"
+    if not isinstance(selected, Mapping):
+        selected = {}
+    return {
+        "model": str(selected.get("model") or "gpt-5.6-terra"),
+        "reasoning_effort": str(selected.get("reasoning_effort") or "high"),
+        "profile": inferred_profile or "default",
     }
 
 
@@ -1681,7 +1835,7 @@ def validate_qwendex_config(config: Mapping[str, Any]) -> list[str]:
     qdex = config.get("qdex", {})
     if not isinstance(qdex, Mapping):
         failures.append("invalid qdex")
-    elif qdex.get("permission_mode") not in {"workspace-write", "yolo"}:
+    elif qdex.get("permission_mode") not in {"workspace-write", "auto-review", "yolo"}:
         failures.append(
             f"invalid qdex.permission_mode: {qdex.get('permission_mode')}"
         )
@@ -1736,6 +1890,39 @@ def validate_qwendex_config(config: Mapping[str, Any]) -> list[str]:
     else:
         if not isinstance(local_subagents.get("enabled"), bool):
             failures.append(f"invalid orchestration.local_subagents.enabled: {local_subagents.get('enabled')}")
+    hosted_routing = orchestration.get("hosted_worker_routing", {})
+    if not isinstance(hosted_routing, Mapping):
+        failures.append("invalid orchestration.hosted_worker_routing")
+    else:
+        if not isinstance(hosted_routing.get("enabled"), bool):
+            failures.append(
+                "invalid orchestration.hosted_worker_routing.enabled: "
+                f"{hosted_routing.get('enabled')}"
+            )
+        supported_hosted_models = {"gpt-5.6-terra"}
+        supported_hosted_efforts = {"high", "xhigh"}
+        routes: list[tuple[str, Any]] = [("default", hosted_routing.get("default"))]
+        hosted_profiles = hosted_routing.get("profiles", {})
+        if not isinstance(hosted_profiles, Mapping):
+            failures.append("invalid orchestration.hosted_worker_routing.profiles")
+            hosted_profiles = {}
+        routes.extend((str(name), value) for name, value in hosted_profiles.items())
+        for name, route in routes:
+            if not isinstance(route, Mapping):
+                failures.append(
+                    f"invalid orchestration.hosted_worker_routing.{name}"
+                )
+                continue
+            if route.get("model") not in supported_hosted_models:
+                failures.append(
+                    "invalid orchestration.hosted_worker_routing."
+                    f"{name}.model: {route.get('model')}"
+                )
+            if route.get("reasoning_effort") not in supported_hosted_efforts:
+                failures.append(
+                    "invalid orchestration.hosted_worker_routing."
+                    f"{name}.reasoning_effort: {route.get('reasoning_effort')}"
+                )
     kaveman = orchestration.get("kaveman", {})
     if not isinstance(kaveman, Mapping):
         failures.append("invalid orchestration.kaveman")
@@ -1763,6 +1950,18 @@ def validate_qwendex_config(config: Mapping[str, Any]) -> list[str]:
     if not isinstance(local_eligibility, Mapping):
         failures.append("invalid orchestration.local_qwen_eligibility")
     else:
+        allowed_profiles = local_eligibility.get("allowed_profiles")
+        supported_local_profiles = {"explorer", "docs_researcher", "scribe"}
+        if (
+            not isinstance(allowed_profiles, list)
+            or not allowed_profiles
+            or not all(item in supported_local_profiles for item in allowed_profiles)
+            or len(allowed_profiles) != len(set(allowed_profiles))
+        ):
+            failures.append(
+                "invalid orchestration.local_qwen_eligibility.allowed_profiles: "
+                f"{allowed_profiles}"
+            )
         for list_key in ("allowed_task_classes", "denied_task_classes"):
             values = local_eligibility.get(list_key)
             if not isinstance(values, list) or not all(isinstance(item, str) and item.strip() for item in values):
@@ -1791,8 +1990,8 @@ def validate_qwendex_config(config: Mapping[str, Any]) -> list[str]:
             "compact_limit",
             "guard_profile",
         }
-        if seat_name in {"primary", "audit", "release"}:
-            allowed_seat_keys.add("model")
+        if str(seat_config.get("backend") or "") == "codex":
+            allowed_seat_keys.update({"model", "reasoning_effort"})
         for key in sorted(set(seat_config) - allowed_seat_keys):
             failures.append(f"unknown seats.{seat_name} key: {key}")
         expected_seat = DEFAULT_CONFIG["seats"].get(seat_name, {})
@@ -1806,6 +2005,14 @@ def validate_qwendex_config(config: Mapping[str, Any]) -> list[str]:
             failures.append(
                 f"invalid seats.{seat_name}.backend: {seat_config.get('backend')}"
             )
+        if str(seat_config.get("backend") or "") == "codex":
+            if not isinstance(seat_config.get("model"), str) or not seat_config.get("model"):
+                failures.append(f"invalid seats.{seat_name}.model: {seat_config.get('model')}")
+            if seat_config.get("reasoning_effort") not in {"high", "xhigh", "max"}:
+                failures.append(
+                    f"invalid seats.{seat_name}.reasoning_effort: "
+                    f"{seat_config.get('reasoning_effort')}"
+                )
         context_window = seat_config.get("context_window")
         compact_limit = seat_config.get(
             "compact_limit", config.get("context", {}).get("compact_limit")
@@ -2003,6 +2210,14 @@ def seat_runtime_model(config: Mapping[str, Any], seat: str) -> str:
     if seat_uses_local_qwen(config, seat):
         return routing_policy(config)["local_model"]
     return str(config.get("seats", {}).get(seat, {}).get("model", ""))
+
+
+def seat_reasoning_effort(config: Mapping[str, Any], seat: str) -> str:
+    if seat_uses_local_qwen(config, seat):
+        return "low"
+    return str(
+        config.get("seats", {}).get(seat, {}).get("reasoning_effort") or "high"
+    )
 
 
 def authority_fallback_seat(config: Mapping[str, Any]) -> str:
@@ -2428,10 +2643,10 @@ def lane_model_reasoning(
     *,
     task_class: str,
     lane: str = "",
+    profile: str = "",
     risk: str = "medium",
     local_status: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    estimator = estimator_config(config)
     local = local_status or local_subagent_status(config, probe=False)
     combined = " ".join([task_class, lane]).strip().lower()
     thresholds = config.get("orchestration", {}).get("escalation_thresholds", {})
@@ -2443,31 +2658,40 @@ def lane_model_reasoning(
         risk=risk,
         local_enabled=bool(local.get("enabled")),
     )
+    eligibility = config.get("orchestration", {}).get("local_qwen_eligibility", {})
+    allowed_profiles = (
+        {str(item).strip().lower() for item in eligibility.get("allowed_profiles", [])}
+        if isinstance(eligibility, Mapping)
+        else set()
+    )
+    if profile and allowed_profiles and profile.strip().lower() not in allowed_profiles:
+        local_eligible = False
     local_usable = local_eligible and bool(local.get("usable"))
-    if text_contains_any(combined, xhigh_terms):
-        selected_reasoning = "xhigh"
-        source = "lane_escalation"
-        escalation = "xhigh threshold matched for high-risk lane"
-    elif risk_rank(risk) >= 3 or text_contains_any(combined, high_terms):
-        selected_reasoning = "high"
-        source = "lane_escalation"
-        escalation = "high threshold matched for architecture/security/release/protocol lane"
-    elif local_usable:
+    hosted = hosted_worker_route(config, profile=profile, lane=lane)
+    if local_usable:
         selected_reasoning = "low"
         source = "local_qwen_token_saver"
         escalation = ""
     else:
-        selected_reasoning = estimator["default_reasoning"]
-        source = "default_policy"
-        escalation = ""
+        selected_reasoning = hosted["reasoning_effort"]
+        source = "hosted_worker_profile"
+        if text_contains_any(combined, xhigh_terms) and selected_reasoning not in {"xhigh", "max", "ultra"}:
+            selected_reasoning = "xhigh"
+            source = "lane_escalation"
+            escalation = "xhigh threshold matched for high-risk lane"
+        elif risk_rank(risk) >= 3 or text_contains_any(combined, high_terms):
+            escalation = "high-risk lane retained its configured hosted-worker effort"
+        else:
+            escalation = ""
     selected_model = (
         str(config.get("routing", {}).get("local_model", "qwen-local"))
         if local_usable
-        else estimator["recommendation_model"]
+        else hosted["model"]
     )
     return {
         "selected_model": selected_model,
         "selected_reasoning": selected_reasoning,
+        "hosted_profile": hosted["profile"],
         "reasoning_source": source,
         "escalation_reason": escalation,
         "token_saver_used": local_usable,
@@ -2529,7 +2753,7 @@ def resolve_route(
             "seat": seat,
             "model": seat_runtime_model(config, seat),
             "selected_model": seat_runtime_model(config, seat),
-            "selected_reasoning": "user-selected",
+            "selected_reasoning": seat_reasoning_effort(config, seat),
             "reasoning_source": reasoning_source,
             "escalation_reason": "",
             "token_saver_used": False,
@@ -2552,7 +2776,7 @@ def resolve_route(
             "seat": seat,
             "model": seat_runtime_model(config, seat),
             "selected_model": seat_runtime_model(config, seat),
-            "selected_reasoning": "medium",
+            "selected_reasoning": seat_reasoning_effort(config, seat),
             "reasoning_source": "routing_primary_only",
             "escalation_reason": "",
             "token_saver_used": False,
@@ -2576,7 +2800,7 @@ def resolve_route(
             "seat": seat,
             "model": seat_runtime_model(config, seat),
             "selected_model": seat_runtime_model(config, seat),
-            "selected_reasoning": "medium",
+            "selected_reasoning": seat_reasoning_effort(config, seat),
             "reasoning_source": "primary_authority_policy" if manual_reason == "primary_authority_required" else "routing_manual_default",
             "escalation_reason": "",
             "token_saver_used": False,
@@ -2629,7 +2853,7 @@ def resolve_route(
         "seat": seat,
         "model": seat_runtime_model(config, seat),
         "selected_model": seat_runtime_model(config, seat),
-        "selected_reasoning": "low" if seat == "qwen" else "medium",
+        "selected_reasoning": seat_reasoning_effort(config, seat),
         "reasoning_source": (
             "local_qwen_token_saver"
             if seat == "qwen"
@@ -4278,6 +4502,7 @@ def reconcile_stale_manager_sessions(
             (tombstoned if str(updated_session.get("status") or "") == "tombstoned" else close_requested).append(updated_session)
     conn.commit()
     return {
+        "performed": True,
         "closed_count": len(tombstoned),
         "closed": tombstoned,
         "close_requested_count": len(close_requested),
@@ -4286,6 +4511,23 @@ def reconcile_stale_manager_sessions(
         "tombstoned": tombstoned,
         "skipped_writer_count": len(skipped_writers),
         "skipped_writers": skipped_writers,
+        "stale_after_minutes": max(stale_after_minutes, 5),
+        "repo_root": repo_root,
+    }
+
+
+def manager_reconciliation_not_run(*, stale_after_minutes: int, repo_root: str = "") -> dict[str, Any]:
+    """Describe a deliberately read-only status path without mutating lifecycle rows."""
+    return {
+        "performed": False,
+        "closed_count": 0,
+        "closed": [],
+        "close_requested_count": 0,
+        "close_requested": [],
+        "tombstoned_count": 0,
+        "tombstoned": [],
+        "skipped_writer_count": 0,
+        "skipped_writers": [],
         "stale_after_minutes": max(stale_after_minutes, 5),
         "repo_root": repo_root,
     }
@@ -4373,6 +4615,8 @@ def classify_manager_validation_sessions(
 ) -> dict[str, Any]:
     buckets: dict[str, list[dict[str, Any]]] = {
         "validated": [],
+        "validation_waived": [],
+        "validation_failed": [],
         "closed_without_validation_evidence": [],
         "stale_pending_validation": [],
         "orphaned_session": [],
@@ -4392,6 +4636,18 @@ def classify_manager_validation_sessions(
         has_evidence = bool(session.get("artifacts") or session.get("context_packet", {}).get("receipt_path"))
         if validation == "pass":
             buckets["validated"].append(item)
+        elif validation == "waived":
+            packet = session.get("context_packet")
+            packet = packet if isinstance(packet, Mapping) else {}
+            waiver = packet.get("validation_waiver")
+            item["waiver_reason"] = (
+                str(waiver.get("reason") or "")
+                if isinstance(waiver, Mapping)
+                else ""
+            )
+            buckets["validation_waived"].append(item)
+        elif validation == "fail":
+            buckets["validation_failed"].append(item)
         elif not session.get("task_id"):
             buckets["orphaned_session"].append(item)
         elif status in AGENT_TERMINAL_STATUSES and validation == "pending":
@@ -4415,10 +4671,12 @@ def classify_manager_validation_sessions(
         "total_session_count": len(sessions),
         "pending_validation_count": (
             counts["closed_without_validation_evidence"]
+            + counts["validation_failed"]
             + counts["stale_pending_validation"]
             + counts["orphaned_session"]
             + counts["needs_manual_review"]
         ),
+        "validation_waiver_count": counts["validation_waived"],
         "repair_policy": "classification only; Qwendex does not mark stale sessions validated without evidence",
     }
 
@@ -4565,7 +4823,11 @@ def manager_health_summary(
         warnings.append(f"stale manager writer sessions are available for review or repair: {ids}")
     if scope_validation_debt["pending_validation_count"]:
         warnings.append(
-            f"{scope_validation_debt['pending_validation_count']} manager sessions in this repository scope have pending or missing validation evidence; run scripts/qwendex manager reconcile --pending-validation --json."
+            f"{scope_validation_debt['pending_validation_count']} manager sessions in this repository scope have pending or missing validation evidence; run scripts/qwendex manager reconcile --pending-validation --json for concrete validate or waiver commands."
+        )
+    if scope_validation_debt["validation_waiver_count"]:
+        warnings.append(
+            f"{scope_validation_debt['validation_waiver_count']} manager sessions in this repository scope have explicit validation waivers; inspect their recorded reasons before relying on those outcomes."
         )
     if validation_debt["pending_validation_count"] > scope_validation_debt["pending_validation_count"]:
         ledger_warnings.append(
@@ -4767,11 +5029,37 @@ def estimate_task(
     text = prompt.strip()
     lower = text.lower()
     task_class = infer_task_class(text)
-    high_risk = text_has_any_term(
+    manager_task_class = classify_manager_turn(text)
+    high_risk = manager_task_class in {
+        "security_or_protocol",
+        "release_or_publish",
+        "live_acceptance",
+    } or text_has_any_term(
         lower,
         ("security", "credential", "credentials", "release", "protocol", "architecture", "migration"),
     )
-    many_files = text_has_any_term(lower, ("several", "multiple", "across", "many"))
+    surface_terms = {
+        term
+        for term in (
+            "cli",
+            "manager",
+            "model",
+            "routing",
+            "package",
+            "docs",
+            "tests",
+            "runtime",
+            "patch",
+            "config",
+        )
+        if re.search(rf"\b{term}\b", lower)
+    }
+    many_files = (
+        manager_task_class == "cross_cutting_edit"
+        or text_has_any_term(lower, ("several", "multiple", "across", "many", "end-to-end", "repo-wide"))
+        or len(surface_terms) >= 4
+        or len(re.findall(r"\w+", lower)) >= 80
+    )
     validation_heavy = text_has_any_term(lower, ("test", "tests", "eval", "release", "security", "protocol"))
     if high_risk and many_files:
         recommended = "manager"
@@ -4804,6 +5092,7 @@ def estimate_task(
         higher_lanes.append({"lane": f"{task_class}-review", **lane})
     return {
         "task_complexity": complexity,
+        "manager_task_class": manager_task_class,
         "risk": risk,
         "likely_file_scope": scope,
         "validation_depth": "full" if validation_heavy or risk == "high" else "focused",
@@ -5262,13 +5551,6 @@ def codex_status_payload(config: Mapping[str, Any], *, write_path: Path | None =
         )
         if requested_agent_policy["source"] not in {"default", "manager-mode"}:
             mode = str(requested_agent_policy["mode"])
-        stale_after = mode_stale_after_minutes(config, mode)
-        reconcile_stale_manager_sessions(
-            conn,
-            stale_after_minutes=stale_after,
-            now=utc_now(),
-            repo_root=canonical_manager_repo_root(),
-        )
         local_enabled = current_local_enabled(config, conn)
         local_status = local_subagent_status(config, enabled=local_enabled, env=os.environ, probe=True)
         agent_policy, policy_transition = session_turn_policy_projection(config, conn)
@@ -5415,7 +5697,7 @@ def sync_codex_status_or_restore_setting(
 
 
 def parse_codex_version_output(output: str) -> str:
-    match = re.search(r"(\d+\.\d+\.\d+)", output)
+    match = re.fullmatch(r"\s*codex-cli\s+(\d+\.\d+\.\d+)\s*", output)
     return match.group(1) if match else ""
 
 
@@ -5457,6 +5739,48 @@ def codex_source_patch_state(source: Path, manifest: Mapping[str, Any]) -> dict[
     missing_anchors: list[str] = []
     marker_hits: list[str] = []
     missing_patch_markers: list[str] = []
+    missing_post_patch_signatures: list[str] = []
+    post_patch_signature_hits = 0
+    expected_post_patch_signatures = 0
+    version = str(manifest.get("codex_tag") or "").removeprefix("rust-v")
+    patch_specs_by_path: dict[str, list[Mapping[str, Any]]] = {}
+    for patch_spec in codex_source_patch_specs(version):
+        patch_specs_by_path.setdefault(
+            str(patch_spec.get("path") or ""),
+            [],
+        ).append(patch_spec)
+    final_replacements_by_path: dict[str, list[dict[str, Any]]] = {}
+    for rel, patch_specs in patch_specs_by_path.items():
+        ordered_replacements: list[tuple[str, str, int]] = []
+        for patch_spec in patch_specs:
+            expected_occurrences = patch_spec.get("expected_occurrences", {})
+            ordered_replacements.extend(
+                (
+                    old,
+                    new,
+                    int(expected_occurrences.get(old, 1)),
+                )
+                for old, new in patch_spec.get("replacements", [])
+            )
+        final_replacements: list[dict[str, Any]] = []
+        for index, (_old, new, expected_count) in enumerate(ordered_replacements):
+            final_new = new
+            for later_old, later_new, later_expected_count in ordered_replacements[index + 1 :]:
+                # Mirror the patcher's sequential/idempotent composition so an
+                # earlier large replacement remains verifiable after a later
+                # edit intentionally updates a nested fragment inside it.
+                if later_new in final_new:
+                    continue
+                final_new = final_new.replace(
+                    later_old,
+                    later_new,
+                    later_expected_count,
+                )
+            final_replacements.append({
+                "text": final_new,
+                "expected_occurrences": expected_count,
+            })
+        final_replacements_by_path[rel] = final_replacements
     for spec in manifest.get("source_anchors", []):
         rel = str(spec.get("path") or "")
         path = root / rel
@@ -5470,14 +5794,42 @@ def codex_source_patch_state(source: Path, manifest: Mapping[str, Any]) -> dict[
         missing_anchors.extend(f"{rel}: {anchor}" for anchor in absent)
         patch_anchors = [str(anchor) for anchor in spec.get("patch_anchors", [])]
         patch_anchors_ok = bool(patch_anchors) and all(anchor in text for anchor in patch_anchors)
-        patched = (
+        marker_present = (
             QWENDEX_CODEX_PATCH_MARKER in text
             or QWENDEX_CODEX_STATUS_ITEM_ID in text
             or patch_anchors_ok
         )
-        if patched:
+        if marker_present:
             marker_hits.append(rel)
-        else:
+        post_patch_signatures: list[dict[str, Any]] = []
+        for replacement_index, replacement in enumerate(
+            final_replacements_by_path.get(rel, []),
+            start=1,
+        ):
+            final_new = str(replacement["text"])
+            expected_count = int(replacement["expected_occurrences"])
+            observed_count = text.count(final_new)
+            signature_ok = observed_count == expected_count
+            expected_post_patch_signatures += 1
+            if signature_ok:
+                post_patch_signature_hits += 1
+            else:
+                missing_post_patch_signatures.append(
+                    f"{rel}: replacement {replacement_index} signature {sha256_text(final_new)[:16]} "
+                    f"found {observed_count}; expected {expected_count}"
+                )
+            post_patch_signatures.append({
+                "replacement": replacement_index,
+                "sha256": sha256_text(final_new),
+                "expected_occurrences": expected_count,
+                "observed_occurrences": observed_count,
+                "ok": signature_ok,
+            })
+        post_patch_signatures_ok = bool(post_patch_signatures) and all(
+            item["ok"] for item in post_patch_signatures
+        )
+        patched = post_patch_signatures_ok
+        if not patched:
             missing_patch_markers.append(rel)
         files.append({
             "path": rel,
@@ -5486,9 +5838,17 @@ def codex_source_patch_state(source: Path, manifest: Mapping[str, Any]) -> dict[
             "patched": patched,
             "missing_anchors": absent,
             "patch_anchors_ok": patch_anchors_ok,
+            "marker_present": marker_present,
+            "post_patch_signatures_ok": post_patch_signatures_ok,
+            "post_patch_signatures": post_patch_signatures,
         })
     expected_file_count = len(files)
-    applied = bool(expected_file_count) and not missing_files and not missing_patch_markers
+    applied = (
+        bool(expected_file_count)
+        and not missing_files
+        and not missing_anchors
+        and not missing_patch_markers
+    )
     return {
         "root": str(root),
         "files": files,
@@ -5496,8 +5856,11 @@ def codex_source_patch_state(source: Path, manifest: Mapping[str, Any]) -> dict[
         "missing_anchors": missing_anchors,
         "patch_marker_hits": marker_hits,
         "missing_patch_markers": missing_patch_markers,
+        "missing_post_patch_signatures": missing_post_patch_signatures,
+        "post_patch_signature_hits": post_patch_signature_hits,
+        "expected_post_patch_signatures": expected_post_patch_signatures,
         "anchors_ok": not missing_files and not missing_anchors,
-        "partially_applied": bool(marker_hits) and not applied,
+        "partially_applied": bool(marker_hits or post_patch_signature_hits) and not applied,
         "applied": applied,
     }
 
@@ -6959,12 +7322,18 @@ const ROLE_MODEL: &str = "gpt-5.4";
                             """    let initial_root_request = initial_root_request
         .requests()
         .into_iter()
-        .next()
+        .find(|request| {
+            request.body_json()["client_metadata"]["thread_id"] == json!(root_thread_id)
+                && request.body_contains_text(INITIAL_PROMPT)
+        })
         .expect("initial root request");
     let initial_child_request = initial_child_request
         .requests()
         .into_iter()
-        .next()
+        .find(|request| {
+            request.body_json()["client_metadata"]["thread_id"] == json!(worker_thread_id)
+                && request.body_contains_text(INITIAL_TASK)
+        })
         .expect("initial child request");
     assert!(initial_child_request.body_contains_text(INITIAL_TASK));
     assert!(!initial_child_request.body_contains_text(ROLE_DEVELOPER_INSTRUCTIONS));
@@ -8068,11 +8437,11 @@ async fn list_all_tools_uses_shared_codex_apps_cache_when_client_startup_fails()
                     "replacements": [
                         (
                             "const NESTED_CALL_ID: &str = \"spawn-grandchild\";\n",
-                            "",
+                            f"// {QWENDEX_CODEX_PATCH_MARKER}: nested V2 spawn call removed for root-only workers.\n",
                         ),
                         (
                             "const NESTED_TASK: &str = \"inspect the nested repository\";\n",
-                            "",
+                            f"// {QWENDEX_CODEX_PATCH_MARKER}: nested V2 task removed for root-only workers.\n",
                         ),
                         (
                             resume_child_nested_response,
@@ -8088,11 +8457,11 @@ async fn list_all_tools_uses_shared_codex_apps_cache_when_client_startup_fails()
                         ),
                         (
                             """    assert!(!initial_child_request.body_contains_text(ROLE_DEVELOPER_INSTRUCTIONS));
-    assert!(!initial_child_request.body_contains_text(SUBAGENT_DEVELOPER_INSTRUCTIONS));
+    assert!(initial_child_request.body_contains_text(SUBAGENT_DEVELOPER_INSTRUCTIONS));
     let initial_root_body = initial_root_request.body_json();
 """,
                             """    assert!(!initial_child_request.body_contains_text(ROLE_DEVELOPER_INSTRUCTIONS));
-    assert!(!initial_child_request.body_contains_text(SUBAGENT_DEVELOPER_INSTRUCTIONS));
+    assert!(initial_child_request.body_contains_text(SUBAGENT_DEVELOPER_INSTRUCTIONS));
     assert!(
         !initial_child_request.body_contains_text("\\\"spawn_agent\\\""),
         "Qwendex V2 workers must not be offered nested spawn_agent",
@@ -8114,7 +8483,7 @@ async fn list_all_tools_uses_shared_codex_apps_cache_when_client_startup_fails()
                             mcp_tests_anchor,
                             f"""#[test]
 fn failed_codex_apps_startup_uses_cache_without_masking_other_states() {{
-    let reconnect_factory = Arc::new(|| {{
+    let reconnect_factory: Arc<dyn Fn() -> ManagedClientFuture + Send + Sync> = Arc::new(|| {{
         futures::future::pending::<std::result::Result<ManagedClient, StartupOutcomeError>>()
             .boxed()
             .shared()
@@ -8124,7 +8493,10 @@ fn failed_codex_apps_startup_uses_cache_without_masking_other_states() {{
         is_authentication_required: false,
     }});
     let cached = create_test_manager_with_failed_apps_startup(
-        vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "cached_search")],
+        vec![create_test_tool(
+            CODEX_APPS_MCP_SERVER_NAME,
+            "cached_search",
+        )],
         Arc::clone(&reconnect_factory),
     );
     let cached_client = cached.test_client(CODEX_APPS_MCP_SERVER_NAME);
@@ -8165,7 +8537,10 @@ async fn failed_codex_apps_startup_reports_cached_degraded_ready_events() -> any
     let cache_context = cache_manager.context(codex_home.path().to_path_buf(), cache_key.clone());
     store_current_tools(
         &cache_context,
-        vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "cached_search")],
+        vec![create_test_tool(
+            CODEX_APPS_MCP_SERVER_NAME,
+            "cached_search",
+        )],
     );
     let server_config: McpServerConfig =
         serde_json::from_value(serde_json::json!({{ "url": "http://127.0.0.1:1" }}))?;
@@ -8237,9 +8612,11 @@ async fn failed_codex_apps_startup_reports_cached_degraded_ready_events() -> any
     assert!(saw_starting);
     assert!(saw_ready);
     assert!(saw_cached_warning);
-    assert!(summary
-        .ready
-        .contains(&CODEX_APPS_MCP_SERVER_NAME.to_string()));
+    assert!(
+        summary
+            .ready
+            .contains(&CODEX_APPS_MCP_SERVER_NAME.to_string())
+    );
     assert!(summary.failed.is_empty());
     assert!(summary.cancelled.is_empty());
     assert_eq!(manager.list_all_tools().await.len(), 1);
@@ -8444,7 +8821,7 @@ async fn failed_codex_apps_startup_reports_cached_degraded_ready_events() -> any
                         new = new.replace(
                             "    assert!(!initial_child_request.body_contains_text(ROLE_DEVELOPER_INSTRUCTIONS));\n",
                             "    assert!(!initial_child_request.body_contains_text(ROLE_DEVELOPER_INSTRUCTIONS));\n"
-                            "    assert!(!initial_child_request.body_contains_text(SUBAGENT_DEVELOPER_INSTRUCTIONS));\n",
+                            "    assert!(initial_child_request.body_contains_text(SUBAGENT_DEVELOPER_INSTRUCTIONS));\n",
                         )
                     elif old.startswith("    assert!(followup_child_request.requests().iter().any"):
                         old = """    assert!(followup_child_request.requests().iter().any(|request| {
@@ -8457,7 +8834,7 @@ async fn failed_codex_apps_startup_reports_cached_degraded_ready_events() -> any
                         new = new.replace(
                             "            && !request.body_contains_text(ROLE_DEVELOPER_INSTRUCTIONS)\n",
                             "            && !request.body_contains_text(ROLE_DEVELOPER_INSTRUCTIONS)\n"
-                            "            && !request.body_contains_text(SUBAGENT_DEVELOPER_INSTRUCTIONS)\n",
+                            "            && request.body_contains_text(SUBAGENT_DEVELOPER_INSTRUCTIONS)\n",
                         )
                 elif path == "codex-rs/core/src/tools/handlers/multi_agents_tests.rs":
                     if old.startswith("async fn multi_agent_v2_spawn_rejects_child_model_from_different_backend"):
@@ -8677,6 +9054,51 @@ async fn list_all_tools_uses_shared_codex_apps_cache_when_client_startup_fails()
                     "path": "codex-rs/core/tests/suite/multi_agent_resume.rs",
                     "replacements": [
                         (
+                            """fn request_has_input_type(request: &wiremock::Request, input_type: &str) -> bool {
+    decoded_body(request)
+        .and_then(|body| serde_json::from_slice::<Value>(&body).ok())
+        .and_then(|body| body.get("input").and_then(Value::as_array).cloned())
+        .is_some_and(|items| {
+            items
+                .iter()
+                .any(|item| item.get("type").and_then(Value::as_str) == Some(input_type))
+        })
+}
+""",
+                            f"""fn request_has_input_type(request: &wiremock::Request, input_type: &str) -> bool {{
+    decoded_body(request)
+        .and_then(|body| serde_json::from_slice::<Value>(&body).ok())
+        .and_then(|body| body.get("input").and_then(Value::as_array).cloned())
+        .is_some_and(|items| {{
+            items
+                .iter()
+                .any(|item| item.get("type").and_then(Value::as_str) == Some(input_type))
+        }})
+}}
+
+// {QWENDEX_CODEX_PATCH_MARKER}: inherited root and child models can match, so
+// response mocks must bind child replies to the intended thread identity.
+fn request_has_thread(request: &wiremock::Request, thread_id: codex_protocol::ThreadId) -> bool {{
+    let expected = thread_id.to_string();
+    decoded_body(request)
+        .and_then(|body| serde_json::from_slice::<Value>(&body).ok())
+        .is_some_and(|body| {{
+            body["client_metadata"]["thread_id"].as_str() == Some(expected.as_str())
+        }})
+}}
+
+fn request_has_parent_thread(request: &wiremock::Request) -> bool {{
+    decoded_body(request)
+        .and_then(|body| serde_json::from_slice::<Value>(&body).ok())
+        .is_some_and(|body| {{
+            body["client_metadata"]["x-codex-parent-thread-id"]
+                .as_str()
+                .is_some()
+        }})
+}}
+""",
+                        ),
+                        (
                             """        |request: &wiremock::Request| {
             request_has_model(request, ROLE_MODEL)
                 && request_has_input_type(request, \"agent_message\")
@@ -8684,7 +9106,8 @@ async fn list_all_tools_uses_shared_codex_apps_cache_when_client_startup_fails()
         },
 """,
                             """        |request: &wiremock::Request| {
-            request_has_input_type(request, \"agent_message\")
+            request_has_parent_thread(request)
+                && request_has_input_type(request, \"agent_message\")
                 && body_contains(request, INITIAL_TASK)
         },
 """,
@@ -8711,9 +9134,45 @@ async fn list_all_tools_uses_shared_codex_apps_cache_when_client_startup_fails()
                 && body_contains(request, SIBLING_TASK)
         },
 """,
-                            """        |request: &wiremock::Request| {
-            request_has_input_type(request, \"agent_message\") && body_contains(request, SIBLING_TASK)
+                            """        move |request: &wiremock::Request| {
+            !request_has_thread(request, root_thread_id)
+                && request_has_input_type(request, \"agent_message\")
+                && body_contains(request, SIBLING_TASK)
         },
+""",
+                        ),
+                        (
+                            """    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        if matches!(
+            reloaded_worker.agent_status().await,
+            AgentStatus::Completed(_)
+        ) {
+            break;
+        }
+        if Instant::now() >= deadline {
+            anyhow::bail!("timed out waiting for reloaded worker completion");
+        }
+        sleep(Duration::from_millis(10)).await;
+    }
+""",
+                            """    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let status = reloaded_worker.agent_status().await;
+        if matches!(status, AgentStatus::Completed(_)) {
+            break;
+        }
+        if matches!(
+            status,
+            AgentStatus::Errored(_) | AgentStatus::Shutdown | AgentStatus::NotFound
+        ) {
+            anyhow::bail!("reloaded worker reached terminal status before completion: {status:?}");
+        }
+        if Instant::now() >= deadline {
+            anyhow::bail!("timed out waiting for reloaded worker completion: {status:?}");
+        }
+        sleep(Duration::from_millis(10)).await;
+    }
 """,
                         ),
                         (
@@ -8724,8 +9183,9 @@ async fn list_all_tools_uses_shared_codex_apps_cache_when_client_startup_fails()
                 && body_contains(request, QUEUED_MESSAGE)
         },
 """,
-                            """        |request: &wiremock::Request| {
-            request_has_input_type(request, \"agent_message\")
+                            """        move |request: &wiremock::Request| {
+            request_has_thread(request, worker_thread_id)
+                && request_has_input_type(request, \"agent_message\")
                 && body_contains(request, FOLLOWUP_TASK)
                 && body_contains(request, QUEUED_MESSAGE)
         },
@@ -8738,8 +9198,9 @@ async fn list_all_tools_uses_shared_codex_apps_cache_when_client_startup_fails()
                 && body_contains(request, SIBLING_FOLLOWUP_TASK)
         },
 """,
-                            """        |request: &wiremock::Request| {
-            request_has_input_type(request, \"agent_message\")
+                            """        move |request: &wiremock::Request| {
+            request_has_thread(request, sibling_thread_id)
+                && request_has_input_type(request, \"agent_message\")
                 && body_contains(request, SIBLING_FOLLOWUP_TASK)
         },
 """,
@@ -8753,7 +9214,7 @@ async fn list_all_tools_uses_shared_codex_apps_cache_when_client_startup_fails()
                             """    assert!(sibling_followup_request.requests().iter().any(|request| {
         request.body_contains_text(SIBLING_FOLLOWUP_TASK)
             && !request.body_contains_text(ROLE_DEVELOPER_INSTRUCTIONS)
-            && !request.body_contains_text(SUBAGENT_DEVELOPER_INSTRUCTIONS)
+            && request.body_contains_text(SUBAGENT_DEVELOPER_INSTRUCTIONS)
     }));
 """,
                         ),
@@ -8801,6 +9262,126 @@ async fn multi_agent_v2_spawn_rejects_model_override() {
                 },
             ]
         )
+    if version == "0.147.0":
+        # Codex 0.147 can safely validate account-visible per-child model and
+        # reasoning requests. Qwendex keeps native roles and service tiers
+        # sealed while restoring only those two cost/quality controls.
+        routed_specs: list[dict[str, Any]] = []
+        for original_spec in specs:
+            spec = dict(original_spec)
+            rel = str(spec["path"])
+            replacements: list[tuple[str, str]] = []
+            for old, new in spec["replacements"]:
+                if rel == "codex-rs/core/src/tools/spec_plan.rs":
+                    if "expose_agent_type: !turn_context.config.agent_roles.is_empty()" in old:
+                        new = f"""                        {marker}
+                        // Qdex keeps native roles and service tiers hidden while
+                        // exposing Codex-validated model and reasoning requests.
+                        expose_agent_type: false,
+                        hide_agent_type_model_reasoning: true,
+"""
+                    elif "let hide_spawn_agent_metadata" in old:
+                        new = f"""            // {QWENDEX_CODEX_PATCH_MARKER}: role and service-tier metadata remains hidden.
+"""
+                    elif "expose_spawn_agent_model_overrides: turn_context" in old:
+                        new = """                        expose_spawn_agent_model_overrides: true,
+"""
+                elif rel == "codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs":
+                    if old.startswith("struct SpawnAgentArgs {"):
+                        new = f"""struct SpawnAgentArgs {{
+    message: String,
+    task_name: String,
+    model: Option<String>,
+    reasoning_effort: Option<ReasoningEffort>,
+    {marker}
+    // Qwendex accepts model/reasoning requests but not native role or
+    // service-tier overrides.
+    fork_turns: Option<String>,
+    fork_context: Option<bool>,
+}}
+"""
+                    elif "let role_name = args" in old and "apply_spawn_agent_role" in old:
+                        new = f"""    let args: SpawnAgentArgs = parse_arguments(&arguments)?;
+    let fork_mode = args.fork_mode()?;
+    {marker}
+    let role_name: Option<&str> = None;
+
+    let message = message_content(args.message)?;
+    let session_source = turn.session_source.clone();
+    let child_depth = next_thread_spawn_depth(&session_source);
+    let mut config = build_agent_spawn_config(
+        &session.get_base_instructions().await,
+        turn.as_ref(),
+        step_context.environments.primary(),
+    )?;
+    apply_requested_spawn_agent_model_overrides(
+        &session,
+        turn.as_ref(),
+        &mut config,
+        args.model.as_deref(),
+        args.reasoning_effort.clone(),
+    )
+    .await?;
+    apply_spawn_agent_service_tier(
+        &session,
+        &mut config,
+        turn.config.service_tier.as_deref(),
+        None,
+    )
+    .await?;
+"""
+                elif rel == "codex-rs/core/src/tools/handlers/multi_agents_common.rs":
+                    if old.startswith("    config.developer_instructions = turn.developer_instructions.clone();"):
+                        new = f"""    config.developer_instructions = turn.developer_instructions.clone();
+    // {QWENDEX_CODEX_PATCH_MARKER}: use Codex 0.147's native V2 child
+    // developer-instruction channel for the bounded worker contract.
+    if turn.multi_agent_version == MultiAgentVersion::V2
+        && let Some(developer_instructions) = turn
+            .config
+            .multi_agent_v2
+            .subagent_developer_instructions
+            .clone()
+    {{
+        config.developer_instructions = Some(developer_instructions);
+    }}
+"""
+                elif rel == "codex-rs/core/src/tools/handlers/multi_agents_v2.rs":
+                    if old == "use codex_protocol::openai_models::ReasoningEffort;\n":
+                        new = (
+                            f"// {QWENDEX_CODEX_PATCH_MARKER}: model/reasoning overrides remain "
+                            "available while role/service-tier inputs stay sealed.\n"
+                            + old
+                        )
+                elif rel == "codex-rs/core/tests/suite/subagent_notifications.rs":
+                    if old.startswith("const V2_REQUESTED_MODEL"):
+                        new = (
+                            f"// {QWENDEX_CODEX_PATCH_MARKER}: retain native explicit model/reasoning coverage.\n"
+                            + old
+                        )
+                    else:
+                        continue
+                elif rel == "codex-rs/core/src/tools/handlers/multi_agents_tests.rs":
+                    if (
+                        "multi_agent_v2_spawn_rejects_child_model_from_different_backend" in old
+                        or "model from a different multi-agent backend should be rejected" in old
+                        or (old == legacy_items_test and "multi_agent_v2_spawn_rejects_model_override" in new)
+                    ):
+                        continue
+                elif rel == "codex-rs/core/src/tools/spec_plan_tests.rs":
+                    if 'for property in ["model", "reasoning_effort"]' in old:
+                        new = f"""    // {QWENDEX_CODEX_PATCH_MARKER}: expose only validated model/reasoning controls.
+    for property in ["model", "reasoning_effort"] {{
+        assert!(spawn_agent_properties.contains_key(property));
+    }}
+    for property in ["agent_type", "service_tier"] {{
+        assert!(!spawn_agent_properties.contains_key(property));
+    }}
+"""
+                replacements.append((old, new))
+            if replacements:
+                spec["replacements"] = replacements
+                routed_specs.append(spec)
+        specs = routed_specs
     return specs
 
 
@@ -8948,17 +9529,22 @@ def codex_patch_payload(args: argparse.Namespace) -> dict[str, Any]:
             data=data,
         )
     if args.require_applied and not applied:
+        signature_errors = list((source_state or {}).get("missing_post_patch_signatures") or [])
         return stable_envelope(
             command="codex-patch",
             status="blocked",
-            summary=f"Codex {version} is supported, but the Qwendex TUI patch is not applied to the checked source.",
-            errors=["patch marker not found"],
+            summary=f"Codex {version} is supported, but the complete Qwendex source patch is not applied to the checked source.",
+            errors=signature_errors[:20] or ["complete post-edit patch signatures not found"],
             next_actions=["Apply the Qwendex Codex TUI source patch, rebuild Codex, then rerun preflight with --source."],
             data=data,
         )
     summary = f"Codex {version} is supported by the Qwendex patch manifest."
     if source_state:
-        summary += " Source patch marker is present." if applied else " Source anchors are ready; patch marker is not present yet."
+        summary += (
+            " Every generated post-edit signature is present."
+            if applied
+            else " Source anchors are ready; the complete post-edit signature set is not present yet."
+        )
     else:
         summary += " No source checkout was supplied, so installed-binary patch state was not asserted."
     return stable_envelope(
@@ -9055,8 +9641,9 @@ def codex_patch_apply_payload(args: argparse.Namespace) -> dict[str, Any]:
         return stable_envelope(
             command="codex-patch",
             status="blocked",
-            summary="Qwendex applied edits, but post-apply preflight did not find the patch marker.",
-            errors=["patch marker not found after apply"],
+            summary="Qwendex applied edits, but post-apply preflight did not verify every intended replacement.",
+            errors=list(after_state.get("missing_post_patch_signatures") or [])[:20]
+            or ["complete post-edit patch signatures not found after apply"],
             next_actions=["Inspect the source checkout before rebuilding Codex."],
             data=data,
         )
@@ -9207,38 +9794,13 @@ def required_surface_check() -> dict[str, Any]:
 
 
 def public_docs_audit(doc_root: Path = PUBLIC_DOC_DIR) -> dict[str, Any]:
-    missing = [name for name in PUBLIC_DOC_FILES if not (doc_root / name).exists()]
-    files = [name for name in PUBLIC_DOC_FILES if (doc_root / name).exists()]
-    dead_links: list[str] = []
-    secret_hits: list[str] = []
-    naming_hits: list[str] = []
-    for name in files:
-        path = doc_root / name
-        text = path.read_text(encoding="utf-8")
-        for line_no, line in enumerate(text.splitlines(), start=1):
-            if SECRET_RE.search(line):
-                secret_hits.append(f"{name}:{line_no}")
-            for pattern, message in PUBLIC_NAMING_PATTERNS:
-                if pattern.search(line):
-                    naming_hits.append(f"{name}:{line_no}: {message}")
-        for match in re.finditer(r"\[[^\]]+\]\(([^)]+)\)", text):
-            target = match.group(1).strip()
-            if not target or target.startswith(("#", "http://", "https://", "mailto:")):
-                continue
-            target_path = target.split("#", 1)[0]
-            resolved = (path.parent / target_path).resolve()
-            if not resolved.exists():
-                dead_links.append(f"{name}: {target}")
-    status = "pass" if not (missing or dead_links or secret_hits or naming_hits) else "fail"
-    return {
-        "status": status,
-        "root": str(doc_root),
-        "files": files,
-        "missing": missing,
-        "dead_links": dead_links,
-        "secret_hits": secret_hits,
-        "naming_hits": naming_hits,
-    }
+    module = script_module("qwendex_docs")
+    return module.compat_public_docs_audit(
+        doc_root,
+        PUBLIC_DOC_FILES,
+        secret_pattern=SECRET_RE,
+        naming_patterns=PUBLIC_NAMING_PATTERNS,
+    )
 
 
 def json_file_status(path: Path) -> dict[str, Any]:
@@ -9388,12 +9950,6 @@ def command_check(args: argparse.Namespace, config: dict[str, Any]) -> dict[str,
         )
         stale_after = mode_stale_after_minutes(config, mode)
         repo_root = canonical_manager_repo_root()
-        reconcile_stale_manager_sessions(
-            conn,
-            stale_after_minutes=stale_after,
-            now=utc_now(),
-            repo_root=repo_root,
-        )
         rows = conn.execute("SELECT * FROM qwendex_agent_sessions ORDER BY updated_at DESC").fetchall()
         ledger_sessions = [session for row in rows if (session := row_to_agent_session(row))]
         sessions = sessions_for_repo(ledger_sessions, repo_root)
@@ -9489,12 +10045,6 @@ def command_doctor(args: argparse.Namespace, config: dict[str, Any]) -> dict[str
         )
         stale_after = mode_stale_after_minutes(config, mode)
         repo_root = canonical_manager_repo_root()
-        reconcile_stale_manager_sessions(
-            conn,
-            stale_after_minutes=stale_after,
-            now=utc_now(),
-            repo_root=repo_root,
-        )
         rows = conn.execute("SELECT * FROM qwendex_agent_sessions ORDER BY updated_at DESC").fetchall()
         ledger_sessions = [session for row in rows if (session := row_to_agent_session(row))]
         sessions = sessions_for_repo(ledger_sessions, repo_root)
@@ -9712,6 +10262,7 @@ def seat_execution_policy(
     max_tool_calls = int(guard.get("max_tool_calls") or -1)
     guard_profile = str(seat_config.get("guard_profile") or "balanced")
     runtime_model = seat_runtime_model(config, seat) if seat else ""
+    reasoning_effort = seat_reasoning_effort(config, seat) if seat else ""
     local_base_url = local_qwen_base_url(config)
     child_env = {
         "QWENDEX_GUARD_PROFILE": guard_profile,
@@ -9737,6 +10288,7 @@ def seat_execution_policy(
         "local_harness_mcp_enabled": local_harness_enabled,
         "guard_profile": guard_profile,
         "runtime_model": runtime_model,
+        "reasoning_effort": reasoning_effort,
         "local_probe_url": routing["local_probe_url"],
         "local_base_url": local_base_url,
         "local_model": routing["local_model"],
@@ -9805,6 +10357,9 @@ def exec_command_for_seat(
         command.extend(["--ignore-user-config", "-c", "mcp_servers={}"])
     if execution_policy.get("local_harness_mcp_enabled"):
         command.extend(codex_mcp_override_args(exec_cwd))
+    reasoning_effort = str(execution_policy.get("reasoning_effort") or "").strip()
+    if reasoning_effort:
+        command.extend(["-c", f'model_reasoning_effort="{reasoning_effort}"'])
     for key, value in (
         ("tool_output_token_limit", execution_policy.get("tool_output_token_limit")),
         ("model_context_window", execution_policy.get("context_window")),
@@ -11099,11 +11654,27 @@ def routing_assignment_label(routing: Mapping[str, Any]) -> str:
 
 
 def spawn_instruction(agent_id: str, routing: Mapping[str, Any]) -> str:
+    model = str(routing.get("selected_model") or "inherited")
     reasoning = str(routing.get("selected_reasoning") or "inherited")
+    if routing.get("token_saver_used"):
+        return (
+            f"dispatch {agent_id} through the Qwendex local-Qwen lane with "
+            f"model={model}, reasoning={reasoning}; do not pass a local model to native spawn_agent"
+        )
     return (
-        f"spawn_agent for {agent_id} using the Qwendex lane assignment; "
-        f"keep model selection inherited from Codex and use reasoning={reasoning} only when the native profile supports it."
+        f"spawn_agent for {agent_id} with fork_turns=none, model={model}, "
+        f"and reasoning_effort={reasoning}; Codex must validate the requested model and effort."
     )
+
+
+def native_spawn_arguments(routing: Mapping[str, Any]) -> dict[str, str] | None:
+    if routing.get("token_saver_used"):
+        return None
+    return {
+        "fork_turns": "none",
+        "model": str(routing.get("selected_model") or ""),
+        "reasoning_effort": str(routing.get("selected_reasoning") or ""),
+    }
 
 
 def kaveman_context(config: Mapping[str, Any]) -> str:
@@ -11225,9 +11796,12 @@ def subagent_start_context(
     task_name = str(event.get("task_name") or event.get("task") or "assigned task")
     routing = event_model_reasoning(event) or session_model_reasoning(config, agent_id)
     assignment = (
-        f" Use the registered Qwendex lane assignment with reasoning={routing.get('selected_reasoning') or 'inherited'}; model selection remains inherited from Codex."
+        " Use the registered Qwendex lane assignment with "
+        f"model={routing.get('selected_model') or 'inherited'} and "
+        f"reasoning={routing.get('selected_reasoning') or 'inherited'}; "
+        "these values were validated by Codex before the child started."
         if routing
-        else " Use the lane assignment supplied by the manager/root context; model selection remains inherited from Codex."
+        else " Use the lane assignment supplied by the manager/root context and retain the Codex-inherited model policy."
     )
     output_context = agent_output_policy_context(agent_policy, config=config)
     output_sentence = f" {output_context}" if output_context else ""
@@ -11429,6 +12003,8 @@ def reserve_manager_native_spawn(
         dict(item)
         for item in list(plan.get("assignments") or [])
         if isinstance(item, Mapping)
+        and str(item.get("execution_surface") or "codex_multi_agent_v2")
+        == "codex_multi_agent_v2"
     ]
     if str(decision.get("selected_route") or "") != "manager_subagents" or not assignments:
         return {
@@ -11684,6 +12260,8 @@ def activate_manager_native_worker(
                 dict(item)
                 for item in list(plan.get("assignments") or [])
                 if isinstance(item, Mapping)
+                and str(item.get("execution_surface") or "codex_multi_agent_v2")
+                == "codex_multi_agent_v2"
             ]
             matched = [
                 assignment
@@ -13154,7 +13732,10 @@ def pre_tool_gate(config: Mapping[str, Any], event: Mapping[str, Any], agent_pol
         # the root. Codex permissions and the live user instruction govern
         # root tools; Qwendex observes child lanes only.
         return {}
-    if (codex_subagent or depth > 0) and tool_key in ROOT_ONLY_AGENT_TOOLS:
+    root_only_tool = tool_key
+    if event_tool_is_collaboration_lifecycle(tool):
+        root_only_tool = event_tool_leaf_name(tool)
+    if (codex_subagent or depth > 0) and root_only_tool in ROOT_ONLY_AGENT_TOOLS:
         return {
             "decision": "block",
             "event": "agent.spawn_rejected",
@@ -14045,6 +14626,25 @@ def hook_status_for_codex_home(
             payload = loaded if isinstance(loaded, dict) else {}
         except (OSError, json.JSONDecodeError) as exc:
             parse_error = str(exc)
+    all_hook_definitions: list[tuple[str, Mapping[str, Any]]] = []
+    unsafe_hook_definition_count = 0
+    raw_hooks = payload.get("hooks")
+    if isinstance(raw_hooks, Mapping):
+        for event_name, entries in raw_hooks.items():
+            if not isinstance(entries, list):
+                unsafe_hook_definition_count += 1
+                continue
+            for entry in entries:
+                if not isinstance(entry, Mapping) or not isinstance(entry.get("hooks"), list):
+                    unsafe_hook_definition_count += 1
+                    continue
+                for hook in entry.get("hooks") or []:
+                    if isinstance(hook, Mapping):
+                        all_hook_definitions.append((str(event_name), hook))
+                    else:
+                        unsafe_hook_definition_count += 1
+    elif raw_hooks is not None:
+        unsafe_hook_definition_count += 1
     commands = managed_hook_commands(payload)
     managed_events = {
         event
@@ -14104,6 +14704,14 @@ def hook_status_for_codex_home(
     expected_runtime_env = managed_hook_runtime_env(codex_home=codex_home)
     expected_runtime_base = managed_agent_hook_command_base("", expected_runtime_env)
     expected_dev_root = str(expected_runtime_env.get("QWENDEX_DEV_ROOT") or "").strip()
+    expected_hook_config = managed_agent_hook_config("", expected_runtime_env)
+    expected_hooks = expected_hook_config.get("hooks")
+    managed_hook_set_exact = bool(
+        not parse_error
+        and isinstance(raw_hooks, Mapping)
+        and isinstance(expected_hooks, Mapping)
+        and raw_hooks == expected_hooks
+    )
     runtime_command_mismatch_events = sorted(
         event
         for event in managed_events
@@ -14125,12 +14733,41 @@ def hook_status_for_codex_home(
         and not runtime_command_mismatch_events
         and not parse_error
     )
+    total_hook_source_count = len(all_hook_definitions)
+    trust_bypass_safe_hook_count = (
+        total_hook_source_count if managed_hook_set_exact else 0
+    )
+    unmanaged_hook_source_count = max(
+        0,
+        total_hook_source_count - compatible_hook_source_count,
+    )
+    noncanonical_hook_source_count = (
+        0 if managed_hook_set_exact else total_hook_source_count
+    )
+    # Codex 0.147's bypass applies beyond this generated hooks.json file to
+    # project, config-layer, and plugin hook sources. Qwendex deliberately
+    # cannot certify those sources from this local inventory, so Qdex never
+    # enables the global bypass even when its own generated set is exact.
+    trust_bypass_safe = False
+    trust_bypass_reason = (
+        "Qdex preserves native Codex hook trust because the global bypass also "
+        "covers project, config-layer, and plugin hook sources."
+    )
     return {
         "codex_home": str(codex_home.expanduser()),
         "hooks_path": str(target),
         "hooks_json_exists": target.is_file(),
         "hook_source_count": hook_source_count,
         "compatible_hook_source_count": compatible_hook_source_count,
+        "total_hook_source_count": total_hook_source_count,
+        "trust_bypass_safe_hook_count": trust_bypass_safe_hook_count,
+        "unmanaged_hook_source_count": unmanaged_hook_source_count,
+        "noncanonical_hook_source_count": noncanonical_hook_source_count,
+        "unsafe_hook_definition_count": unsafe_hook_definition_count,
+        "managed_hook_set_exact": managed_hook_set_exact,
+        "trust_bypass_safe": trust_bypass_safe,
+        "trust_bypass_reason": trust_bypass_reason,
+        "native_hook_trust_required": True,
         "configured": configured,
         "verified": verified,
         "source_paths": [str(target)] if target.is_file() else [],
@@ -14334,6 +14971,7 @@ def build_agent_team_plan(
     estimate = estimate_task(config, prompt=prompt, local_status=local_status)
     selected_mode = str(agent_policy.get("mode") or "medium")
     task_class = classify_manager_turn(prompt)
+    routing_task_class = str(estimate.get("task_class") or infer_task_class(prompt))
     effective_mode = effective_manager_turn_mode(selected_mode, task_class)
     lane_specs, reason = manager_turn_lane_specs(
         prompt,
@@ -14383,11 +15021,30 @@ def build_agent_team_plan(
         command.append("--json")
         routing = lane_model_reasoning(
             config,
-            task_class=task_class,
+            task_class=routing_task_class,
             lane=lane,
+            profile=profile,
             risk=str(estimate.get("risk") or "medium"),
             local_status=local_status,
         )
+        assignment_text = (
+            f"Perform the bounded {lane} lane for {task_class}; remain read-only "
+            "and return a concise outcome. A structured report is optional."
+        )
+        local_dispatch = bool(routing.get("token_saver_used"))
+        dispatch_command = ""
+        if local_dispatch:
+            dispatch_parts = [
+                "qwendex",
+                "exec",
+                assignment_text,
+                "--seat",
+                "qwen",
+                "--task-class",
+                routing_task_class,
+                "--json",
+            ]
+            dispatch_command = " ".join(shlex.quote(part) for part in dispatch_parts)
         assignments.append({
             "agent_id": agent_id,
             "profile": profile,
@@ -14395,9 +15052,12 @@ def build_agent_team_plan(
             "required": required,
             "write_surface": agent_profile_write_surface(profile),
             "stop_condition": stop_condition,
-            "assignment": f"Perform the bounded {lane} lane for {task_class}; remain read-only and return a concise outcome. A structured report is optional.",
+            "assignment": assignment_text,
             "assign_command": " ".join(shlex.quote(part) for part in command),
             "spawn_instruction": spawn_instruction(agent_id, routing),
+            "native_spawn_arguments": native_spawn_arguments(routing),
+            "execution_surface": "qwendex_exec" if local_dispatch else "codex_multi_agent_v2",
+            "dispatch_command": dispatch_command,
             "routing": routing,
         })
     direct_work = not assignments
@@ -14412,6 +15072,7 @@ def build_agent_team_plan(
         "repo_root": effective_repo_root,
         "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
         "task_class": task_class,
+        "routing_task_class": routing_task_class,
         "estimate": estimate,
         "routing_reason": reason,
         "route": "direct" if direct_work else "orchestrated_single_writer",
@@ -16333,6 +16994,116 @@ def validation_receipt_state(value: Any, config: Mapping[str, Any]) -> bool:
     return False
 
 
+def inspect_manager_validation_receipt(
+    raw_path: str,
+    config: Mapping[str, Any],
+    *,
+    expected_sha256: str = "",
+    repo_root: str = "",
+    expected_agent_id: str = "",
+    expected_task_id: str = "",
+) -> dict[str, Any]:
+    """Verify and bind one bounded receipt before attaching it to Manager state."""
+    path = Path(raw_path).expanduser()
+    if not path.is_absolute():
+        path = Path(repo_root or canonical_manager_repo_root()) / path
+    if path.is_symlink():
+        return {
+            "verified": False,
+            "passed": False,
+            "path": str(path),
+            "sha256": "",
+            "errors": ["validation receipt must be an existing non-symlink file"],
+        }
+    path = path.resolve(strict=False)
+    errors: list[str] = []
+    if not path.is_file():
+        errors.append("validation receipt must be an existing non-symlink file")
+    elif not is_trusted_receipt_path(path, config):
+        errors.append("validation receipt is outside configured trusted receipt roots")
+    if errors:
+        return {"verified": False, "passed": False, "path": str(path), "sha256": "", "errors": errors}
+    max_receipt_bytes = 16 * 1024 * 1024
+    try:
+        open_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(path, open_flags)
+        with os.fdopen(descriptor, "rb") as handle:
+            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                raise OSError("validation receipt is not a regular file")
+            raw_receipt = handle.read(max_receipt_bytes + 1)
+        if len(raw_receipt) > max_receipt_bytes:
+            return {
+                "verified": False,
+                "passed": False,
+                "path": str(path),
+                "sha256": "",
+                "errors": ["validation receipt exceeds the 16 MiB attachment limit"],
+            }
+        payload = json.loads(raw_receipt.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        return {
+            "verified": False,
+            "passed": False,
+            "path": str(path),
+            "sha256": "",
+            "errors": [f"validation receipt is not readable JSON: {exc}"],
+        }
+    verification = verify_receipt_data(payload)
+    digest = hashlib.sha256(raw_receipt).hexdigest()
+    normalized_expected = expected_sha256.removeprefix("sha256:").strip().lower()
+    if normalized_expected and normalized_expected != digest:
+        verification = {
+            **verification,
+            "verified": False,
+            "errors": [*list(verification.get("errors") or []), "validation receipt file sha256 mismatch"],
+        }
+    receipt_repo_root = str(payload.get("repo_root") or "") if isinstance(payload, Mapping) else ""
+    normalized_receipt_repo = (
+        str(Path(receipt_repo_root).expanduser().resolve(strict=False))
+        if receipt_repo_root and Path(receipt_repo_root).expanduser().is_absolute()
+        else ""
+    )
+    normalized_expected_repo = str(
+        Path(repo_root or canonical_manager_repo_root()).expanduser().resolve(strict=False)
+    )
+    receipt_agent_id = str(payload.get("agent_id") or "") if isinstance(payload, Mapping) else ""
+    receipt_task_id = str(payload.get("task_id") or "") if isinstance(payload, Mapping) else ""
+    binding_errors: list[str] = []
+    if normalized_receipt_repo != normalized_expected_repo:
+        binding_errors.append("validation receipt repo_root does not match the agent session")
+    if not expected_agent_id or receipt_agent_id != expected_agent_id:
+        binding_errors.append("validation receipt agent_id does not match the agent session")
+    if receipt_task_id != expected_task_id:
+        binding_errors.append("validation receipt task_id does not match the agent session")
+    if binding_errors:
+        verification = {
+            **verification,
+            "verified": False,
+            "errors": [*list(verification.get("errors") or []), *binding_errors],
+        }
+    state = structured_validation_state(payload)
+    if verification.get("verified") and state is None:
+        verification = {
+            **verification,
+            "verified": False,
+            "errors": [*list(verification.get("errors") or []), "validation receipt has no explicit pass/fail state"],
+        }
+    return {
+        "verified": bool(verification.get("verified")),
+        "passed": state is True,
+        "path": str(path),
+        "sha256": digest,
+        "receipt_sha256": str(payload.get("sha256") or "") if isinstance(payload, Mapping) else "",
+        "schema_version": str(payload.get("schema_version") or "") if isinstance(payload, Mapping) else "",
+        "binding": {
+            "repo_root": normalized_receipt_repo,
+            "agent_id": receipt_agent_id,
+            "task_id": receipt_task_id,
+        },
+        "errors": list(verification.get("errors") or []),
+    }
+
+
 def stop_event_has_validation_evidence(
     event: Mapping[str, Any],
     message: str,
@@ -16688,7 +17459,7 @@ def command_agent(args: argparse.Namespace, config: dict[str, Any]) -> dict[str,
         if not prompt:
             return stable_envelope(command="agent", status="blocked", summary="Agent plan requires --prompt.", errors=["missing prompt"], data={"agent_policy": agent_policy})
         with connect_state(config) as conn:
-            local_status = local_subagent_status(config, enabled=current_local_enabled(config, conn), env=os.environ, probe=False)
+            local_status = local_subagent_status(config, enabled=current_local_enabled(config, conn), env=os.environ, probe=True)
         plan = build_agent_team_plan(
             config,
             prompt=prompt,
@@ -16700,7 +17471,10 @@ def command_agent(args: argparse.Namespace, config: dict[str, Any]) -> dict[str,
             command="agent",
             status="pass",
             summary="Built Qwendex agent team plan." if not plan["direct_work"] else "Built Qwendex direct-work plan.",
-            next_actions=[assignment["assign_command"] for assignment in plan["assignments"]],
+            next_actions=[
+                assignment.get("dispatch_command") or assignment["assign_command"]
+                for assignment in plan["assignments"]
+            ],
             data={"agent_plan": plan, "agent_policy": agent_policy},
         )
     if action == "metrics":
@@ -16741,10 +17515,8 @@ def command_agent(args: argparse.Namespace, config: dict[str, Any]) -> dict[str,
         kaveman_enabled = current_kaveman_enabled(config, conn)
         stale_after = mode_stale_after_minutes(config, mode, args.stale_after_minutes)
         repo_root = canonical_manager_repo_root()
-        reconciliation = reconcile_stale_manager_sessions(
-            conn,
+        reconciliation = manager_reconciliation_not_run(
             stale_after_minutes=stale_after,
-            now=now,
             repo_root=repo_root,
         )
         target = args.target or args.agent_id
@@ -16950,14 +17722,10 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
         max_subagents = args.max_subagents or manager_mode_profile(config, mode)["max_subagents"]
         local_status = local_subagent_status(config, enabled=current_local_enabled(config, conn), env=os.environ, probe=True)
         kaveman_enabled = current_kaveman_enabled(config, conn)
-        reconciliation = {"closed_count": 0, "closed": [], "skipped_writer_count": 0, "skipped_writers": [], "stale_after_minutes": max(stale_after, 5)}
-        if args.action in {"kaveman", "local", "estimate", "status"}:
-            reconciliation = reconcile_stale_manager_sessions(
-                conn,
-                stale_after_minutes=stale_after,
-                now=now,
-                repo_root=repo_root,
-            )
+        reconciliation = manager_reconciliation_not_run(
+            stale_after_minutes=stale_after,
+            repo_root=repo_root,
+        )
         if args.action == "mode":
             previous_mode = mode
             if args.toggle:
@@ -16986,10 +17754,8 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
             if requested_agent_policy["errors"]:
                 return stable_envelope(command="manager", status="blocked", summary="Invalid Qwendex agent policy.", errors=list(requested_agent_policy["errors"]), data={"agent_policy": requested_agent_policy})
             stale_after = mode_stale_after_minutes(config, mode, args.stale_after_minutes)
-            reconciliation = reconcile_stale_manager_sessions(
-                conn,
+            reconciliation = manager_reconciliation_not_run(
                 stale_after_minutes=stale_after,
-                now=now,
                 repo_root=repo_root,
             )
             sessions, scope_sessions, ledger_sessions = load_manager_session_views(
@@ -17271,6 +18037,30 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
             else:
                 validation_reconcile["repair_performed"] = False
                 validation_reconcile["dry_run"] = bool(args.dry_run)
+            pending_items = [
+                item
+                for bucket in (
+                    "closed_without_validation_evidence",
+                    "validation_failed",
+                    "stale_pending_validation",
+                    "orphaned_session",
+                    "needs_manual_review",
+                )
+                for item in validation_reconcile["classifications"].get(bucket, [])
+            ]
+            validation_commands: list[str] = []
+            for item in pending_items:
+                agent_id = str(item.get("agent_id") or "")
+                if not agent_id:
+                    continue
+                validation_commands.extend([
+                    "scripts/qwendex manager validate --agent-id "
+                    f"{shlex.quote(agent_id)} --receipt-path PATH_TO_RECEIPT.json --json",
+                    "scripts/qwendex manager validation-waive --agent-id "
+                    f"{shlex.quote(agent_id)} --actor OPERATOR_ID --reason "
+                    f"{shlex.quote('operator accepted missing validation evidence')} --json",
+                ])
+            validation_reconcile["resolution_commands"] = validation_commands
             status_value = "warning" if validation_reconcile["pending_validation_count"] else "pass"
             return stable_envelope(
                 command="manager",
@@ -17280,7 +18070,7 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
                     if validation_reconcile["pending_validation_count"]
                     else "No pending manager validation debt found."
                 ),
-                next_actions=["Attach validation evidence before closing pending sessions."] if validation_reconcile["pending_validation_count"] else [],
+                next_actions=validation_commands[:10],
                 data={
                     "repo_root": repo_root,
                     "validation_reconciliation": validation_reconcile,
@@ -17289,6 +18079,145 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
                         1 for session in ledger_sessions if not session.get("repo_root")
                     ),
                 },
+            )
+        if args.action in {"validate", "validation-waive"}:
+            if not args.agent_id:
+                return stable_envelope(
+                    command="manager",
+                    status="blocked",
+                    summary=f"Manager {args.action} requires --agent-id.",
+                    errors=["missing agent_id"],
+                )
+            row = conn.execute(
+                "SELECT * FROM qwendex_agent_sessions WHERE agent_id = ?",
+                (args.agent_id,),
+            ).fetchone()
+            session = row_to_agent_session(row)
+            if session is None:
+                return stable_envelope(command="manager", status="blocked", summary=f"Agent session not found: {args.agent_id}", errors=[args.agent_id])
+            if str(session.get("repo_root") or "") != repo_root:
+                return stable_envelope(
+                    command="manager",
+                    status="blocked",
+                    summary="Agent session is legacy-unscoped or belongs to a different repository; claim it with manager assign before mutation.",
+                    errors=[args.agent_id],
+                )
+            packet = dict(session.get("context_packet") or {})
+            artifacts = list(session.get("artifacts") or [])
+            if args.action == "validate":
+                if not args.receipt_path:
+                    return stable_envelope(
+                        command="manager",
+                        status="blocked",
+                        summary="Manager validate requires --receipt-path.",
+                        errors=["missing receipt_path"],
+                    )
+                receipt = inspect_manager_validation_receipt(
+                    args.receipt_path,
+                    config,
+                    expected_sha256=args.sha256,
+                    repo_root=repo_root,
+                    expected_agent_id=args.agent_id,
+                    expected_task_id=str(session.get("task_id") or ""),
+                )
+                if not receipt["verified"]:
+                    return stable_envelope(
+                        command="manager",
+                        status="blocked",
+                        summary=f"Validation receipt for {args.agent_id} could not be verified.",
+                        errors=list(receipt["errors"]),
+                        data={"validation_receipt": receipt, "agent_session": session},
+                    )
+                validation_status = "pass" if receipt["passed"] else "fail"
+                evidence = {
+                    "path": receipt["path"],
+                    "sha256": receipt["sha256"],
+                    "receipt_sha256": receipt["receipt_sha256"],
+                    "schema_version": receipt["schema_version"],
+                    "binding": receipt["binding"],
+                    "result": validation_status,
+                    "attached_at": now,
+                }
+                existing_evidence = packet.get("validation_evidence")
+                evidence_items = list(existing_evidence) if isinstance(existing_evidence, list) else []
+                if not any(
+                    isinstance(item, Mapping)
+                    and item.get("sha256") == evidence["sha256"]
+                    for item in evidence_items
+                ):
+                    evidence_items.append(evidence)
+                packet["validation_evidence"] = evidence_items
+                packet.pop("validation_waiver", None)
+                if receipt["path"] not in artifacts:
+                    artifacts.append(receipt["path"])
+                summary = (
+                    f"Attached passing validation receipt to {args.agent_id}."
+                    if receipt["passed"]
+                    else f"Attached failing validation receipt to {args.agent_id}."
+                )
+                envelope_status = "pass" if receipt["passed"] else "warning"
+            else:
+                if not args.reason.strip() or not args.actor.strip():
+                    return stable_envelope(
+                        command="manager",
+                        status="blocked",
+                        summary="Manager validation-waive requires --actor and --reason.",
+                        errors=[
+                            field
+                            for field, value in (
+                                ("missing actor", args.actor.strip()),
+                                ("missing reason", args.reason.strip()),
+                            )
+                            if not value
+                        ],
+                    )
+                validation_status = "waived"
+                packet["validation_waiver"] = {
+                    "actor": args.actor.strip(),
+                    "reason": args.reason.strip(),
+                    "waived_at": now,
+                    "source": "manager.validation-waive",
+                    "repo_root": repo_root,
+                    "agent_id": args.agent_id,
+                    "task_id": str(session.get("task_id") or ""),
+                }
+                summary = f"Recorded an explicit validation waiver for {args.agent_id}."
+                envelope_status = "warning"
+            conn.execute(
+                """
+                UPDATE qwendex_agent_sessions
+                SET validation_status = ?, context_packet_json = ?, artifacts_json = ?,
+                    heartbeat_at = ?, updated_at = ?
+                WHERE agent_id = ?
+                """,
+                (
+                    validation_status,
+                    json_dumps(packet),
+                    json_dumps(artifacts),
+                    now,
+                    now,
+                    args.agent_id,
+                ),
+            )
+            conn.commit()
+            updated = row_to_agent_session(
+                conn.execute(
+                    "SELECT * FROM qwendex_agent_sessions WHERE agent_id = ?",
+                    (args.agent_id,),
+                ).fetchone()
+            )
+            return stable_envelope(
+                command="manager",
+                status=envelope_status,
+                summary=summary,
+                next_actions=(
+                    ["Review the failing validation receipt before relying on this agent outcome."]
+                    if validation_status == "fail"
+                    else ["Treat this outcome as explicitly unvalidated until replacement evidence is attached."]
+                    if validation_status == "waived"
+                    else []
+                ),
+                data={"agent_session": updated},
             )
         if args.action == "status":
             requested_agent_policy, effective_agent_policy, policy_transition, accepted_turn = manager_session_policy_surface(
@@ -17619,6 +18548,7 @@ def command_manager_state(args: argparse.Namespace, config: dict[str, Any]) -> d
                 "context_budget": args.context_budget or config["context"]["compact_limit"],
                 "model_reasoning_assignment": routing,
                 "spawn_instruction": spawn_instruction(args.agent_id, routing),
+                "native_spawn_arguments": native_spawn_arguments(routing),
                 "review_requirement": args.review_requirement,
                 "risk": risk,
                 "planned_agent_id": str((planned_assignment or {}).get("agent_id") or ""),
@@ -18193,10 +19123,8 @@ def command_manager(args: argparse.Namespace, config: dict[str, Any]) -> dict[st
         local_status = local_subagent_status(config, enabled=current_local_enabled(config, conn), env=os.environ, probe=True)
         kaveman_enabled = current_kaveman_enabled(config, conn)
         stale_after = mode_stale_after_minutes(config, mode, args.stale_after_minutes)
-        reconciliation = reconcile_stale_manager_sessions(
-            conn,
+        reconciliation = manager_reconciliation_not_run(
             stale_after_minutes=stale_after,
-            now=utc_now(),
             repo_root=repo_root,
         )
         sessions, scope_sessions, ledger_sessions = load_manager_session_views(
@@ -18275,6 +19203,54 @@ def command_runtime(args: argparse.Namespace) -> dict[str, Any]:
     return module.command(args)
 
 
+def command_docs(args: argparse.Namespace) -> dict[str, Any]:
+    module = script_module("qwendex_docs")
+    payload = module.command(args, tool_version=VERSION)
+    payload_status = str(payload.get("status") or "error")
+    status = (
+        "pass"
+        if payload_status == "pass"
+        else "blocked"
+        if payload_status == "blocked"
+        else "fail"
+    )
+    artifacts = [
+        str(path)
+        for path in (payload.get("receipt_path"), payload.get("output_path"))
+        if path
+    ]
+    if args.action == "audit":
+        summary = (
+            "Documentation audit passed."
+            if status == "pass"
+            else "Documentation audit found blocking findings."
+            if status == "blocked"
+            else "Documentation audit could not complete."
+        )
+    elif args.action == "build":
+        summary = (
+            "Documentation hub built successfully."
+            if status == "pass"
+            else "Documentation hub build was blocked by audit findings."
+            if status == "blocked"
+            else "Documentation hub build failed."
+        )
+    else:
+        summary = (
+            "Local documentation server stopped normally."
+            if status == "pass"
+            else "Local documentation server could not start."
+        )
+    return stable_envelope(
+        command="docs",
+        status=status,
+        summary=summary,
+        artifacts=artifacts,
+        errors=[str(payload.get("error"))] if payload.get("error") else [],
+        data=payload,
+    )
+
+
 def command_manager_accept(args: argparse.Namespace) -> dict[str, Any]:
     module = script_module("qwendex_manager_acceptance")
     return module.command(args)
@@ -18320,17 +19296,52 @@ def command_version(args: argparse.Namespace, config: dict[str, Any]) -> dict[st
     )
 
 
+def command_about(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, Any]:
+    hosted_routing = config.get("orchestration", {}).get("hosted_worker_routing", {})
+    return stable_envelope(
+        command="about",
+        status="pass",
+        summary="Loaded the Qwendex product and compatibility contract.",
+        data={
+            "product": "Qwendex",
+            "version": VERSION,
+            "definition": PRODUCT_DEFINITION,
+            "distribution": {
+                "qwendex": "source-distributed Python, shell, and JSON control plane",
+                "codex_integration": "version-pinned Rust patch compiled into an optional isolated runtime",
+                "binary_release_artifact": False,
+            },
+            "surfaces": PRODUCT_SURFACES,
+            "compatibility": {
+                "supported_codex_version": SUPPORTED_CODEX_VERSION,
+                "feature_policy": CODEX_0147_FEATURE_POLICY,
+            },
+            "hosted_worker_routing": hosted_routing,
+            "local_model_plane": {
+                "optional": True,
+                "default_offline_safe": True,
+                "acceptance_authority": False,
+            },
+        },
+    )
+
+
 def command_line() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Qwendex public CLI")
+    parser = argparse.ArgumentParser(
+        description="Qwendex control plane for an isolated, customizable Codex CLI runtime",
+    )
     parser.add_argument("--config", type=Path, help="project Qwendex config")
     parser.add_argument("--agent-use", default="", help="effective agent policy: Lite, Medium, Heavy, or Manager")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    check = sub.add_parser("check")
+    about = sub.add_parser("about", help="show product, surface, and Codex compatibility contracts")
+    about.add_argument("--json", action="store_true")
+
+    check = sub.add_parser("check", help="run fast operator health checks")
     check.add_argument("--health-mode", choices=["advisory", "strict"], default="advisory")
     check.add_argument("--json", action="store_true")
 
-    doctor = sub.add_parser("doctor")
+    doctor = sub.add_parser("doctor", help="run deeper configuration and runtime diagnostics")
     doctor.add_argument("--health-mode", choices=["advisory", "strict"], default="advisory")
     doctor.add_argument("--json", action="store_true")
 
@@ -18471,6 +19482,24 @@ def command_line() -> argparse.ArgumentParser:
     search_paths.add_argument("--page-token", default="")
     search_paths.add_argument("--json", action="store_true")
 
+    docs = sub.add_parser("docs")
+    docs_sub = docs.add_subparsers(dest="action", required=True)
+    docs_audit = docs_sub.add_parser("audit")
+    docs_audit.add_argument("--repo", type=Path)
+    docs_audit.add_argument("--policy", type=Path)
+    docs_audit.add_argument("--hub", type=Path)
+    docs_audit.add_argument("--output", type=Path)
+    docs_audit.add_argument("--json", action="store_true")
+    docs_build = docs_sub.add_parser("build")
+    docs_build.add_argument("--hub", type=Path, required=True)
+    docs_build.add_argument("--strict", action="store_true")
+    docs_build.add_argument("--json", action="store_true")
+    docs_serve = docs_sub.add_parser("serve")
+    docs_serve.add_argument("--hub", type=Path, required=True)
+    docs_serve.add_argument("--bind", default="127.0.0.1")
+    docs_serve.add_argument("--port", type=int, default=8000)
+    docs_serve.add_argument("--json", action="store_true")
+
     agent = sub.add_parser("agent")
     agent.add_argument(
         "action",
@@ -18586,7 +19615,7 @@ def command_line() -> argparse.ArgumentParser:
     learn.add_argument("--json", action="store_true")
 
     manager = sub.add_parser("manager")
-    manager.add_argument("action", nargs="?", choices=["status", "assign", "waive", "heartbeat", "close", "close-stale", "repair", "reconcile", "mode", "estimate", "preflight", "decision", "launch-status", "kaveman", "local", "accept", "evidence"])
+    manager.add_argument("action", nargs="?", choices=["status", "assign", "waive", "validate", "validation-waive", "heartbeat", "close", "close-stale", "repair", "reconcile", "mode", "estimate", "preflight", "decision", "launch-status", "kaveman", "local", "accept", "evidence"])
     manager.add_argument("--mode", choices=["manual", "off", "auto", "lite", "medium", "heavy", "manager", "manager_only"], default="")
     manager.add_argument("--set", default="")
     manager.add_argument("--cycle", action="store_true")
@@ -18611,11 +19640,13 @@ def command_line() -> argparse.ArgumentParser:
     manager.add_argument("--file", action="append")
     manager.add_argument("--needed-doc", action="append")
     manager.add_argument("--owner", default="manager")
+    manager.add_argument("--actor", default="")
     manager.add_argument("--write-surface", default="read-only")
     manager.add_argument("--stop-condition", default="return compact findings")
     manager.add_argument("--reason", default="")
     manager.add_argument("--expected-artifact", default="")
     manager.add_argument("--receipt-path", default="")
+    manager.add_argument("--sha256", default="")
     manager.add_argument("--context-budget", type=int, default=0)
     manager.add_argument("--risk", choices=["low", "medium", "high"], default="")
     manager.add_argument("--review-requirement", default="root review suggested")
@@ -18665,7 +19696,7 @@ def command_line() -> argparse.ArgumentParser:
     codex_patch.add_argument("--dry-run", action="store_true")
     codex_patch.add_argument("--json", action="store_true")
 
-    version = sub.add_parser("version")
+    version = sub.add_parser("version", help="show the Qwendex version")
     version.add_argument("--json", action="store_true")
     return parser
 
@@ -18680,6 +19711,10 @@ def human_print(data: dict[str, Any]) -> None:
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
+    # Documentation audit/build is repository-policy driven and deliberately
+    # remains usable without Manager state or the Qwendex project JSON.
+    if args.command == "docs":
+        return command_docs(args)
     config = load_qwendex_config(project_config=args.config)
     # Performance telemetry is deliberately outside the Manager data plane.
     # Keep its status, summary, purge, and isolated benchmark commands from
@@ -18739,6 +19774,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     apply_agent_policy_env(agent_policy)
     if args.command == "check":
         return command_check(args, config)
+    if args.command == "about":
+        return command_about(args, config)
     if args.command == "doctor":
         return command_doctor(args, config)
     if args.command in {"up", "down", "restart"}:
@@ -18783,6 +19820,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def exit_code(data: Mapping[str, Any]) -> int:
+    if data.get("command") == "docs":
+        if data.get("status") == "blocked":
+            return 1
+        if data.get("status") not in {"pass", "ready", "standby", "warning"}:
+            return 2
     return 0 if data.get("status") in {"pass", "ready", "standby", "warning"} else 1
 
 
@@ -18804,6 +19846,10 @@ def main(argv: list[str] | None = None) -> int:
         print(data.get("data", {}).get("text", data["summary"]))
     elif getattr(args, "json", False):
         print_json(data)
+    elif args.command == "docs":
+        module = script_module("qwendex_docs")
+        for line in module.human_lines(data.get("data", {})):
+            print(line)
     else:
         human_print(data)
     return exit_code(data)
