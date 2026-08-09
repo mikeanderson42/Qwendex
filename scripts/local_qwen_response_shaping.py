@@ -3,8 +3,81 @@
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
+
+
+def schema_required_keys(payload: dict[str, Any] | None) -> set[str]:
+    if not isinstance(payload, dict):
+        return set()
+    candidates: list[Any] = []
+    text = payload.get("text")
+    if isinstance(text, dict):
+        text_format = text.get("format")
+        if isinstance(text_format, dict):
+            candidates.append(text_format.get("schema"))
+    response_format = payload.get("response_format")
+    if isinstance(response_format, dict):
+        candidates.append(response_format.get("schema"))
+        json_schema = response_format.get("json_schema")
+        if isinstance(json_schema, dict):
+            candidates.append(json_schema.get("schema"))
+    for schema in candidates:
+        if not isinstance(schema, dict):
+            continue
+        required = schema.get("required")
+        if isinstance(required, list):
+            keys = {str(key) for key in required if str(key).strip()}
+            if keys:
+                return keys
+    return set()
+
+
+def canonical_json_object(output_text: str, required: set[str]) -> str:
+    if not required or not output_text or len(output_text) > 50000:
+        return ""
+    process_exit = re.search(r"Process exited with code\s+(-?\d+)", output_text)
+    if process_exit and int(process_exit.group(1)) != 0:
+        return ""
+    candidates: list[Any] = []
+    try:
+        parsed = json.loads(output_text)
+    except json.JSONDecodeError:
+        parsed = None
+    if parsed is not None:
+        if (
+            isinstance(parsed, dict)
+            and parsed.get("exit_code") is not None
+            and parsed.get("exit_code") != 0
+        ):
+            return ""
+        candidates.append(parsed)
+        if isinstance(parsed, dict) and parsed.get("exit_code") in {None, 0}:
+            for field in ("output", "aggregated_output", "stdout"):
+                nested = parsed.get(field)
+                if not isinstance(nested, str) or not nested.strip():
+                    continue
+                try:
+                    candidates.append(json.loads(nested))
+                except json.JSONDecodeError:
+                    pass
+
+    decoder = json.JSONDecoder()
+    for match in re.finditer(r"(?m)^\s*\{", output_text):
+        candidate_text = output_text[match.start() :].lstrip()
+        try:
+            candidate, end = decoder.raw_decode(candidate_text)
+        except json.JSONDecodeError:
+            continue
+        if candidate_text[end:].strip() not in {"", "```"}:
+            continue
+        candidates.append(candidate)
+
+    for candidate in reversed(candidates):
+        if isinstance(candidate, dict) and required.issubset(candidate):
+            return json.dumps(candidate, ensure_ascii=False, indent=2)
+    return ""
 
 
 def collapse_repeated_final_text(text: str) -> str:
