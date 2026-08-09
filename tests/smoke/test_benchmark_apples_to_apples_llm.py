@@ -5,7 +5,6 @@ import json
 import shutil
 import socket
 import subprocess
-import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -274,7 +273,76 @@ def test_bubblewrap_command_has_fail_closed_isolation_controls() -> None:
     ):
         assert required in command
     assert command[command.index("--ro-bind") + 1 : command.index("--ro-bind") + 3] == ["/usr", "/usr"]
-    assert command[-1] == "--"
+    assert command[-2] == "--"
+    assert benchmark.trusted_root_owned_executable(
+        command[-1],
+        allowed_roots=(Path("/usr"),),
+    ) == Path(command[-1])
+
+
+def test_bubblewrap_command_uses_system_python_when_runner_is_from_toolcache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    benchmark = load_benchmark_module()
+    monkeypatch.setattr(
+        benchmark.sys,
+        "executable",
+        "/opt/hostedtoolcache/Python/3.11.15/x64/bin/python3",
+    )
+
+    command = benchmark.model_sandbox_command()
+
+    assert command is not None
+    assert command[-2:] == ["--", str(Path("/usr/bin/python3").resolve())]
+
+
+def test_sandbox_python_selection_fails_closed_when_both_candidates_are_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    benchmark = load_benchmark_module()
+    candidates: list[str] = []
+
+    def reject_candidate(value, *, allowed_roots):
+        candidates.append(str(value))
+        return None
+
+    monkeypatch.setattr(benchmark, "trusted_root_owned_executable", reject_candidate)
+
+    assert benchmark.trusted_model_sandbox_python() is None
+    assert candidates == [benchmark.sys.executable, "/usr/bin/python3"]
+
+
+def test_model_runner_cannot_append_an_unvalidated_python(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    benchmark = load_benchmark_module()
+    sandbox_command = ["/usr/bin/bwrap", "--", "/usr/bin/python3"]
+    captured: dict[str, object] = {}
+
+    class FakeProcess:
+        returncode = 0
+
+        def communicate(self, input_payload, timeout):
+            captured["input"] = input_payload
+            captured["timeout"] = timeout
+            return json.dumps({"passed": True, "case_results": []}), None
+
+    def capture_popen(argv, **kwargs):
+        captured["argv"] = argv
+        captured["kwargs"] = kwargs
+        return FakeProcess()
+
+    monkeypatch.setattr(benchmark, "model_sandbox_command", lambda: sandbox_command)
+    monkeypatch.setattr(benchmark.subprocess, "Popen", capture_popen)
+
+    result = benchmark.run_python_function_tests(
+        "def identity(value):\n    return value",
+        "identity",
+        [((1,), 1)],
+    )
+
+    assert result["passed"] is True
+    assert captured["argv"] == [*sandbox_command, "-I", "-c", benchmark.MODEL_CODE_RUNNER]
 
 
 @pytest.mark.skipif(shutil.which("bwrap") is None, reason="bubblewrap is required for the Linux sandbox boundary")
@@ -292,7 +360,7 @@ def test_bubblewrap_boundary_hides_host_state(tmp_path: Path) -> None:
         f"'host_sentinel': Path({str(host_sentinel)!r}).exists(), 'home_env': os.environ.get('HOME')}}))\n"
     )
     result = subprocess.run(
-        [*command, str(Path(sys.executable).resolve()), "-I", "-c", probe],
+        [*command, "-I", "-c", probe],
         text=True,
         capture_output=True,
         check=False,
@@ -324,7 +392,7 @@ def test_bubblewrap_boundary_cannot_reach_host_loopback() -> None:
             f"print(client.connect_ex(('127.0.0.1', {port})))\n"
         )
         result = subprocess.run(
-            [*command, str(Path(sys.executable).resolve()), "-I", "-c", probe],
+            [*command, "-I", "-c", probe],
             text=True,
             capture_output=True,
             check=False,

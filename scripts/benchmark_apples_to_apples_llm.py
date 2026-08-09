@@ -526,16 +526,25 @@ def trusted_root_owned_executable(
     return resolved
 
 
+def trusted_model_sandbox_python() -> Path | None:
+    """Select a trusted system Python independently of the benchmark runner."""
+    for candidate in (sys.executable, "/usr/bin/python3"):
+        sandbox_python = trusted_root_owned_executable(
+            candidate,
+            allowed_roots=(Path("/usr"),),
+        )
+        if sandbox_python is not None:
+            return sandbox_python
+    return None
+
+
 def model_sandbox_command() -> list[str] | None:
     """Build the fail-closed bubblewrap command used for generated model code."""
     bubblewrap = trusted_root_owned_executable(
         shutil.which("bwrap"),
         allowed_roots=(Path("/usr/bin"), Path("/bin")),
     )
-    sandbox_python = trusted_root_owned_executable(
-        sys.executable,
-        allowed_roots=(Path("/usr"),),
-    )
+    sandbox_python = trusted_model_sandbox_python()
     if bubblewrap is None or sandbox_python is None:
         return None
     return [
@@ -587,6 +596,7 @@ def model_sandbox_command() -> list[str] | None:
         "--cap-drop",
         "ALL",
         "--",
+        str(sandbox_python),
     ]
 
 
@@ -612,7 +622,7 @@ def run_python_function_tests(code: str, function_name: str, tests: list[tuple[t
         return {"passed": False, "error": f"benchmark test data is not transportable: {exc}", "case_results": []}
     try:
         process = subprocess.Popen(
-            [*sandbox_command, str(Path(sys.executable).resolve()), "-I", "-c", MODEL_CODE_RUNNER],
+            [*sandbox_command, "-I", "-c", MODEL_CODE_RUNNER],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
