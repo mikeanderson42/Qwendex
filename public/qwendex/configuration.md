@@ -265,8 +265,11 @@ is configured; it does not probe availability.
 - `kaveman`: persisted enabled state and the enforced terse-output directive
 - `local_subagents`: default Local enabled state
 - `mode_profiles`: status label and native worker capacity per mode:
-  Off 0, Auto 4, Lite 1, Medium 2, Heavy 3, and Manager 4; configured capacity
-  is bounded by the conservative hard ceiling of 8
+  Off 0, Auto 4, Lite 1, Medium 2, Heavy 3, and Manager 4. Manager mode is
+  configured for a four-worker owner-side cap; a managed owner launch must
+  supply that cap and a reservation claim. The owner and Qwendex ledgers are
+  separate until the authenticated two-phase acknowledgment, while the legacy
+  product ceiling of 8 remains available to non-manager compatibility profiles
 - `local_qwen_eligibility`: deterministic classifier classes and max risk for
   Local lanes; the shipped allowlist covers repository mapping, read-heavy
   investigation, single-file reads, small edits, and test/regression lanes,
@@ -279,10 +282,12 @@ The canonical cycle order and patched-TUI hotkeys are code/keymap contracts,
 not mutable Qwendex configuration. `Alt+M`, `Alt+K`, and `Alt+L` may be rebound
 through the Codex TUI keymap. `manager estimate` is a deterministic CLI
 heuristic; it does not invoke a model or skill and has no model-budget config.
-The selected mode profile's `max_subagents` also supplies
-`AgentPolicy.max_threads`, so status, ledger capacity, and backend policy share
-one limit. Codex V2 counts the root thread separately, so Qdex supplies a
-native per-session ceiling of `max_subagents + 1`.
+The selected mode profile's `max_subagents` supplies the resolved
+`AgentPolicy.max_threads`, subject to the Manager shared-pool clamp. The policy
+reports both `profile_max_subagents` (the configured/advisory value) and
+`configured_max_subagents` (the enforced value). Codex V2 counts the root
+thread separately, so Qdex supplies a native per-session ceiling of
+`max_subagents + 1`.
 
 Each Qdex launch has a private control record. Native capacity, depth, wait
 limits, mode guidance, and Local routing are sealed at launch; changing those

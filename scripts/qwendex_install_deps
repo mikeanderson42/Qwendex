@@ -6,7 +6,7 @@ INSTALL_SYSTEM=1
 INSTALL_USER=1
 JSON=0
 ASSUME_YES=1
-export QWENDEX_CODEX_REQUIRED_VERSION="${QWENDEX_CODEX_REQUIRED_VERSION:-0.147.0}"
+export QWENDEX_CODEX_REQUIRED_VERSION="${QWENDEX_CODEX_REQUIRED_VERSION:-0.150.0}"
 export QWENDEX_JSONSCHEMA_REQUIRED_VERSION="${QWENDEX_JSONSCHEMA_REQUIRED_VERSION:-4.26.0}"
 export QWENDEX_PYTEST_REQUIRED_VERSION="${QWENDEX_PYTEST_REQUIRED_VERSION:-9.0.3}"
 export QWENDEX_RUFF_REQUIRED_VERSION="${QWENDEX_RUFF_REQUIRED_VERSION:-0.15.20}"
@@ -16,7 +16,7 @@ usage() {
 Usage: scripts/qwendex_install_deps [--check|--install] [--no-system] [--no-user] [--json]
 
 Installs or checks the host tools Qwendex needs for the current public harness:
-bash, python3, git, rsync, curl, Codex CLI, jsonschema, pytest, ruff,
+bash, python3, git, rsync, curl, jq, Codex CLI, jsonschema, pytest, ruff,
 Rust/cargo/rustfmt, ripgrep, tmux, and GitHub CLI where available.
 
 Qwendex requires Bash 4 or newer and Python 3.11 or newer.
@@ -27,7 +27,7 @@ installs use python3 -m pip --user, rustup, cargo install, and npm with a
 PEP 668's pip override is added only for an externally managed, non-virtualenv
 Python and remains paired with --user.
 
-Codex CLI must match QWENDEX_CODEX_REQUIRED_VERSION (default 0.147.0).
+Codex CLI must match QWENDEX_CODEX_REQUIRED_VERSION (default 0.150.0).
 Override both it and QWENDEX_CODEX_NPM_SPEC only for compatibility testing.
 EOF
 }
@@ -151,6 +151,7 @@ install_system_basics() {
   have git || missing+=(git)
   have rsync || missing+=(rsync)
   have curl || missing+=(curl)
+  have jq || missing+=(jq)
   have tmux || missing+=(tmux)
 
   if have apt-get; then
@@ -258,7 +259,7 @@ from importlib.metadata import PackageNotFoundError, version as distribution_ver
 from pathlib import Path
 
 log_file = Path(sys.argv[1])
-required_codex_version = os.environ.get("QWENDEX_CODEX_REQUIRED_VERSION", "0.147.0")
+required_codex_version = os.environ.get("QWENDEX_CODEX_REQUIRED_VERSION", "0.150.0")
 required_module_versions = {
     "jsonschema": os.environ.get("QWENDEX_JSONSCHEMA_REQUIRED_VERSION", "4.26.0"),
     "pytest": os.environ.get("QWENDEX_PYTEST_REQUIRED_VERSION", "9.0.3"),
@@ -312,7 +313,7 @@ def module_version(name: str) -> dict[str, object]:
         "returncode": result.returncode,
     }
 
-commands = ["bash", "python3", "git", "rsync", "curl", "codex", "cargo", "rustfmt", "rg", "tmux", "gh", "npm"]
+commands = ["bash", "python3", "git", "rsync", "curl", "jq", "codex", "cargo", "rustfmt", "rg", "tmux", "gh", "npm"]
 tools = {name: version(name) for name in commands}
 python_module_versions = {
     name: module_version(name) for name in required_module_versions
@@ -321,7 +322,7 @@ python_modules = {
     name: bool(details["available"])
     for name, details in python_module_versions.items()
 }
-required = ["bash", "python3", "git", "rsync", "curl", "codex"]
+required = ["bash", "python3", "git", "rsync", "curl", "jq", "codex"]
 developer = ["cargo", "rustfmt", "rg", "tmux", "gh"]
 missing_required = [name for name in required if not tools[name]["available"]]
 python_compatible = sys.version_info >= (3, 11)

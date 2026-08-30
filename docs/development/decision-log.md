@@ -1,5 +1,131 @@
 # Qwendex Development Decision Log
 
+## Codex 0.150 Source-Bound Rebase
+
+Decision: publish Qwendex `0.6.10` against official Codex `rust-v0.150.0` and
+bind its source commit, canonical full-index patch digest, normalized
+Cargo.lock digest, binary pair, and versioned models-cache file into one
+runtime contract. The rebase preserves the Qwendex footer, hotkeys, bounded
+V2 worker policy, no-child wait behavior, child-tool surface, and Codex Apps
+degraded-ready recovery while adapting to the 0.150 V2 handler and MCP
+startup-runtime APIs.
+
+The 0.150 source patch keeps the Rusty V8 sandbox pair at the Codex-published
+`150.4.0` archive/binding release and records the same verified artifact
+digests. Upstream tests whose native role/model/reasoning/service-tier or
+unbounded-depth expectations conflict with the Qwendex contract are marked
+ignored with an explicit reason; focused Qwendex tests prove the sealed spawn
+schema and cached Apps startup behavior instead.
+
+Reason: the Codex release changes both public handler signatures and internal
+MCP startup state. A version-specific fail-closed rebase, measured source and
+lock digests, and fresh source compilation preserve the supported Qdex boundary
+without changing direct stock-Codex use.
+
+## Authenticated Nested Spawn and Read-Only Flag Closure
+
+Decision: a depth-one nested spawn is admitted only when the child identity is
+already registered as an active/reserved read-only Qwendex session. The
+`nested_spawn_approved` hook field is not an authority by itself, and a
+declared writable profile cannot be upgraded by a read-only ledger row. The
+`qdex` read-only wrapper rejects writable sandbox overrides in long, short,
+and compact `-s` forms; an explicit `max_depth: 0` also overrides any nested
+fallback rather than being treated as missing.
+
+Reason: model-controlled hook fields and CLI last-flag-wins behavior must not
+silently widen the Manager's bounded child policy. An external owner remains
+the sole-writer authority, while generic Qwendex enforces
+the authenticated read-only/depth boundary and shared-cap posture.
+
+## Manager Shared Worker Pool Clamp
+
+Decision: Manager mode resolves to a maximum of four native worker lanes across
+active goals and repositories. A legacy or local Manager profile may advertise
+a larger `max_subagents` value for auditability, but the resolved policy keeps
+that value advisory, records `manager_pool_clamped`, and exposes the enforced
+capacity and source.
+
+Reason: the external owner is the control point for decomposition, routing,
+synthesis, and escalation. A single shared pool prevents concurrent Manager
+turns from multiplying child usage while preserving adaptive child model selection and
+the existing single-writer/depth guards. Non-manager compatibility profiles
+retain the historical product ceiling.
+
+## Path-Free Native Reservation Projection
+
+Decision: Manager status exposes a pure
+`qwendex.native_reservation_projection.v1` containing the observed launch
+ledger, session/turn/runtime identities, bounded capacity, and native
+reservation rows. It strips repository paths and hashes native task names. The
+projection is always marked `shadow_only` or a typed blocker and never claims
+provider trust or signed acknowledgment. A turn-local observed slot and the
+Qwendex generation-identifier digest are explicitly non-authoritative; the
+runtime-contract digest remains a separate field for owner binding.
+
+Reason: downstream owner supervisors need a stable, generic observation seam to
+bind their own authenticated reservation contracts, but Qwendex must remain
+product-generic and must not embed private owner paths or promote local SQLite
+bookkeeping into execution authority. The existing Manager ledger remains the
+canonical source; no second ledger or live strict-mode default is introduced.
+
+## Downstream Global Worker Cap
+
+Decision: Qwendex accepts an optional `QWENDEX_GLOBAL_WORKER_CAP` environment
+bound. The effective Manager worker/thread capacity is the lower of that bound
+and the configured mode capacity; the resolved value is included in the agent
+policy hash and exported as `QWENDEX_EFFECTIVE_GLOBAL_WORKER_CAP`.
+
+Reason: downstream supervisors can enforce one shared worker
+pool across repositories without adding private downstream paths or coupling
+Qwendex to a product-specific control plane. Standalone Qwendex sessions keep
+their configured capacity when the bound is absent. The `scripts/qdex`
+owner-supervisor wrapper rejects malformed explicit bounds instead of silently
+widening the shared pool.
+
+The wrapper also rejects a caller-supplied writable sandbox or yolo bypass when
+the resolved permission mode is `read-only`; the injected read-only sandbox is
+therefore fail-closed even when Codex would otherwise apply a later flag.
+
+The Python policy resolver applies the same boundary for direct CLI and hook
+callers: a malformed explicit cap blocks policy resolution and exposes zero
+native capacity, rather than falling back to the standalone mode capacity.
+
+Owner-local integrations may additionally set
+`QWENDEX_NATIVE_RESERVATION_MODE=strict`. In that mode root spawn admission
+and `SubagentStart` block when the exact reservation, Manager identity, or
+capacity proof is unavailable. The default standalone mode remains advisory so
+existing Qwendex sessions keep their current lifecycle behavior. The `qdex`
+owner-supervisor wrapper now requires that strict mode whenever
+`QWENDEX_GLOBAL_WORKER_CAP` is supplied, preventing a downstream shared-cap
+launch from silently continuing after reservation bookkeeping fails.
+
+## Manager Read-Only Depth-Two Policy
+
+Decision: Manager mode may authorize a depth-one read-only specialist to spawn
+depth-two read-only leaves, while leaves and write-capable specialists remain
+unable to spawn. Qdex permission posture now accepts an explicit `read-only`
+mode and forces the Codex execution sandbox to match it.
+
+Reason: bounded specialist fan-out can save context without turning every child
+into a manager or weakening the root single-writer boundary. The policy is
+explicit in the JSON agent-policy projection, checked at the pre-tool hook, and
+covered by positive/negative smoke tests; the default modes and default Qdex
+permission remain unchanged.
+
+## Strict Reservation Hook Trust
+
+Decision: Manager launch health includes verified hook metadata in its trust
+predicate whenever `QWENDEX_NATIVE_RESERVATION_MODE=strict`. Compatibility
+launches without strict reservation remain advisory and expose the observed
+`hook_trusted` value without treating it as execution authority.
+
+Reason: owner approval-bound launches depend on Qwendex pre-tool reservation
+enforcement; accepting a strict launch with missing hooks would leave the
+shared-cap and single-writer policy unenforced. Keeping the gate strict-only
+preserves existing standalone compatibility behavior while making downstream
+authenticated launches fail closed until the hook surface is actually
+verified.
+
 ## Codex 0.147 Sandboxed V8 Release Pair
 
 Decision: retrieve Codex 0.147's matching sandboxed Rusty V8 archive and
@@ -1174,3 +1300,81 @@ Reason: source pins alone cannot prove a safe compatibility update when
 upstream moves implementation or test fixtures. A version-specific
 fail-closed patch, measured provenance, and a newly built immutable generation
 preserve the supported Qdex boundary without changing direct stock-Codex use.
+
+## Strict External Worker-Cap Clamp
+
+Decision: when `QWENDEX_GLOBAL_WORKER_CAP` is supplied with strict native
+reservation mode, `scripts/qdex` clamps both the worker and native-thread
+settings derived from the status payload to that external cap (workers plus the
+root thread). A stale or over-advertised status response cannot widen an
+owner-managed shared pool.
+
+Reason: the status command is an advisory input to the launcher, while the
+external cap is the authoritative cross-plane boundary. The clamp preserves
+standalone Qwendex capacity when no external cap is present and keeps the
+generic Qwendex policy reusable for downstream owners.
+
+## No-Model Manager Capability Receipt
+
+Decision: expose `scripts/qwendex capability --json` as a bounded structural
+probe for the selected runtime generation. The probe validates the selected
+generation manifest and structural contract, plus the actual `qdex` wrapper,
+then runs Manager preflight in an isolated temporary state directory with
+read-only permission, a strict four-worker cap, and depth two. It writes an
+owner-private,
+digest-bound `qwendex.runtime_capability_receipt.v1` under the runtime root.
+
+The receipt is explicitly structural evidence only: it never launches Codex,
+opens a prompt, contacts a model/provider, or asserts process identity. An owner
+may consume it to clear `qwendex_planner_policy_unbound` when the generation,
+selector, policy posture, and receipt digest still match; signed runtime and
+provider attestation remain separate blockers.
+
+Reason: the manager/child routing policy already existed, but the owner-local
+adapter could only observe manifests and therefore could not distinguish a
+declared policy from the launch contract actually prepared for Qdex. A
+no-model receipt closes that integration seam without turning local
+bookkeeping into a trust claim.
+
+## Unactivated Runtime Candidate Capability Probe
+
+Decision: `scripts/qwendex capability --generation <id> --json` may inspect a
+validated runtime candidate directly, without changing `current.json`. When no
+explicit output is supplied, the receipt is stored inside the candidate
+generation rather than replacing the active-generation capability receipt.
+
+Reason: downstream supervisors need to qualify a rebuilt wrapper before any
+activation or live-session restart. Keeping candidate evidence generation-local
+preserves the active selector and prevents an owner from mistaking an unactivated
+structural receipt for the runtime currently serving new launches.
+
+## 2026-08-16 Owner-Managed Candidate Qualification
+
+Decision: build and qualify the current source worktree as candidate generation
+`rtg-65afe60c2ded700d104a`, but do not activate it. The candidate manifest is
+validated, and its generation-local capability receipt reports all structural
+Manager checks passing: read-only permission, strict native reservation, the
+four-worker cap, depth two, leaf non-spawn, prompt-free argv, and the private
+wrapper/cap guards. The receipt remains structural-only: no provider/runtime
+attestation or live process identity is asserted.
+
+Reason: the active selector still points at the older blocked generation
+`rtg-4ece5aef9bbb1f846695`. Candidate qualification gives an owner a concrete,
+digest-bound artifact to review without changing the running Qwendex lane or
+silently promoting a dirty source tree. Activation remains a separately
+authorized operation after trusted runtime/provider evidence and the owner
+supervisor acknowledgment exist.
+
+## Recoverable Duplicate-Read Tool Calls Stay Tool Turns
+
+Decision: when the local runtime guard returns `RECOVER` for a duplicate
+read-only `exec_command`, the Responses bridge emits a static, harmless
+`DUPLICATE_READ_ALREADY_DONE` `exec_command` function call instead of a
+terminal assistant rejection message. `STOP` decisions remain rejected, and
+the original duplicate command is never re-emitted.
+
+Reason: Codex needs a tool-result turn to continue safely from the prior read
+or select a distinct action. Rendering recovery as ordinary assistant text
+ended otherwise valid tool workflows and made structured grounding fail before
+the model could complete its task. The marker command has no user-derived
+arguments, writes nothing, and preserves duplicate-read suppression.

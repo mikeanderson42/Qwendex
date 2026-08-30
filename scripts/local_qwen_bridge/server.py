@@ -70,6 +70,9 @@ DEFAULT_LISTEN_HOST = "127.0.0.1"
 DEFAULT_LISTEN_PORT = 1234
 DEFAULT_TARGET_BASE = "http://127.0.0.1:4000"
 DEFAULT_SYSTEM_PROMPT_FILE = ""
+DEFAULT_LOCAL_MODEL = (
+    os.environ.get("LOCAL_QWEN_MODEL", "qwen-local").strip() or "qwen-local"
+)
 BRIDGE_VERSION = "qwendex-local-qwen-responses-v2"
 
 
@@ -101,6 +104,21 @@ DEFAULT_TOOL_MIN_P = optional_env_float("CODEX_TEXTGEN_TOOL_MIN_P")
 DEFAULT_TOOL_REASONING_EFFORT = os.environ.get(
     "CODEX_TEXTGEN_TOOL_REASONING_EFFORT", ""
 ).strip()
+DEFAULT_REASONING_DEFAULT_EFFORT = os.environ.get(
+    "CODEX_TEXTGEN_REASONING_DEFAULT_EFFORT", "medium"
+).strip().lower()
+DEFAULT_REASONING_BUDGET_LOW = int(
+    os.environ.get("CODEX_TEXTGEN_REASONING_BUDGET_LOW", "1024")
+)
+DEFAULT_REASONING_BUDGET_MEDIUM = int(
+    os.environ.get("CODEX_TEXTGEN_REASONING_BUDGET_MEDIUM", "2048")
+)
+DEFAULT_REASONING_BUDGET_XHIGH = int(
+    os.environ.get("CODEX_TEXTGEN_REASONING_BUDGET_XHIGH", "4096")
+)
+DEFAULT_REASONING_OUTPUT_RESERVE_TOKENS = int(
+    os.environ.get("CODEX_TEXTGEN_REASONING_OUTPUT_RESERVE_TOKENS", "1024")
+)
 DEFAULT_CONTEXT_LIMIT_TOKENS = int(
     os.environ.get("CODEX_TEXTGEN_CONTEXT_LIMIT_TOKENS", "0")
 )
@@ -828,13 +846,45 @@ def responses_input_to_messages(
     return messages
 
 
+def normalize_qwen_reasoning_effort(value: Any, *, default: str) -> str:
+    """Map generic client tiers to the three Qwen3.8 template values."""
+    fallback = str(default or "medium").strip().lower()
+    if fallback not in {"low", "medium", "xhigh"}:
+        fallback = "medium"
+    raw = str(value or "").strip().lower()
+    aliases = {
+        "none": "none",
+        "minimal": "low",
+        "low": "low",
+        "medium": "medium",
+        "high": "xhigh",
+        "max": "xhigh",
+        "ultra": "xhigh",
+        "xhigh": "xhigh",
+    }
+    return aliases.get(raw, fallback)
+
+
+def reasoning_budget_for_effort(effort: str) -> int:
+    budgets = {
+        "low": ProxyHandler.reasoning_budget_low,
+        "medium": ProxyHandler.reasoning_budget_medium,
+        "xhigh": ProxyHandler.reasoning_budget_xhigh,
+    }
+    return max(1, int(budgets.get(effort, ProxyHandler.reasoning_budget_medium)))
+
+
 def responses_payload_to_tabby_chat(payload: dict[str, Any]) -> dict[str, Any]:
     tools = payload.get("tools")
+    # Native forwarding and the compact XML convention are alternative tool
+    # protocols.  Supplying both makes a model choose between incompatible
+    # instructions, so a native-tool preflight would not be a fair test.
+    native_tool_mode = ProxyHandler.native_tools and isinstance(tools, list)
     chat_payload: dict[str, Any] = {
         "model": payload.get("model"),
         "messages": responses_input_to_messages(
             payload,
-            tool_prompt=build_compact_tool_prompt(tools),
+            tool_prompt=None if native_tool_mode else build_compact_tool_prompt(tools),
         ),
         "stream": False,
     }
@@ -875,6 +925,55 @@ def responses_payload_to_tabby_chat(payload: dict[str, Any]) -> dict[str, Any]:
     else:
         chat_payload["max_tokens"] = ProxyHandler.max_output_tokens
 
+    has_tools = isinstance(tools, list) and bool(tools)
+    enable_thinking = ProxyHandler.enable_thinking
+    if (
+        enable_thinking
+        and ProxyHandler.disable_thinking_for_tools
+        and has_tools
+    ):
+        enable_thinking = False
+    if (
+        enable_thinking
+        and chat_payload["max_tokens"] < ProxyHandler.thinking_min_output_tokens
+    ):
+        enable_thinking = False
+
+    requested_reasoning_effort = payload.get("reasoning_effort")
+    reasoning = payload.get("reasoning")
+    if not requested_reasoning_effort and isinstance(reasoning, dict):
+        requested_reasoning_effort = reasoning.get("effort")
+    if (
+        not requested_reasoning_effort
+        and isinstance(tools, list)
+        and tools
+        and ProxyHandler.tool_reasoning_effort
+    ):
+        requested_reasoning_effort = ProxyHandler.tool_reasoning_effort
+    native_reasoning_effort = normalize_qwen_reasoning_effort(
+        requested_reasoning_effort,
+        default=ProxyHandler.reasoning_default_effort,
+    )
+    if native_reasoning_effort == "none":
+        enable_thinking = False
+    reasoning_budget = 0
+    if enable_thinking:
+        reasoning_budget = reasoning_budget_for_effort(native_reasoning_effort)
+        reserve = min(
+            max(0, ProxyHandler.reasoning_output_reserve_tokens),
+            max(0, ProxyHandler.max_output_tokens - 1),
+        )
+        reasoning_budget = min(
+            reasoning_budget,
+            max(1, ProxyHandler.max_output_tokens - reserve),
+        )
+        required_output = reasoning_budget + reserve
+        chat_payload["max_tokens"] = max(chat_payload["max_tokens"], required_output)
+        # This installed llama.cpp build honors the established
+        # `thinking_budget_tokens` request field. Keep the compatibility name
+        # here rather than relying on the newer alias being silently ignored.
+        chat_payload["thinking_budget_tokens"] = reasoning_budget
+
     if isinstance(tools, list) and tools:
         chat_payload["temperature"] = ProxyHandler.tool_temperature
     elif isinstance(payload.get("temperature"), (int, float)):
@@ -896,26 +995,22 @@ def responses_payload_to_tabby_chat(payload: dict[str, Any]) -> dict[str, Any]:
     elif isinstance(tools, list) and tools and ProxyHandler.tool_min_p is not None:
         chat_payload["min_p"] = ProxyHandler.tool_min_p
 
-    reasoning_effort = payload.get("reasoning_effort")
-    reasoning = payload.get("reasoning")
-    if not reasoning_effort and isinstance(reasoning, dict):
-        reasoning_effort = reasoning.get("effort")
-    if isinstance(reasoning_effort, str) and reasoning_effort:
-        chat_payload["reasoning_effort"] = reasoning_effort
-    elif isinstance(tools, list) and tools and ProxyHandler.tool_reasoning_effort:
-        chat_payload["reasoning_effort"] = ProxyHandler.tool_reasoning_effort
     if payload.get("stop") is not None:
         chat_payload["stop"] = payload["stop"]
 
     chat_payload["add_generation_prompt"] = True
     chat_payload["chat_template_kwargs"] = {
-        "enable_thinking": ProxyHandler.enable_thinking,
+        "enable_thinking": enable_thinking,
         "preserve_thinking": ProxyHandler.preserve_thinking,
     }
+    if enable_thinking:
+        chat_payload["chat_template_kwargs"]["reasoning_effort"] = (
+            native_reasoning_effort
+        )
     chat_payload["template_vars"] = {
-        "enable_thinking": ProxyHandler.enable_thinking,
+        "enable_thinking": enable_thinking,
         "preserve_thinking": ProxyHandler.preserve_thinking,
-        "thinking_budget": -1 if ProxyHandler.enable_thinking else 0,
+        "thinking_budget": reasoning_budget if enable_thinking else 0,
     }
     return chat_payload
 
@@ -2087,6 +2182,14 @@ def normalize_function_arguments(
         if isinstance(parsed.get("cmd"), str):
             parsed["cmd"] = sanitize_exec_command(parsed["cmd"])
         normalize_exec_workdir(parsed)
+        # Codex only accepts a justification when the call also carries an
+        # explicit sandbox_permissions value.  Local model tool schemas often
+        # expose justification as an optional field, and the model may emit it
+        # for an otherwise ordinary command.  The outer launcher already owns
+        # the sandbox/approval policy, so discard only this malformed orphan;
+        # preserve paired escalation requests for the router to enforce.
+        if "justification" in parsed and "sandbox_permissions" not in parsed:
+            parsed.pop("justification", None)
     elif normalized_name == "update_plan":
         plan_value = parsed.get("plan")
         if isinstance(plan_value, str) and plan_value.strip().startswith("["):
@@ -2271,6 +2374,47 @@ def chat_completion_to_response(
             "arguments": normalized_arguments,
         }
         decision = runtime_guard.evaluate_proposed_call(effective_history, proposed)
+        if decision.action == GuardAction.RECOVER:
+            # A recoverable duplicate must remain a tool turn.  Returning its
+            # explanation as an assistant message ends the agent turn before
+            # it can use the first read result or choose a distinct action.
+            # Keep the duplicated command suppressed and emit only this static,
+            # harmless marker for the client to execute.
+            call_id = str(
+                tool_call.get("id") or tool_call.get("call_id") or f"call_{index + 1}"
+            )
+            call_id = f"{call_id}_recovery"
+            if call_id in seen_call_ids:
+                call_id = f"{call_id}_{index + 1}"
+            seen_call_ids.add(call_id)
+            recovery_arguments = json.dumps(
+                {
+                    "cmd": (
+                        "printf '%s\\n' 'DUPLICATE_READ_ALREADY_DONE: duplicate read "
+                        "command was skipped; use the previous successful output and answer "
+                        "or continue with a different bounded command.'"
+                    )
+                },
+                separators=(",", ":"),
+            )
+            item = {
+                "id": f"fc_{index + 1}_recovery",
+                "type": "function_call",
+                "status": "completed",
+                "call_id": call_id,
+                "name": "exec_command",
+                "arguments": recovery_arguments,
+            }
+            output.append(item)
+            effective_history.append(
+                {
+                    "type": "function_call",
+                    "call_id": call_id,
+                    "name": "exec_command",
+                    "arguments": recovery_arguments,
+                }
+            )
+            continue
         if decision.action != GuardAction.ALLOW:
             rejected.append(
                 safe_guard_message(decision.message, decision.safe_next_action)
@@ -2566,6 +2710,7 @@ def synthetic_response_from_payload(
 
 class ProxyHandler(BaseHTTPRequestHandler):
     target_base = DEFAULT_TARGET_BASE
+    local_model = DEFAULT_LOCAL_MODEL
     log_path: Path | None = None
     system_prompt_file: str | None = DEFAULT_SYSTEM_PROMPT_FILE
     native_tools = False
@@ -2578,6 +2723,13 @@ class ProxyHandler(BaseHTTPRequestHandler):
     tool_reasoning_effort = DEFAULT_TOOL_REASONING_EFFORT
     enable_thinking = False
     preserve_thinking = False
+    thinking_min_output_tokens = 0
+    disable_thinking_for_tools = False
+    reasoning_default_effort = DEFAULT_REASONING_DEFAULT_EFFORT
+    reasoning_budget_low = DEFAULT_REASONING_BUDGET_LOW
+    reasoning_budget_medium = DEFAULT_REASONING_BUDGET_MEDIUM
+    reasoning_budget_xhigh = DEFAULT_REASONING_BUDGET_XHIGH
+    reasoning_output_reserve_tokens = DEFAULT_REASONING_OUTPUT_RESERVE_TOKENS
     context_limit_tokens = DEFAULT_CONTEXT_LIMIT_TOKENS
     upstream_timeout_seconds = DEFAULT_UPSTREAM_TIMEOUT_SECONDS
 
@@ -2654,6 +2806,13 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     tool_reasoning_effort=self.tool_reasoning_effort,
                     enable_thinking=self.enable_thinking,
                     preserve_thinking=self.preserve_thinking,
+                    thinking_min_output_tokens=self.thinking_min_output_tokens,
+                    disable_thinking_for_tools=self.disable_thinking_for_tools,
+                    reasoning_default_effort=self.reasoning_default_effort,
+                    reasoning_budget_low=self.reasoning_budget_low,
+                    reasoning_budget_medium=self.reasoning_budget_medium,
+                    reasoning_budget_xhigh=self.reasoning_budget_xhigh,
+                    reasoning_output_reserve_tokens=self.reasoning_output_reserve_tokens,
                     max_heredoc_command_chars=MAX_HEREDOC_COMMAND_CHARS,
                     max_exec_command_chars=MAX_EXEC_COMMAND_CHARS,
                     repeated_tool_call_threshold=REPEATED_TOOL_CALL_THRESHOLD,
@@ -2689,6 +2848,36 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     "error": {
                         "message": "expected JSON object body",
                         "type": "invalid_request",
+                    }
+                },
+            )
+            return
+
+        requested_model = body_obj.get("model")
+        if (
+            not isinstance(requested_model, str)
+            or requested_model.strip() != ProxyHandler.local_model
+        ):
+            self._write_log(
+                {
+                    "method": self.command,
+                    "path": self.path,
+                    "event": "rejected_nonlocal_model",
+                    "local_model": ProxyHandler.local_model,
+                }
+            )
+            write_json(
+                self,
+                400,
+                {
+                    "error": {
+                        "message": (
+                            "This local Qwen bridge accepts only its configured "
+                            "local model. Use the configured frontier provider "
+                            "directly for other remote models."
+                        ),
+                        "type": "invalid_request",
+                        "code": "local_model_only",
                     }
                 },
             )
@@ -2929,6 +3118,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--listen-host", default=DEFAULT_LISTEN_HOST)
     parser.add_argument("--listen-port", type=int, default=DEFAULT_LISTEN_PORT)
     parser.add_argument("--target-base", default=DEFAULT_TARGET_BASE)
+    parser.add_argument("--local-model", default=DEFAULT_LOCAL_MODEL)
     parser.add_argument("--system-prompt-file", default=DEFAULT_SYSTEM_PROMPT_FILE)
     parser.add_argument(
         "--native-tools",
@@ -2964,6 +3154,29 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--preserve-thinking", choices=["true", "false"], default="false"
     )
+    parser.add_argument("--thinking-min-output-tokens", type=int, default=0)
+    parser.add_argument(
+        "--disable-thinking-for-tools", choices=["true", "false"], default="false"
+    )
+    parser.add_argument(
+        "--reasoning-default-effort",
+        choices=["low", "medium", "xhigh"],
+        default=DEFAULT_REASONING_DEFAULT_EFFORT,
+    )
+    parser.add_argument(
+        "--reasoning-budget-low", type=int, default=DEFAULT_REASONING_BUDGET_LOW
+    )
+    parser.add_argument(
+        "--reasoning-budget-medium", type=int, default=DEFAULT_REASONING_BUDGET_MEDIUM
+    )
+    parser.add_argument(
+        "--reasoning-budget-xhigh", type=int, default=DEFAULT_REASONING_BUDGET_XHIGH
+    )
+    parser.add_argument(
+        "--reasoning-output-reserve-tokens",
+        type=int,
+        default=DEFAULT_REASONING_OUTPUT_RESERVE_TOKENS,
+    )
     parser.add_argument(
         "--upstream-timeout-seconds", type=int, default=DEFAULT_UPSTREAM_TIMEOUT_SECONDS
     )
@@ -2973,6 +3186,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     ProxyHandler.target_base = args.target_base.rstrip("/")
+    ProxyHandler.local_model = str(args.local_model or "").strip() or DEFAULT_LOCAL_MODEL
     ProxyHandler.log_path = Path(args.log_path)
     ProxyHandler.system_prompt_file = args.system_prompt_file
     ProxyHandler.native_tools = bool(args.native_tools)
@@ -2992,6 +3206,18 @@ def main() -> None:
     ProxyHandler.tool_reasoning_effort = str(args.tool_reasoning_effort or "").strip()
     ProxyHandler.enable_thinking = args.enable_thinking == "true"
     ProxyHandler.preserve_thinking = args.preserve_thinking == "true"
+    ProxyHandler.thinking_min_output_tokens = max(0, int(args.thinking_min_output_tokens))
+    ProxyHandler.disable_thinking_for_tools = args.disable_thinking_for_tools == "true"
+    ProxyHandler.reasoning_default_effort = normalize_qwen_reasoning_effort(
+        args.reasoning_default_effort,
+        default="medium",
+    )
+    ProxyHandler.reasoning_budget_low = max(1, int(args.reasoning_budget_low))
+    ProxyHandler.reasoning_budget_medium = max(1, int(args.reasoning_budget_medium))
+    ProxyHandler.reasoning_budget_xhigh = max(1, int(args.reasoning_budget_xhigh))
+    ProxyHandler.reasoning_output_reserve_tokens = max(
+        0, int(args.reasoning_output_reserve_tokens)
+    )
     ProxyHandler.upstream_timeout_seconds = max(10, int(args.upstream_timeout_seconds))
     local_base = f"http://{args.listen_host}:{args.listen_port}"
     remote_ok, remote_note = probe_models(ProxyHandler.target_base)

@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## 0.6.10
+
+- Rebased the canonical source patch to official Codex `0.150.0`, including
+  the V2 handler/API changes, refreshed MCP startup runtime input, and the
+  new upstream test expectations.
+- Bound the official source commit, full-index patch digest, normalized
+  Cargo.lock digest, matching `codex-code-mode-host`, and versioned models
+  cache into the 0.150 runtime contract; the sandboxed Rusty V8 archive,
+  generated binding, checksum manifest, target, and HTTPS release URL remain
+  independently pinned and recorded in the build receipt.
+- Extended the release gate and dependency helper to validate both the current
+  0.150 contract and the historical 0.147 V8 artifact pin.
+- Kept stock Codex as the independent Off-mode recovery path and retained all
+  previous release notes as historical records.
+
 ## 0.6.9
 
 - Rebased the canonical source patch to official Codex `0.147.0`, including

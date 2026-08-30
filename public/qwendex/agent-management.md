@@ -107,6 +107,19 @@ scripts/qwendex manager decision --json
 scripts/qwendex manager decision --agent-id <ledger-id> --json
 ```
 
+Manager status also exposes a path-free
+`qwendex.native_reservation_projection.v1` under `session_status` when a
+current Manager decision exists. It reports the observed launch ledger,
+session/turn/runtime identities, bounded worker capacity, and native
+reservations without returning repository paths. The projection is explicitly
+`shadow_only` and untrusted: local bookkeeping is not a provider attestation
+or a signed owner acknowledgment, and it cannot authorize execution. A
+downstream owner may bind it to its own authenticated acknowledgment contract
+when such an authority is configured. Reservation slots are turn-local
+observations rather than authoritative global allocations; the projection also
+distinguishes the generation-identifier digest from the runtime-contract
+digest, and does not expose an external owner runner attempt identity.
+
 `direct_single_writer` and `manager_subagents` are planning labels. Reasons,
 hook status, validation evidence, and final closeout can be recorded when
 available, but none of that metadata authorizes or blocks root work.

@@ -71,6 +71,10 @@ def test_codex_build_contract_requires_the_current_canonical_patch_surface():
     assert codex_145_v2_paths <= codex_147_required
     assert "codex-rs/codex-mcp/src/rmcp_client.rs" in codex_147_required
     assert "codex-rs/core/src/config/mod.rs" not in codex_147_required
+    codex_150_required = release_gate.codex_required_patch_paths("0.150.0")
+    assert codex_145_v2_paths <= codex_150_required
+    assert "codex-rs/codex-mcp/src/rmcp_client.rs" in codex_150_required
+    assert "codex-rs/core/src/config/mod.rs" not in codex_150_required
     dev_env = (ROOT / "scripts" / "qwendex_dev_env").read_text(encoding="utf-8")
     for path in {
         "codex-rs/codex-mcp/src/connection_manager.rs",
@@ -531,6 +535,9 @@ def test_codex_147_v8_release_pair_is_independently_pinned():
     assert release_gate.CODEX_147_V8_ARTIFACTS["checksums"]["sha256"] == (
         "6774b42c9424c098c72a805c08d4e94be17c591cf02b1dc2633060255a8a61be"
     )
+    assert release_gate.CODEX_150_V8_PROVIDER == release_gate.CODEX_147_V8_PROVIDER
+    assert release_gate.CODEX_150_V8_VERSION == release_gate.CODEX_147_V8_VERSION
+    assert release_gate.CODEX_150_V8_ARTIFACTS == release_gate.CODEX_147_V8_ARTIFACTS
     assert 'QWENDEX_RELEASE_CODEX_V8_TARGET="x86_64-unknown-linux-gnu"' in dev_env
     assert "QWENDEX_RELEASE_CODEX_V8_ARCHIVE_SHA256=" in dev_env
     assert "QWENDEX_RELEASE_CODEX_V8_BINDING_SHA256=" in dev_env

@@ -6,6 +6,7 @@
     "git",
     "rsync",
     "curl",
+    "jq",
     "codex"
   ],
   "validation_python_modules": [

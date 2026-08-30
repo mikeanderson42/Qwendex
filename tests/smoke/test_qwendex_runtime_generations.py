@@ -82,7 +82,7 @@ def write_pinned_codex_fixture(dev_root: Path) -> tuple[Path, Path]:
     codex.write_text(
         "#!/usr/bin/env bash\n"
         "if [[ \"${1:-}\" == \"--version\" ]]; then\n"
-        "  printf 'codex-cli 0.147.0\\n'\n"
+        "  printf 'codex-cli 0.150.0\\n'\n"
         "  exit 0\n"
         "fi\n"
         "exit 0\n",
@@ -96,10 +96,10 @@ def write_pinned_codex_fixture(dev_root: Path) -> tuple[Path, Path]:
         "schema_version": "qwendex.dev.codex_build.v1",
         "status": "pass",
         "source_head": "1" * 40,
-        "source_ref": "rust-v0.147.0",
+        "source_ref": "rust-v0.150.0",
         "source_patch_sha256": "2" * 64,
         "binary_sha256": sha256_file(codex),
-        "binary_version": "codex-cli 0.147.0",
+        "binary_version": "codex-cli 0.150.0",
         "code_mode_host": {"binary_sha256": sha256_file(host)},
     }
     receipt_path = dev_root / ".qwendex-dev" / "results" / "meta" / "codex_build.json"
@@ -461,6 +461,36 @@ def test_qdex_top_level_discards_an_inherited_stale_runtime_pin(tmp_path, monkey
 
     assert rejected.returncode == 127
     assert "Codex config baseline digest drifted" in rejected.stderr
+
+
+def test_qdex_top_level_rejects_tampered_non_wrapper_tree_file(tmp_path, monkeypatch):
+    source = tmp_path / "candidate"
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    copy_candidate_source(source)
+    codex, host = write_pinned_codex_fixture(source)
+    runtime_root = source / ".qwendex-dev" / "runtime"
+    generation = build_candidate(source, runtime_root, codex, host)
+    RUNTIME.activate_generation(runtime_root, generation["generation_id"])
+
+    generation_dir = runtime_root / "generations" / generation["generation_id"]
+    helper = generation_dir / "tree" / "scripts" / "qwendex_cli.py"
+    assert helper.is_file()
+    helper.chmod(0o644)
+    helper.write_text(helper.read_text(encoding="utf-8") + "\n# tampered\n", encoding="utf-8")
+    result = subprocess.run(
+        [str(ROOT / "scripts" / "qdex")],
+        cwd=source,
+        env={**os.environ, "QWENDEX_DEV_ROOT": str(source)},
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=30,
+    )
+
+    assert result.returncode == 127
+    assert "selected generation source size drifted: scripts/qwendex_cli.py" in result.stderr
 
 
 def test_activation_preserves_an_older_valid_rollback_when_current_is_invalid(

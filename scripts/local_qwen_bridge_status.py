@@ -41,7 +41,22 @@ def build_status_payload(
     shell_command_stagnation_threshold: int,
     upstream_timeout_seconds: int,
     synthetic_response_handlers: list[str],
+    thinking_min_output_tokens: int = 0,
+    disable_thinking_for_tools: bool = False,
+    reasoning_default_effort: str = "medium",
+    reasoning_budget_low: int = 1024,
+    reasoning_budget_medium: int = 2048,
+    reasoning_budget_xhigh: int = 4096,
+    reasoning_output_reserve_tokens: int = 1024,
 ) -> dict[str, Any]:
+    budgets = {
+        "low": max(1, int(reasoning_budget_low)),
+        "medium": max(1, int(reasoning_budget_medium)),
+        "xhigh": max(1, int(reasoning_budget_xhigh)),
+    }
+    default_budget = budgets.get(
+        str(reasoning_default_effort).strip().lower(), budgets["medium"]
+    )
     return {
         "schema_version": "qwendex.responses_bridge.status.v1",
         "status": "ok",
@@ -61,7 +76,14 @@ def build_status_payload(
         "tool_reasoning_effort": tool_reasoning_effort,
         "enable_thinking": enable_thinking,
         "preserve_thinking": preserve_thinking,
-        "effective_thinking_budget": -1 if enable_thinking else 0,
+        "thinking_min_output_tokens": max(0, int(thinking_min_output_tokens)),
+        "disable_thinking_for_tools": bool(disable_thinking_for_tools),
+        "reasoning_default_effort": reasoning_default_effort,
+        "reasoning_budgets": budgets,
+        "reasoning_output_reserve_tokens": max(
+            0, int(reasoning_output_reserve_tokens)
+        ),
+        "effective_thinking_budget": default_budget if enable_thinking else 0,
         "max_heredoc_command_chars": max_heredoc_command_chars,
         "max_exec_command_chars": max_exec_command_chars,
         "repeated_tool_call_threshold": repeated_tool_call_threshold,

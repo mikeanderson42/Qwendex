@@ -25,17 +25,17 @@ SUMMARY_DIGEST_FIELD = "receipt_sha256"
 RECEIPT_BINDING_SCHEMA = "qwendex.dev.receipt_binding.v1"
 CI_ATTESTATION_SCHEMA = "qwendex.ci.attestation.v1"
 CODEX_BUILD_INPUTS_SCHEMA = "qwendex.dev.codex_build_inputs.v1"
-CODEX_147_V8_PROVIDER = "openai/codex"
-CODEX_147_V8_VERSION = "150.4.0"
-CODEX_147_V8_RELEASE_TAG = "rusty-v8-v150.4.0"
-CODEX_147_V8_PROFILE = "ptrcomp_sandbox_release"
-CODEX_147_V8_BASE_URL = (
+CODEX_V8_PROVIDER = "openai/codex"
+CODEX_V8_VERSION = "150.4.0"
+CODEX_V8_RELEASE_TAG = "rusty-v8-v150.4.0"
+CODEX_V8_PROFILE = "ptrcomp_sandbox_release"
+CODEX_V8_BASE_URL = (
     "https://github.com/openai/codex/releases/download/"
-    f"{CODEX_147_V8_RELEASE_TAG}"
+    f"{CODEX_V8_RELEASE_TAG}"
 )
-CODEX_147_V8_DOWNLOAD_POLICY = "https-only-no-insecure-redirects"
-CODEX_147_V8_TARGET = "x86_64-unknown-linux-gnu"
-CODEX_147_V8_ARTIFACTS = {
+CODEX_V8_DOWNLOAD_POLICY = "https-only-no-insecure-redirects"
+CODEX_V8_TARGET = "x86_64-unknown-linux-gnu"
+CODEX_V8_ARTIFACTS = {
     "archive": {
         "name": "librusty_v8_ptrcomp_sandbox_release_x86_64-unknown-linux-gnu.a.gz",
         "sha256": "a35c75d1f26e6a983885a45b33490a4ebe54f05050568b32b89cfb421b30b583",
@@ -49,6 +49,26 @@ CODEX_147_V8_ARTIFACTS = {
         "sha256": "6774b42c9424c098c72a805c08d4e94be17c591cf02b1dc2633060255a8a61be",
     },
 }
+# Codex 0.147 and 0.150 both consume the same Codex-published Rusty V8
+# sandbox pair. Keep the historical names as compatibility aliases for old
+# receipts/tests while validating both releases through the generic pin.
+CODEX_147_V8_PROVIDER = CODEX_V8_PROVIDER
+CODEX_147_V8_VERSION = CODEX_V8_VERSION
+CODEX_147_V8_RELEASE_TAG = CODEX_V8_RELEASE_TAG
+CODEX_147_V8_PROFILE = CODEX_V8_PROFILE
+CODEX_147_V8_BASE_URL = CODEX_V8_BASE_URL
+CODEX_147_V8_DOWNLOAD_POLICY = CODEX_V8_DOWNLOAD_POLICY
+CODEX_147_V8_TARGET = CODEX_V8_TARGET
+CODEX_147_V8_ARTIFACTS = CODEX_V8_ARTIFACTS
+CODEX_150_V8_PROVIDER = CODEX_V8_PROVIDER
+CODEX_150_V8_VERSION = CODEX_V8_VERSION
+CODEX_150_V8_RELEASE_TAG = CODEX_V8_RELEASE_TAG
+CODEX_150_V8_PROFILE = CODEX_V8_PROFILE
+CODEX_150_V8_BASE_URL = CODEX_V8_BASE_URL
+CODEX_150_V8_DOWNLOAD_POLICY = CODEX_V8_DOWNLOAD_POLICY
+CODEX_150_V8_TARGET = CODEX_V8_TARGET
+CODEX_150_V8_ARTIFACTS = CODEX_V8_ARTIFACTS
+CODEX_V8_PINNED_VERSIONS = frozenset({"0.147.0", "0.150.0"})
 REQUIRED_RECEIPTS = {
     "bootstrap": "bootstrap.json",
     "static_gate": "static_gate.json",
@@ -1335,9 +1355,9 @@ def codex_required_patch_paths(version: str) -> set[str]:
         # Upstream 0.145 incorporates the config/mod.rs compatibility behavior,
         # while Qwendex adds the V2 role/default hardening files.
         required -= CODEX_145_UPSTREAM_PATCH_PATHS
-    elif version == "0.147.0":
-        # Upstream supplies config/mod.rs compatibility, while the 0.147
-        # rebase requires the complete Qwendex V2 and Apps-cache footprint.
+    elif version in {"0.147.0", "0.150.0"}:
+        # Upstream supplies config/mod.rs compatibility, while these rebases
+        # require the complete Qwendex V2 and Apps-cache footprint.
         required -= CODEX_147_UPSTREAM_PATCH_PATHS
     else:
         required -= CODEX_145_ONLY_PATCH_PATHS
@@ -1385,7 +1405,7 @@ def validate_codex_build_receipt(
     nested = build_inputs if isinstance(build_inputs, dict) else {}
     expected_v8_build_mode = (
         "verified-codex-release-archive"
-        if required_version == "0.147.0"
+        if required_version in CODEX_V8_PINNED_VERSIONS
         else str(nested.get("v8_build_mode") or "")
     )
     v8_artifacts = nested.get("v8_artifacts")
@@ -1413,32 +1433,32 @@ def validate_codex_build_receipt(
             for item in v8_artifact_files
         )
     )
-    if required_version == "0.147.0":
+    if required_version in CODEX_V8_PINNED_VERSIONS:
         v8_target = str(v8_artifacts_data.get("target") or "")
         v8_artifacts_valid = v8_artifacts_valid and all(
             (
-                v8_artifacts_data.get("provider") == CODEX_147_V8_PROVIDER,
-                v8_artifacts_data.get("crate_version") == CODEX_147_V8_VERSION,
-                v8_artifacts_data.get("release_tag") == CODEX_147_V8_RELEASE_TAG,
-                v8_artifacts_data.get("profile") == CODEX_147_V8_PROFILE,
-                v8_target == CODEX_147_V8_TARGET,
-                v8_artifacts_data.get("base_url") == CODEX_147_V8_BASE_URL,
+                v8_artifacts_data.get("provider") == CODEX_V8_PROVIDER,
+                v8_artifacts_data.get("crate_version") == CODEX_V8_VERSION,
+                v8_artifacts_data.get("release_tag") == CODEX_V8_RELEASE_TAG,
+                v8_artifacts_data.get("profile") == CODEX_V8_PROFILE,
+                v8_target == CODEX_V8_TARGET,
+                v8_artifacts_data.get("base_url") == CODEX_V8_BASE_URL,
                 v8_artifacts_data.get("download_policy")
-                == CODEX_147_V8_DOWNLOAD_POLICY,
+                == CODEX_V8_DOWNLOAD_POLICY,
                 isinstance(v8_archive, dict)
                 and all(
                     v8_archive.get(key) == value
-                    for key, value in CODEX_147_V8_ARTIFACTS["archive"].items()
+                    for key, value in CODEX_V8_ARTIFACTS["archive"].items()
                 ),
                 isinstance(v8_binding, dict)
                 and all(
                     v8_binding.get(key) == value
-                    for key, value in CODEX_147_V8_ARTIFACTS["binding"].items()
+                    for key, value in CODEX_V8_ARTIFACTS["binding"].items()
                 ),
                 isinstance(v8_checksums, dict)
                 and all(
                     v8_checksums.get(key) == value
-                    for key, value in CODEX_147_V8_ARTIFACTS["checksums"].items()
+                    for key, value in CODEX_V8_ARTIFACTS["checksums"].items()
                 ),
             )
         )

@@ -128,6 +128,21 @@ scripts/qwendex route --task-class exec --json
 scripts/qwendex exec "Reply exactly QWENDEX_OK" --seat auto --json
 ```
 
+For an owner-local supervisor or another process that must keep the request
+out of process arguments, use the bounded private-stdin transport:
+
+```bash
+printf '%s' 'Inspect the bounded change and report evidence.' \
+  | scripts/qwendex exec --prompt-stdin --seat primary --json
+```
+
+`--prompt-stdin` accepts one UTF-8 payload up to 64 KiB, rejects TTY input and
+argv prompts, and is restricted to the primary authority seat. The child sees
+the prompt through stdin; command previews and receipts contain only the
+transport, byte count, and SHA-256 digest. This makes it suitable for a
+server-owned supervisor without turning prompt text into an argv or ledger
+binding.
+
 ## Receipts
 
 Every Qwen run writes a receipt containing model, profile, task class, tool-call
@@ -233,9 +248,21 @@ These controls are scoped to the open Qdex launch. Inspect
 for its children, while mode or Local changes that exceed the launch snapshot
 are explicitly restart-required.
 
-Manager Mode defaults to `max_subagents: 4`. Operators may configure a lower or
-higher bounded value up to the conservative product ceiling of 8 concurrent
-worker lanes; Codex V2 counts the root separately.
+Manager Mode defaults to `max_subagents: 4`. Operators may configure a lower
+value; a higher legacy profile remains visible for compatibility but resolves
+to a local native cap of four. An owner-managed integration may bind that
+local reservation to a separate owner pool; Codex V2 counts the root
+separately.
+
+When an owner control plane supplies `QWENDEX_OWNER_ADMISSION_MODE=managed`,
+native reservations require the private, digest-only
+`QWENDEX_OWNER_MANAGER_INTENT_DIGEST` and opaque
+`QWENDEX_OWNER_RESERVATION_ID`. Qwendex carries both through reservation and
+replay packets, reuses an exact owner claim, and rejects a second active lane
+for the same intent or any missing/malformed/mismatched claim. Without the
+managed marker, standalone/advisory behavior is unchanged. The owner and
+Qwendex ledgers are separate state stores; a signed owner acknowledgment is
+still required before a managed launch can be treated as trusted execution.
 
 `manager_deploy_policy` defaults to `auto`, enabling advisory lane planning and
 lifecycle visibility. Direct work remains valid, and missing, unresolved, or

@@ -42,7 +42,18 @@ MIN_P="${LLAMACPP_MIN_P:-0.05}"
 REASONING="${LLAMACPP_REASONING:-off}"
 REASONING_FORMAT="${LLAMACPP_REASONING_FORMAT:-deepseek}"
 REASONING_BUDGET="${LLAMACPP_REASONING_BUDGET:-}"
+DEFAULT_CHAT_TEMPLATE_KWARGS='{"preserve_thinking":true}'
+CHAT_TEMPLATE_KWARGS="${LLAMACPP_CHAT_TEMPLATE_KWARGS:-$DEFAULT_CHAT_TEMPLATE_KWARGS}"
+SPEC_TYPE="${LLAMACPP_SPEC_TYPE:-none}"
+SPEC_DRAFT_N_MAX="${LLAMACPP_SPEC_DRAFT_N_MAX:-3}"
 EXTRA_ARGS="${LLAMACPP_EXTRA_ARGS:-}"
+USE_CHAT_TEMPLATE=1
+
+case "${CHAT_TEMPLATE,,}" in
+  ""|auto|none|embedded)
+    USE_CHAT_TEMPLATE=0
+    ;;
+esac
 
 if [[ ! -x "$SERVER" ]]; then
   echo "Missing llama-server: $SERVER" >&2
@@ -54,8 +65,13 @@ if [[ ! -f "$MODEL_PATH" ]]; then
   exit 1
 fi
 
-if [[ ! -f "$CHAT_TEMPLATE" ]]; then
+if [[ "$USE_CHAT_TEMPLATE" == "1" && ! -f "$CHAT_TEMPLATE" ]]; then
   echo "Missing llama.cpp chat template: $CHAT_TEMPLATE" >&2
+  exit 1
+fi
+
+if ! jq -e 'type == "object"' >/dev/null 2>&1 <<<"$CHAT_TEMPLATE_KWARGS"; then
+  echo "LLAMACPP_CHAT_TEMPLATE_KWARGS must be a JSON object" >&2
   exit 1
 fi
 
@@ -83,11 +99,15 @@ cmd=(
   --reasoning "$REASONING"
   --reasoning-format "$REASONING_FORMAT"
   --jinja
-  --chat-template-file "$CHAT_TEMPLATE"
-  --chat-template-kwargs '{"preserve_thinking":true}'
-  --spec-type none
+  --chat-template-kwargs "$CHAT_TEMPLATE_KWARGS"
   -fit off
 )
+
+if [[ "$USE_CHAT_TEMPLATE" == "1" ]]; then
+  cmd+=(--chat-template-file "$CHAT_TEMPLATE")
+else
+  echo "Chat template: embedded/default"
+fi
 
 case "${CACHE_PROMPT,,}" in
   1|true|yes|on) cmd+=(--cache-prompt) ;;
@@ -98,6 +118,12 @@ esac
 if [[ -n "$REASONING_BUDGET" ]]; then
   cmd+=(--reasoning-budget "$REASONING_BUDGET")
 fi
+
+if [[ ! "$SPEC_DRAFT_N_MAX" =~ ^[0-9]+$ ]]; then
+  echo "Invalid LLAMACPP_SPEC_DRAFT_N_MAX=$SPEC_DRAFT_N_MAX" >&2
+  exit 1
+fi
+cmd+=(--spec-type "$SPEC_TYPE" --spec-draft-n-max "$SPEC_DRAFT_N_MAX")
 
 if [[ -n "$EXTRA_ARGS" ]]; then
   # shellcheck disable=SC2206

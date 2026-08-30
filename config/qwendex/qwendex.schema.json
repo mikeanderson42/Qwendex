@@ -73,7 +73,7 @@
       "additionalProperties": false,
       "properties": {
         "permission_mode": {
-          "enum": ["workspace-write", "yolo"],
+          "enum": ["read-only", "workspace-write", "yolo"],
           "default": "workspace-write"
         }
       }

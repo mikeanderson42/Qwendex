@@ -22,7 +22,7 @@ PEP 668 externally managed interpreter, pip's explicit managed-environment
 override is used only together with `--user`; the receipt records that policy
 and the installer never writes validation tools into the system site. It also
 attempts system package installs for required host tools such as `git`, `rsync`,
-`curl`, `python3`, and `tmux` when a supported package manager and
+`curl`, `jq`, `python3`, and `tmux` when a supported package manager and
 non-interactive sudo/root access are available. Remaining blockers are reported
 in JSON instead of being hidden.
 
@@ -106,7 +106,7 @@ captured upstream Codex binary with an explicit fallback diagnostic. Only
 `qdex` invokes this runtime and sets `QWENDEX_CODEX_HOME` as its child's
 `CODEX_HOME`. A selected dev binary must
 have an executable `codex-code-mode-host` companion in the same directory; the
-wrapper blocks before launch when that Codex 0.147.0 runtime contract is
+wrapper blocks before launch when that Codex 0.150.0 runtime contract is
 incomplete.
 
 The isolated Qwendex Codex home links the operator's authentication file for

@@ -1,4 +1,5 @@
 import importlib.util
+import io
 import json
 import os
 import re
@@ -143,6 +144,7 @@ def assert_qdex_v2_policy_prefix(args, *, expected_native_threads=None):
     assert "memories.use_memories=false" in values
     assert "memories.dedicated_tools=false" in values
     assert "features.multi_agent_v2.enabled=true" in values
+    assert any(value.startswith("agents.max_depth=") for value in values)
     assert "features.multi_agent_v2.hide_spawn_agent_metadata=true" in values
     assert "features.multi_agent_v2.expose_spawn_agent_model_overrides=false" in values
     if expected_native_threads is not None:
@@ -244,6 +246,9 @@ def test_qwendex_parser_exposes_public_commands():
     assert parser.parse_args(["agent", "hook-config", "--verify", "--codex-home", "/tmp/codex"]).verify is True
     assert parser.parse_args(["agent", "locks"]).action == "locks"
     assert parser.parse_args(["codex-status", "--write", "/tmp/qwendex-status.json"]).command == "codex-status"
+    capability = parser.parse_args(["capability", "--generation", "rtg-candidate123456", "--json"])
+    assert capability.command == "capability"
+    assert capability.generation == "rtg-candidate123456"
     assert parser.parse_args(["codex-patch", "preflight", "--codex-bin", "codex"]).command == "codex-patch"
     assert parser.parse_args(["codex-patch", "apply", "--source", "/tmp/codex", "--dry-run"]).dry_run is True
     assert parser.parse_args(["estimate", "--prompt", "Fix a typo"]).command == "estimate"
@@ -313,7 +318,7 @@ def test_qwendex_version_and_config_are_in_sync():
     sample_config = json.loads((ROOT / "config" / "qwendex" / "qwendex.sample.json").read_text(encoding="utf-8"))
     version = json_result("version", "--json")
 
-    assert qwendex.VERSION == "0.6.9"
+    assert qwendex.VERSION == "0.6.10"
     assert version["data"]["version"] == qwendex.VERSION
     assert project_config["version"] == qwendex.VERSION
     assert sample_config["version"] == qwendex.VERSION
@@ -676,6 +681,65 @@ def test_qwendex_exec_dry_run_respects_cwd_and_mcp_override(tmp_path):
     assert default_roots["data"]["execution_policy"]["mcp_trusted_roots"] == [str(project)]
 
 
+def test_qwendex_exec_private_stdin_keeps_prompt_out_of_argv_and_receipts(tmp_path, monkeypatch):
+    qwendex = load_qwendex()
+    config = qwendex.load_qwendex_config()
+    config["state"]["db"] = str(tmp_path / "state.sqlite")
+    config["receipts"]["dir"] = str(tmp_path / "receipts")
+    prompt = "Inspect the bounded change and report evidence."
+    observed = {}
+
+    def fake_run(command, **kwargs):
+        observed["command"] = command
+        observed["input"] = kwargs.get("input")
+        return subprocess.CompletedProcess(command, 0, f"bounded result: {prompt}", "")
+
+    monkeypatch.setattr(qwendex.subprocess, "run", fake_run)
+    monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(prompt.encode("utf-8"))))
+    args = qwendex.command_line().parse_args(
+        ["exec", "--prompt-stdin", "--seat", "primary", "--json"]
+    )
+
+    result = qwendex.command_exec(args, config)
+    receipt = json.loads(Path(result["artifacts"][0]).read_text(encoding="utf-8"))
+
+    assert result["status"] == "pass"
+    assert result["data"]["prompt_transport"] == "stdin"
+    assert result["data"]["prompt_bytes"] == len(prompt.encode("utf-8"))
+    assert prompt not in json.dumps(result)
+    assert prompt not in json.dumps(receipt)
+    assert observed["command"][-1] == "-"
+    assert prompt == observed["input"]
+    assert receipt["prompt_transport"] == "stdin"
+    assert receipt["prompt_sha256"] == result["data"]["prompt_sha256"]
+
+
+def test_qwendex_exec_private_stdin_rejects_argv_and_oversize_payload(tmp_path, monkeypatch):
+    qwendex = load_qwendex()
+    config = qwendex.load_qwendex_config()
+    config["state"]["db"] = str(tmp_path / "state.sqlite")
+    config["receipts"]["dir"] = str(tmp_path / "receipts")
+
+    mixed = qwendex.command_line().parse_args(
+        ["exec", "argv prompt", "--prompt-stdin", "--seat", "primary", "--json"]
+    )
+    mixed_result = qwendex.command_exec(mixed, config)
+    assert mixed_result["status"] == "blocked"
+    assert mixed_result["errors"] == ["prompt_stdin_with_argv_prompt"]
+
+    oversized = qwendex.command_line().parse_args(
+        ["exec", "--prompt-stdin", "--seat", "primary", "--json"]
+    )
+    monkeypatch.setattr(
+        sys,
+        "stdin",
+        io.TextIOWrapper(io.BytesIO(b"x" * (qwendex.EXEC_PROMPT_MAX_BYTES + 1))),
+    )
+    oversized_result = qwendex.command_exec(oversized, config)
+    assert oversized_result["status"] == "blocked"
+    assert oversized_result["errors"] == ["prompt_stdin_too_large"]
+
+
 def test_qwendex_exec_infers_high_risk_authority_and_enforces_read_only_audit(tmp_path):
     env = {
         "QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite"),
@@ -948,7 +1012,7 @@ def test_qwendex_dev_env_public_surface_is_visible_and_isolated():
     assert dependencies["schema_version"] == "qwendex.dependencies.v1"
     assert {"bash", "python3", "git", "rsync", "curl", "codex"} <= set(dependencies["required_commands"])
     assert {"pytest", "ruff"} <= set(dependencies["validation_python_modules"])
-    assert 'QWENDEX_CODEX_REQUIRED_VERSION:-0.147.0' in installer_text
+    assert 'QWENDEX_CODEX_REQUIRED_VERSION:-0.150.0' in installer_text
     assert 'QWENDEX_CODEX_NPM_SPEC:-@openai/codex@$QWENDEX_CODEX_REQUIRED_VERSION' in installer_text
     assert 'npm install -g --prefix "$HOME/.local" "$codex_npm_spec"' in installer_text
     assert '"pytest==$QWENDEX_PYTEST_REQUIRED_VERSION"' in installer_text
@@ -1125,12 +1189,12 @@ def test_qwendex_install_deps_check_rejects_wrong_executable_codex(tmp_path):
     assert result.returncode == 1, result.stderr or result.stdout
     payload = json.loads(result.stdout)
     assert payload["status"] == "blocked"
-    assert payload["required_codex_version"] == "0.147.0"
+    assert payload["required_codex_version"] == "0.150.0"
     assert payload["codex_compatible"] is False
     assert payload["tools"]["codex"]["path"] == str(fake_codex)
     assert payload["tools"]["codex"]["version"] == "codex-cli 9.9.9"
     assert payload["incompatible_required"] == [
-        "codex version 'codex-cli 9.9.9' does not match required 'codex-cli 0.147.0'"
+        "codex version 'codex-cli 9.9.9' does not match required 'codex-cli 0.150.0'"
     ]
 
 
@@ -1141,7 +1205,7 @@ def test_qwendex_install_deps_check_rejects_codex_version_with_extra_tokens(tmp_
     fake_home.mkdir()
     fake_bin.mkdir()
     fake_codex.write_text(
-        "#!/usr/bin/env bash\nprintf 'codex-cli 0.147.0 extra\\n'\n",
+        "#!/usr/bin/env bash\nprintf 'codex-cli 0.150.0 extra\\n'\n",
         encoding="utf-8",
     )
     fake_codex.chmod(0o755)
@@ -1173,11 +1237,11 @@ def test_qwendex_install_deps_check_rejects_codex_version_with_extra_tokens(tmp_
     assert payload["status"] == "blocked"
     assert payload["codex_compatible"] is False
     assert payload["tools"]["codex"]["normalized_output"] == (
-        "codex-cli 0.147.0 extra"
+        "codex-cli 0.150.0 extra"
     )
     assert payload["incompatible_required"] == [
-        "codex version 'codex-cli 0.147.0 extra' does not match required "
-        "'codex-cli 0.147.0'"
+        "codex version 'codex-cli 0.150.0 extra' does not match required "
+        "'codex-cli 0.150.0'"
     ]
 
 
@@ -1189,7 +1253,7 @@ def test_qwendex_install_deps_failed_npm_logs_real_rc_and_stays_blocked(tmp_path
     fake_bin.mkdir()
 
     scripts = {
-        "codex": "#!/usr/bin/env bash\nprintf 'codex-cli 0.147.0 extra\\n'\n",
+        "codex": "#!/usr/bin/env bash\nprintf 'codex-cli 0.150.0 extra\\n'\n",
         "npm": "#!/usr/bin/env bash\nexit 37\n",
         "python3": (
             "#!/usr/bin/env bash\n"
@@ -1242,7 +1306,7 @@ def test_qwendex_install_deps_failed_npm_logs_real_rc_and_stays_blocked(tmp_path
     log_text = install_log.read_text(encoding="utf-8")
     assert (
         f"command failed (37): npm install -g --prefix {fake_home / '.local'} "
-        "@openai/codex@0.147.0"
+        "@openai/codex@0.150.0"
     ) in log_text
 
 
@@ -1267,7 +1331,7 @@ def test_qwendex_install_deps_requests_system_python_when_version_is_too_old(tmp
             "#!/usr/bin/env bash\n"
             "if [[ \"${1:-}\" == \"-u\" ]]; then printf '0\\n'; else exec /usr/bin/id \"$@\"; fi\n"
         ),
-        "codex": "#!/usr/bin/env bash\nprintf 'codex-cli 0.147.0\\n'\n",
+        "codex": "#!/usr/bin/env bash\nprintf 'codex-cli 0.150.0\\n'\n",
     }
     for name, text in scripts.items():
         path = fake_bin / name
@@ -1359,7 +1423,7 @@ def same_root_dev_env_fixture(tmp_path):
     fake_codex.write_text(
         """#!/usr/bin/env bash
 if [[ "${1:-}" == "--version" ]]; then
-  printf 'codex-cli 0.147.0\\n'
+  printf 'codex-cli 0.150.0\\n'
 fi
 """,
         encoding="utf-8",
@@ -1506,7 +1570,7 @@ def test_qwendex_dev_env_second_same_root_sync_skips_its_codex_wrapper(tmp_path)
 
     assert second_sync.returncode == 0, second_sync.stderr or second_sync.stdout
     assert codex_main.returncode == 0, codex_main.stderr or codex_main.stdout
-    assert codex_main.stdout.strip() == "codex-cli 0.147.0"
+    assert codex_main.stdout.strip() == "codex-cli 0.150.0"
     assert str(fake_codex) in (checkout / "bin" / "codex-main").read_text(encoding="utf-8")
     assert qdex.returncode == 0, qdex.stderr or qdex.stdout
     dry_run = json.loads(qdex.stdout)
@@ -1613,7 +1677,7 @@ def test_qwendex_upgrade_ignores_stale_main_codex_and_installed_qdex_opens_other
 printf '%s\\n' "$@" > "$QWENDEX_FAKE_CODEX_ARGS"
 for arg in "$@"; do
   if [[ "$arg" == "--version" ]]; then
-    printf 'codex-cli 0.147.0\\n'
+    printf 'codex-cli 0.150.0\\n'
     break
   fi
 done
@@ -1669,7 +1733,7 @@ done
     assert not legacy_codex.exists()
     assert installed_qdex.is_file()
     assert launched.returncode == 0, launched.stderr or launched.stdout
-    assert launched.stdout.strip() == "codex-cli 0.147.0"
+    assert launched.stdout.strip() == "codex-cli 0.150.0"
     launched_args = args_file.read_text(encoding="utf-8").splitlines()
     assert launched_args[launched_args.index("-C") + 1] == str(downstream_repo)
     runtime = (checkout / ".qwendex-dev" / "bin" / "qwendex-codex-runtime").read_text(
@@ -1742,7 +1806,7 @@ def test_qwendex_dev_env_preserves_upstream_codex_and_versions_model_cache(tmp_p
     assert sourced.returncode == 0, sourced.stderr or sourced.stdout
     resolved_codex, cache_file, sourced_home, runtime = sourced.stdout.splitlines()
     assert resolved_codex == str(fake_codex)
-    assert cache_file == "models_cache.qwendex-0.147.0.json"
+    assert cache_file == "models_cache.qwendex-0.150.0.json"
     assert sourced_home == "__unset__"
     assert runtime == str(checkout / ".qwendex-dev" / "bin" / "qwendex-codex-runtime")
 
@@ -1765,7 +1829,7 @@ def test_qwendex_dev_codex_wrapper_requires_code_mode_host(tmp_path):
     dev_codex = build_bin / "codex"
     code_mode_host = build_bin / "codex-code-mode-host"
     dev_codex.write_text(
-        "#!/usr/bin/env bash\nprintf 'codex-cli 0.147.0\\n'\n",
+        "#!/usr/bin/env bash\nprintf 'codex-cli 0.150.0\\n'\n",
         encoding="utf-8",
     )
     dev_codex.chmod(0o755)
@@ -1811,7 +1875,7 @@ def test_qwendex_dev_codex_wrapper_requires_code_mode_host(tmp_path):
         timeout=10,
     )
     assert ready.returncode == 0, ready.stderr or ready.stdout
-    assert ready.stdout.strip() == "codex-cli 0.147.0"
+    assert ready.stdout.strip() == "codex-cli 0.150.0"
 
 
 def assert_same_root_supports_quoted_path(tmp_path, path_fragment):
@@ -1895,12 +1959,12 @@ def assert_same_root_supports_quoted_path(tmp_path, path_fragment):
 
     assert config["projects"] == {str(checkout): {"trust_level": "trusted"}}
     assert qwendex.returncode == 0, qwendex.stderr or qwendex.stdout
-    assert json.loads(qwendex.stdout)["data"]["version"] == "0.6.9"
+    assert json.loads(qwendex.stdout)["data"]["version"] == "0.6.10"
     assert qwendex_dev.returncode == 0, qwendex_dev.stderr or qwendex_dev.stdout
     assert sourced_env.returncode == 0, sourced_env.stderr or sourced_env.stdout
     assert sourced_env.stdout.strip() == str(checkout)
     assert codex.returncode == 0, codex.stderr or codex.stdout
-    assert codex.stdout.strip() == "codex-cli 0.147.0"
+    assert codex.stdout.strip() == "codex-cli 0.150.0"
     assert qdex.returncode == 0, qdex.stderr or qdex.stdout
     dry_run = json.loads(qdex.stdout)
     assert dry_run["target_repo"] == str(checkout)
@@ -3081,6 +3145,23 @@ def test_qwendex_codex_147_manifest_requires_rebased_apps_and_keymap_surfaces():
     assert set(wait_tests_spec["expected_occurrences"].values()) == {4}
 
 
+def test_qwendex_codex_150_manifest_rebases_v2_and_mcp_api_surfaces():
+    qwendex = load_qwendex()
+
+    manifest = qwendex.CODEX_PATCH_MANIFESTS["0.150.0"]
+    assert manifest["codex_tag"] == "rust-v0.150.0"
+    specs = qwendex.codex_source_patch_specs("0.150.0")
+    patch_text = "\n".join(
+        new for spec in specs for _old, new in spec["replacements"]
+    )
+    assert "WaitAgentResult::from_outcome(outcome, requested_timeout_ms, timeout_ms)" in patch_text
+    assert "is_full_history_fork" in patch_text
+    assert "startup_policy: McpStartupPolicy::Eager" in patch_text
+    assert "ManagedClientFuture + Send + Sync" in patch_text
+    assert "let role_name: Option<&str> = None;" in patch_text
+    assert all("{{" not in new and "}}" not in new for spec in specs for _old, new in spec["replacements"])
+
+
 def test_qwendex_codex_patch_apply_updates_supported_source_checkout(tmp_path):
     qwendex = load_qwendex()
     source = tmp_path / "codex"
@@ -4141,6 +4222,55 @@ def test_qwendex_root_spawn_bookkeeping_exception_is_advisory(monkeypatch, failu
     assert result["reason_code"].startswith("bookkeeping_unavailable:")
 
 
+def test_qwendex_strict_native_reservation_blocks_bookkeeping_failure(monkeypatch):
+    qwendex = load_qwendex()
+    policy = qwendex.agent_policy_defaults("manager")
+    policy["native_reservation_mode"] = "strict"
+
+    def unavailable_bookkeeping(*_args, **_kwargs):
+        raise OSError("reservation store unavailable")
+
+    monkeypatch.setattr(qwendex, "resolve_manager_decision", unavailable_bookkeeping)
+    result = qwendex.pre_tool_gate(
+        {},
+        {
+            "session_id": "root-session",
+            "turn_id": "root-turn",
+            "cwd": str(ROOT),
+            "tool_name": "spawn_agent",
+            "tool_input": {"task_name": "inspection"},
+        },
+        policy,
+    )
+
+    assert result["decision"] == "block"
+    assert result["event"] == "manager.native_spawn_admission_blocked"
+    assert result["reason_code"].startswith("bookkeeping_unavailable:")
+
+
+def test_qwendex_strict_native_reservation_blocks_unbound_subagent_start():
+    qwendex = load_qwendex()
+    policy = qwendex.agent_policy_defaults("manager")
+    policy["native_reservation_mode"] = "strict"
+    status, result, _extra = qwendex.evaluate_agent_hook(
+        {},
+        event_name="SubagentStart",
+        event={
+            "agent_id": "native-child",
+            "agent_type": "explorer",
+            "task_name": "planned-explorer",
+            "parent_session_id": "root-session",
+            "session_id": "child-session",
+            "cwd": str(ROOT),
+        },
+        agent_policy=policy,
+    )
+
+    assert status == "blocked"
+    assert result["decision"] == "block"
+    assert "ledger identity" in result["reason"]
+
+
 def test_qwendex_root_post_tool_cleanup_exception_is_advisory(monkeypatch):
     qwendex = load_qwendex()
     policy = qwendex.agent_policy_defaults("manager")
@@ -4787,6 +4917,139 @@ def test_qwendex_agent_policy_selector_precedence_fallback_and_strict(tmp_path):
     assert "invalid agent use selector" in " ".join(strict["errors"])
 
 
+def test_qwendex_manager_policy_allows_only_registered_read_only_depth_two_spawn(tmp_path):
+    qwendex = load_qwendex()
+    policy = qwendex.agent_policy_defaults("manager")
+    assert policy["nested_spawn"]["enabled"] is True
+    assert policy["nested_spawn"]["max_depth"] == 2
+    assert policy["nested_spawn"]["leaf_can_spawn"] is False
+
+    state_db = tmp_path / "qwendex.sqlite"
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    env = {"QWENDEX_STATE_DB": str(state_db)}
+    json_result(
+        "manager", "assign", "--agent-id", "read-only-parent", "--lane", "review",
+        "--repo-root", str(repo_root), "--json", env=env,
+    )
+    with sqlite3.connect(state_db) as conn:
+        conn.execute(
+            "UPDATE qwendex_agent_sessions SET status='active', write_surface='read-only', origin='qwendex', session_id='parent-session' WHERE agent_id='read-only-parent'"
+        )
+        conn.commit()
+
+    approved_leaf_parent = {
+        "tool_name": "spawn_agent",
+        "depth": 1,
+        "agent_id": "read-only-parent",
+        "agent_type": "explorer",
+        "profile": "explorer",
+        "session_id": "parent-session",
+        "cwd": str(repo_root),
+        "nested_spawn_approved": True,
+    }
+    config = qwendex.deep_merge(qwendex.DEFAULT_CONFIG, {"state": {"db": str(state_db)}})
+    assert qwendex.pre_tool_gate(config, approved_leaf_parent, policy) == {}
+
+    writer_parent = dict(approved_leaf_parent, profile="implementer", agent_type="implementer")
+    rejected_writer = qwendex.pre_tool_gate(config, writer_parent, policy)
+    assert rejected_writer["decision"] == "block"
+    assert rejected_writer["event"] == "agent.spawn_rejected"
+
+    depth_two_parent = dict(approved_leaf_parent, depth=2)
+    rejected_leaf = qwendex.pre_tool_gate(config, depth_two_parent, policy)
+    assert rejected_leaf["decision"] == "block"
+    assert rejected_leaf["event"] == "agent.spawn_rejected"
+
+    unregistered = dict(approved_leaf_parent, agent_id="unregistered-parent")
+    rejected_unregistered = qwendex.pre_tool_gate(config, unregistered, policy)
+    assert rejected_unregistered["decision"] == "block"
+    assert rejected_unregistered["event"] == "agent.spawn_rejected"
+
+
+def test_qwendex_read_only_qdex_permission_forces_read_only_execution(monkeypatch):
+    qwendex = load_qwendex()
+    monkeypatch.delenv("QWENDEX_QDEX_PERMISSION_MODE", raising=False)
+    monkeypatch.delenv("QWENDEX_QDEX_PERMISSION_SOURCE", raising=False)
+    config = qwendex.load_qwendex_config()
+    config["qdex"]["permission_mode"] = "read-only"
+    assert qwendex.qdex_permission_posture(config)["valid"] is True
+    policy = qwendex.seat_execution_policy(config, "primary", config["seats"]["primary"])
+    assert policy["sandbox_mode"] == "read-only"
+    assert policy["tool_surface"]["write_capable"] is False
+
+
+def test_external_global_worker_cap_is_a_hard_policy_bound(tmp_path):
+    env = {
+        "QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite"),
+        "QWENDEX_GLOBAL_WORKER_CAP": "2",
+    }
+    policy = json_result("--agent-use", "Manager", "agent", "policy", "--json", env=env)
+    data = policy["data"]["agent_policy"]
+    assert data["configured_max_subagents"] == 4
+    assert data["global_worker_cap"] == 2
+    assert data["max_workers"] == 2
+    assert data["max_threads"] == 2
+    assert data["native_max_concurrent_threads"] == 3
+    assert data["capacity_source"] == "external_global_worker_cap"
+    assert data["env"]["QWENDEX_EFFECTIVE_GLOBAL_WORKER_CAP"] == "2"
+
+
+def test_manager_mode_cannot_widen_shared_worker_pool(tmp_path):
+    config_path = tmp_path / "manager-capacity.json"
+    base_config = json.loads((ROOT / "config/qwendex/qwendex.json").read_text(encoding="utf-8"))
+    base_config["orchestration"]["mode_profiles"]["manager"]["max_subagents"] = 8
+    config_path.write_text(json.dumps(base_config), encoding="utf-8")
+    env = {"QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite")}
+
+    policy = json_result(
+        "--config",
+        str(config_path),
+        "--agent-use",
+        "Manager",
+        "agent",
+        "policy",
+        "--json",
+        env=env,
+    )
+    data = policy["data"]["agent_policy"]
+
+    assert data["profile_max_subagents"] == 8
+    assert data["configured_max_subagents"] == 4
+    assert data["shared_worker_pool_limit"] == 4
+    assert data["manager_pool_clamped"] is True
+    assert data["max_workers"] == 4
+    assert data["capacity_source"] == "manager_global_worker_pool"
+    assert any("shared four-worker pool" in item for item in data["warnings"])
+
+
+def test_strict_native_reservation_mode_is_bound_into_policy(tmp_path):
+    env = {
+        "QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite"),
+        "QWENDEX_NATIVE_RESERVATION_MODE": "strict",
+    }
+    policy = json_result("--agent-use", "Manager", "agent", "policy", "--json", env=env)
+    data = policy["data"]["agent_policy"]
+    assert data["native_reservation_mode"] == "strict"
+    assert data["env"]["QWENDEX_NATIVE_RESERVATION_MODE"] == "strict"
+
+
+def test_invalid_external_global_worker_cap_fails_closed_without_widening(tmp_path):
+    env = {
+        "QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite"),
+        "QWENDEX_GLOBAL_WORKER_CAP": "not-an-int",
+    }
+    result = run_qwendex("--agent-use", "Manager", "agent", "policy", "--json", env=env)
+    assert result.returncode != 0
+    policy = parse_json_result(result)
+    assert policy["status"] == "blocked"
+    assert any("invalid QWENDEX_GLOBAL_WORKER_CAP" in item for item in policy["errors"])
+    data = policy["data"]["agent_policy"]
+    assert data["max_workers"] == 0
+    assert data["max_threads"] == 0
+    assert data["capacity_source"] == "invalid_external_global_worker_cap"
+
+
 def test_mode_profile_capacity_drives_status_and_agent_policy(tmp_path):
     config_path = tmp_path / "capacity.json"
     config_path.write_text(
@@ -5156,6 +5419,7 @@ def test_manager_subagent_start_attaches_advisory_plan_without_pretool_reservati
         "manager", "preflight", "--interactive-prompt-unknown", "--json", env=env
     )
     manager_env = {**env, **preflight["data"]["exports"]}
+    manager_env["QWENDEX_OWNER_ROUTE_BINDING_DIGEST"] = "e" * 64
     prompt = json_result(
         "agent",
         "hook",
@@ -5211,6 +5475,16 @@ def test_manager_subagent_start_attaches_advisory_plan_without_pretool_reservati
     assert status["registered_agent_count"] == 1
     assert status["active_agent_count"] == 1
     assert status["reserved_agent_count"] == 0
+    projection = status["native_reservation_projection"]
+    assert projection["schema_version"] == "qwendex.native_reservation_projection.v1"
+    assert projection["status"] in {"shadow_only", "blocked_external"}
+    assert projection["trusted"] is False
+    assert projection["acknowledgment"]["present"] is False
+    assert "provider_ack_missing" in projection["blockers"]
+    assert len(projection["reservations"]) == 1
+    assert projection["manager"]["owner_route_binding_digest"] == "e" * 64
+    assert projection["reservations"][0]["owner_route_binding_digest"] == "e" * 64
+    assert "/" not in json.dumps(projection, sort_keys=True)
 
     duplicate = run_qwendex(
         "agent",
@@ -5245,6 +5519,299 @@ def test_manager_subagent_start_attaches_advisory_plan_without_pretool_reservati
     assert deduplicated_payload["status"] == "warning"
     deduplicated_status = deduplicated_payload["data"]["session_status"]
     assert deduplicated_status["registered_agent_count"] == 1
+
+
+def test_manager_native_active_replay_rechecks_immutable_binding(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    env = with_live_manager_identity({
+        "QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite"),
+        "QWENDEX_RESULTS_ROOT": str(tmp_path / "results"),
+        "CODEX_HOME": str(tmp_path / "codex_home"),
+        "QWENDEX_MANAGER_ALLOW_UNHOOKED": "1",
+        "QWENDEX_MANAGER_TARGET_REPO": str(repo),
+    })
+    json_result("manager", "mode", "--set", "manager", "--json", env=env)
+    preflight = json_result(
+        "manager", "preflight", "--interactive-prompt-unknown", "--json", env=env
+    )
+    manager_env = {**env, **preflight["data"]["exports"]}
+    prompt = json_result(
+        "agent", "hook", "UserPromptSubmit", "--event-json",
+        json.dumps({
+            "session_id": "replay-root-session",
+            "turn_id": "replay-root-turn",
+            "cwd": str(repo),
+            "prompt": "Inspect and verify the bounded manager route",
+        }), "--json", env=manager_env,
+    )
+    planned = prompt["data"]["agent_plan"]["assignments"][0]["agent_id"]
+    event = {
+        "agent_id": "replay-runtime-agent",
+        "agent_type": "explorer",
+        "task_name": f"/manager/{planned}",
+        "parent_session_id": "replay-root-session",
+        "session_id": "replay-child-session",
+        "turn_id": "replay-child-turn",
+        "cwd": str(repo),
+    }
+    first = json_result(
+        "agent", "hook", "SubagentStart", "--event-json", json.dumps(event),
+        "--json", env=manager_env,
+    )
+    assert first["data"]["agent_session"]["agent_id"] == "replay-runtime-agent"
+
+    exact = json_result(
+        "agent", "hook", "SubagentStart", "--event-json", json.dumps(event),
+        "--json", env=manager_env,
+    )
+    assert exact["data"]["agent_session"]["agent_id"] == "replay-runtime-agent"
+    assert exact["data"]["hook_result"].get("reason_code") is None
+
+    mismatched = {**event, "parent_session_id": "different-root-session"}
+    mismatch = json_result(
+        "agent", "hook", "SubagentStart", "--event-json", json.dumps(mismatched),
+        "--json", env=manager_env,
+    )
+    assert mismatch["data"]["hook_result"]["reason_code"] == "native_spawn_replay_mismatch"
+    status = json_result("manager", "status", "--json", env=manager_env)
+    assert status["data"]["session_status"]["registered_agent_count"] == 1
+
+
+def test_manager_native_pending_activation_rejects_owner_route_mismatch(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    env = with_live_manager_identity({
+        "QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite"),
+        "QWENDEX_RESULTS_ROOT": str(tmp_path / "results"),
+        "CODEX_HOME": str(tmp_path / "codex_home"),
+        "QWENDEX_MANAGER_ALLOW_UNHOOKED": "1",
+        "QWENDEX_MANAGER_TARGET_REPO": str(repo),
+    })
+    json_result("manager", "mode", "--set", "manager", "--json", env=env)
+    preflight = json_result(
+        "manager", "preflight", "--interactive-prompt-unknown", "--json", env=env
+    )
+    manager_env = {**env, **preflight["data"]["exports"]}
+    manager_env["QWENDEX_OWNER_ROUTE_BINDING_DIGEST"] = "e" * 64
+    prompt = json_result(
+        "agent",
+        "hook",
+        "UserPromptSubmit",
+        "--event-json",
+        json.dumps({
+            "session_id": "pending-root-session",
+            "turn_id": "pending-root-turn",
+            "cwd": str(repo),
+            "prompt": "Implement a cross-file routing change and add regression tests",
+        }),
+        "--json",
+        env=manager_env,
+    )
+    planned_agent_id = prompt["data"]["agent_plan"]["assignments"][0]["agent_id"]
+    reservation = json_result(
+        "agent",
+        "hook",
+        "PreToolUse",
+        "--event-json",
+        json.dumps({
+            "session_id": "pending-root-session",
+            "turn_id": "pending-root-turn",
+            "cwd": str(repo),
+            "tool_name": "spawn_agent",
+            "tool_use_id": "pending-route-spawn",
+            "tool_input": {"task_name": planned_agent_id},
+        }),
+        "--json",
+        env=manager_env,
+    )
+    assert reservation["data"]["hook_result"]["event"] == "manager.native_spawn_reserved"
+    assert reservation["data"]["hook_result"]["reservation"]["status"] == "reserved"
+
+    native_task_name = f"/manager/{planned_agent_id}"
+    mismatched_env = {
+        **manager_env,
+        "QWENDEX_OWNER_ROUTE_BINDING_DIGEST": "f" * 64,
+    }
+    mismatched = json_result(
+        "agent",
+        "hook",
+        "SubagentStart",
+        "--event-json",
+        json.dumps({
+            "agent_id": "pending-route-runtime-agent",
+            "agent_type": "explorer",
+            "task_name": native_task_name,
+            "parent_session_id": "pending-root-session",
+            "session_id": "pending-child-session",
+            "turn_id": "pending-child-turn",
+            "cwd": str(repo),
+        }),
+        "--json",
+        env=mismatched_env,
+    )
+    assert mismatched["data"]["hook_result"]["reason_code"] == (
+        "native_spawn_route_binding_mismatch"
+    )
+    assert mismatched["data"]["hook_result"]["event"] == (
+        "manager.native_worker_bookkeeping_unavailable"
+    )
+
+    with sqlite3.connect(tmp_path / "qwendex.sqlite") as conn:
+        row = conn.execute(
+            "SELECT status, context_packet_json FROM qwendex_agent_sessions "
+            "WHERE status = 'reserved'"
+        ).fetchone()
+    assert row is not None
+    assert row[0] == "reserved"
+    assert json.loads(row[1])["owner_route_binding_digest"] == "e" * 64
+
+    activated = json_result(
+        "agent",
+        "hook",
+        "SubagentStart",
+        "--event-json",
+        json.dumps({
+            "agent_id": "pending-route-runtime-agent",
+            "agent_type": "explorer",
+            "task_name": native_task_name,
+            "parent_session_id": "pending-root-session",
+            "session_id": "pending-child-session",
+            "turn_id": "pending-child-turn",
+            "cwd": str(repo),
+        }),
+        "--json",
+        env=manager_env,
+    )
+    assert activated["data"]["agent_session"]["status"] == "active"
+    assert activated["data"]["agent_session"]["context_packet"][
+        "owner_route_binding_digest"
+    ] == "e" * 64
+
+
+def test_manager_native_strict_activation_requires_pending_reservation(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    env = with_live_manager_identity({
+        "QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite"),
+        "QWENDEX_RESULTS_ROOT": str(tmp_path / "results"),
+        "CODEX_HOME": str(tmp_path / "codex_home"),
+        "QWENDEX_MANAGER_ALLOW_UNHOOKED": "1",
+        "QWENDEX_MANAGER_TARGET_REPO": str(repo),
+    })
+    json_result("manager", "mode", "--set", "manager", "--json", env=env)
+    preflight = json_result(
+        "manager", "preflight", "--interactive-prompt-unknown", "--json", env=env
+    )
+    manager_env = {**env, **preflight["data"]["exports"]}
+    manager_env["QWENDEX_OWNER_ROUTE_BINDING_DIGEST"] = "e" * 64
+    prompt = json_result(
+        "agent",
+        "hook",
+        "UserPromptSubmit",
+        "--event-json",
+        json.dumps({
+            "session_id": "strict-fallback-root",
+            "turn_id": "strict-fallback-turn",
+            "cwd": str(repo),
+            "prompt": "Implement a cross-file routing change and add regression tests",
+        }),
+        "--json",
+        env=manager_env,
+    )
+    planned_agent_id = prompt["data"]["agent_plan"]["assignments"][0]["agent_id"]
+
+    qwendex = load_qwendex()
+    config = qwendex.deep_merge(
+        qwendex.DEFAULT_CONFIG,
+        {"state": {"db": str(tmp_path / "qwendex.sqlite")}},
+    )
+    strict_policy = qwendex.agent_policy_defaults("manager")
+    strict_policy["native_reservation_mode"] = "strict"
+    for key, value in manager_env.items():
+        monkeypatch.setenv(key, str(value))
+    session, error = qwendex.activate_manager_native_worker(
+        config,
+        {
+            "agent_id": "strict-fallback-runtime-agent",
+            "agent_type": "explorer",
+            "task_name": f"/manager/{planned_agent_id}",
+            "parent_session_id": "strict-fallback-root",
+            "session_id": "strict-fallback-child",
+            "turn_id": "strict-fallback-child-turn",
+            "cwd": str(repo),
+        },
+        strict_policy,
+    )
+    assert session is None
+    assert error == "native_spawn_reservation_missing"
+    with sqlite3.connect(tmp_path / "qwendex.sqlite") as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM qwendex_agent_sessions WHERE origin = 'qwendex'"
+        ).fetchone()[0] == 0
+
+
+def test_managed_native_reservation_carries_owner_intent_and_requires_owner_claim(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    env = with_live_manager_identity({
+        "QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite"),
+        "QWENDEX_RESULTS_ROOT": str(tmp_path / "results"),
+        "CODEX_HOME": str(tmp_path / "codex_home"),
+        "QWENDEX_MANAGER_ALLOW_UNHOOKED": "1",
+        "QWENDEX_MANAGER_TARGET_REPO": str(repo),
+    })
+    json_result("manager", "mode", "--set", "manager", "--json", env=env)
+    preflight = json_result("manager", "preflight", "--interactive-prompt-unknown", "--json", env=env)
+    manager_env = {**env, **preflight["data"]["exports"]}
+    manager_env.update({
+        "QWENDEX_OWNER_ADMISSION_MODE": "managed",
+        "QWENDEX_OWNER_MANAGER_INTENT_DIGEST": "a" * 64,
+        "QWENDEX_OWNER_RESERVATION_ID": "reservation-owner-1",
+        "QWENDEX_OWNER_ROUTE_BINDING_DIGEST": "b" * 64,
+    })
+    prompt = json_result(
+        "agent", "hook", "UserPromptSubmit", "--event-json",
+        json.dumps({
+            "session_id": "managed-root-session",
+            "turn_id": "managed-root-turn",
+            "cwd": str(repo),
+            "prompt": "Inspect the managed intent boundary",
+        }), "--json", env=manager_env,
+    )
+    planned_agent_id = prompt["data"]["agent_plan"]["assignments"][0]["agent_id"]
+    reserved = json_result(
+        "agent", "hook", "PreToolUse", "--event-json",
+        json.dumps({
+            "session_id": "managed-root-session",
+            "turn_id": "managed-root-turn",
+            "cwd": str(repo),
+            "tool_name": "spawn_agent",
+            "tool_use_id": "managed-owner-spawn",
+            "tool_input": {"task_name": planned_agent_id},
+        }), "--json", env=manager_env,
+    )
+    reservation = reserved["data"]["hook_result"]["reservation"]
+    assert reservation["context_packet"]["manager_intent_digest"] == "a" * 64
+    assert reservation["context_packet"]["owner_reservation_id"] == "reservation-owner-1"
+    assert reservation["context_packet"]["owner_admission_mode"] == "managed"
+
+    missing_claim_env = {
+        **manager_env,
+        "QWENDEX_OWNER_RESERVATION_ID": "reservation-owner-2",
+    }
+    duplicate = json_result(
+        "agent", "hook", "PreToolUse", "--event-json",
+        json.dumps({
+            "session_id": "managed-root-session",
+            "turn_id": "managed-root-turn",
+            "cwd": str(repo),
+            "tool_name": "spawn_agent",
+            "tool_use_id": "managed-owner-spawn-2",
+            "tool_input": {"task_name": planned_agent_id},
+        }), "--json", env=missing_claim_env,
+    )
+    assert duplicate["data"]["hook_result"]["reason_code"] == "manager.intent_duplicate"
 
 
 def test_manager_ultra_source_survives_prompt_routing_and_session_status(tmp_path):
@@ -5753,6 +6320,52 @@ def test_qwendex_worker_and_root_stop_contracts_are_advisory(tmp_path):
     advisories = " ".join(root_payload["data"]["hook_result"]["advisories"])
     assert "validation evidence was not recorded" in advisories
     assert "dirty worktree classification was not recorded" in advisories
+
+
+def test_qwendex_terminal_stop_replay_and_scope_mismatch_do_not_mutate(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    env = with_live_manager_identity({
+        "QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite"),
+        "QWENDEX_RESULTS_ROOT": str(tmp_path / "results"),
+        "CODEX_HOME": str(tmp_path / "codex_home"),
+        "QWENDEX_MANAGER_TARGET_REPO": str(repo),
+    })
+    assigned = json_result(
+        "manager", "assign", "--agent-id", "immutable-stop-agent",
+        "--lane", "inspection", "--task-id", "immutable-stop-task",
+        "--json", env=env,
+    )
+    assert assigned["data"]["agent_session"]["status"] == "active"
+    event = {
+        "agent_id": "immutable-stop-agent",
+        "cwd": str(repo),
+        "last_assistant_message": "FINAL_REPORT\nstatus: completed\nsummary: bounded stop",
+    }
+    first = json_result(
+        "agent", "hook", "SubagentStop", "--event-json", json.dumps(event),
+        "--json", env=env,
+    )
+    assert first["data"]["agent_session"]["status"] == "completed"
+
+    replay = json_result(
+        "agent", "hook", "SubagentStop", "--event-json", json.dumps(event),
+        "--json", env=env,
+    )
+    assert "duplicate terminal worker stop ignored" in replay["data"]["hook_result"]["advisories"]
+    assert replay["data"].get("agent_session") is None
+
+    mismatch_event = {**event, "cwd": str(tmp_path / "other-repo")}
+    scoped = json_result(
+        "agent", "hook", "SubagentStop", "--event-json", json.dumps(mismatch_event),
+        "--json", env=env,
+    )
+    assert "worker stop repository differs from its recorded scope" in scoped["data"]["hook_result"]["advisories"]
+    with sqlite3.connect(tmp_path / "qwendex.sqlite") as conn:
+        assert conn.execute(
+            "SELECT status FROM qwendex_agent_sessions WHERE agent_id = ?",
+            ("immutable-stop-agent",),
+        ).fetchone() == ("completed",)
 
 
 def test_qwendex_manager_root_work_never_requires_closeout_wording(tmp_path):
@@ -7339,6 +7952,42 @@ def test_qwendex_manager_reports_suggested_subagent_capacity_per_repository(tmp_
     assert counts == {str(repo_a): 2, str(repo_b): 1}
 
 
+def test_native_worker_accounting_is_global_across_repositories(tmp_path):
+    """Native reservations consume one shared pool, not one pool per repo."""
+
+    state_db = tmp_path / "qwendex.sqlite"
+    repo_a = tmp_path / "repo-a"
+    repo_b = tmp_path / "repo-b"
+    repo_a.mkdir()
+    repo_b.mkdir()
+    env = {"QWENDEX_STATE_DB": str(state_db)}
+
+    # The public assign surface is deliberately advisory. Promote two rows to
+    # the native origin used by the launch hooks, then verify that the
+    # accounting helper sees both repositories in one serialized ledger.
+    json_result(
+        "manager", "assign", "--agent-id", "native-a", "--lane", "review",
+        "--repo-root", str(repo_a), "--json", env=env,
+    )
+    json_result(
+        "manager", "assign", "--agent-id", "native-b", "--lane", "review",
+        "--repo-root", str(repo_b), "--json", env=env,
+    )
+    with sqlite3.connect(state_db) as conn:
+        conn.execute("UPDATE qwendex_agent_sessions SET origin='qwendex' WHERE agent_id IN ('native-a', 'native-b')")
+        conn.execute("UPDATE qwendex_agent_sessions SET status='completed' WHERE agent_id='native-b'")
+
+    qwendex = load_qwendex()
+    config = qwendex.deep_merge(
+        qwendex.DEFAULT_CONFIG,
+        {"state": {"db": str(state_db)}},
+    )
+    with qwendex.connect_state(config) as conn:
+        assert qwendex.native_worker_count(conn) == 1
+        conn.execute("UPDATE qwendex_agent_sessions SET status='reserved' WHERE agent_id='native-b'")
+        assert qwendex.native_worker_count(conn) == 2
+
+
 def test_qwendex_concurrent_manager_assignments_record_capacity_advisories(tmp_path):
     state_db = tmp_path / "qwendex.sqlite"
     repo = tmp_path / "repo"
@@ -7478,6 +8127,8 @@ def test_qwendex_manager_launch_status_validates_process_repo_start_and_policy(t
     assert selected["data"]["manager_decision"]["ledger_id"] == preflight["data"]["ledger_id"]
     assert trusted["data"]["pid_alive"] is True
     assert trusted["data"]["repo_match"] is True
+    assert trusted["data"]["hook_trusted"] is False
+    assert trusted["data"]["hook_trust_required"] is False
     assert {
         "trusted", "pid_alive", "repo_match", "decision_state", "reason",
         "recovery_command", "identity_present", "policy_match", "hook_trusted",
@@ -7504,6 +8155,15 @@ def test_qwendex_manager_launch_status_validates_process_repo_start_and_policy(t
     assert drifted["session_policy_hash"] == preflight["data"]["policy_hash"]
     assert drifted["desired_global_policy_hash"] != drifted["session_policy_hash"]
     json_result("manager", "mode", "--set", "manager", "--json", env=env)
+
+    strict_result = run_qwendex(
+        "manager", "launch-status", "--pid", str(pid), "--repo-root", str(repo), "--json",
+        env={**env, "QWENDEX_NATIVE_RESERVATION_MODE": "strict"},
+    )
+    strict = parse_json_result(strict_result)
+    assert strict_result.returncode != 0
+    assert strict["data"]["reason"] == "qwendex_hook_untrusted"
+    assert strict["data"]["hook_trust_required"] is True
 
     with sqlite3.connect(state_db) as conn:
         conn.execute(

@@ -242,6 +242,8 @@ def test_qdex_dry_run_wires_agent_policy_into_supported_v2_config(
     assert overrides["memories.use_memories"] is False
     assert overrides["memories.dedicated_tools"] is False
     assert overrides["features.multi_agent_v2.enabled"] is True
+    expected_native_depth = {"Manager": 2, "Auto": 1, "Heavy": 1, "Medium": 1, "Lite": 1, "Off": 0}[agent_use]
+    assert overrides["agents.max_depth"] == expected_native_depth
     assert overrides["features.multi_agent_v2.hide_spawn_agent_metadata"] is True
     assert overrides["features.multi_agent_v2.expose_spawn_agent_model_overrides"] is False
     assert (

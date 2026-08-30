@@ -23,8 +23,22 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+try:
+    from qwendex_native_reservation import seal_native_reservation_projection
+except ModuleNotFoundError:  # Support direct importlib loading from repository tests.
+    _native_reservation_spec = importlib.util.spec_from_file_location(
+        "qwendex_native_reservation",
+        Path(__file__).with_name("qwendex_native_reservation.py"),
+    )
+    if _native_reservation_spec is None or _native_reservation_spec.loader is None:
+        raise
+    _native_reservation_module = importlib.util.module_from_spec(_native_reservation_spec)
+    _native_reservation_spec.loader.exec_module(_native_reservation_module)
+    seal_native_reservation_projection = _native_reservation_module.seal_native_reservation_projection
+
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.6.9"
+VERSION = "0.6.10"
+EXEC_PROMPT_MAX_BYTES = 64 * 1024
 CONFIG_DIR = ROOT / "config" / "qwendex"
 DEFAULT_PROJECT_CONFIG = CONFIG_DIR / "qwendex.json"
 DEFAULT_USER_CONFIG = Path.home() / ".config" / "qwendex" / "config.json"
@@ -62,6 +76,8 @@ REQUIRED_SURFACE_FILES = (
     "scripts/qdex",
     "scripts/qwendex",
     "scripts/qwendex_cli.py",
+    "scripts/qwendex_native_reservation.py",
+    "scripts/qwendex_capability_probe.py",
     "scripts/qwendex_release_gate.py",
     "scripts/qwendex_install_deps",
     "scripts/qwendex_dev_env",
@@ -498,6 +514,10 @@ DEFAULT_MANAGER_TEAM = {
 }
 MANAGER_DEPLOY_POLICIES = {"auto", "disabled"}
 MANAGER_MAX_SUBAGENTS_LIMIT = 8
+# Manager mode is the cross-goal orchestration surface. Keep its native worker
+# pool bounded even when a legacy or local config advertises a larger per-
+# session value; non-manager profiles retain the historical product limit.
+MANAGER_GLOBAL_WORKER_POOL_LIMIT = 4
 MANAGER_MODE_MAX_SUBAGENTS = {
     "off": 0,
     "auto": 4,
@@ -625,7 +645,7 @@ CODEX_PATCH_MANIFESTS: dict[str, dict[str, Any]] = {
             "After each action, call the configured Qwendex toggle command and refresh status surfaces.",
             "Append the active Kaveman directive from QWENDEX_CODEX_STATUS_FILE to TUI developer instructions.",
             "Expose canonical task_name and parent_session_id on SubagentStart hook input for exact Qwendex ledger binding.",
-            "Restrict native MultiAgentV2 collaboration management tools to the root thread.",
+            "Expose only bounded V2 nested spawn to read-only specialists; keep root lifecycle tools root-only.",
             "Return immediately from V2 wait_agent when no child is running and direct the root away from empty retry loops.",
             "Allow V2 to ignore a legacy agents.max_threads value while retaining its own per-session cap.",
             "Honor QWENDEX_MODELS_CACHE_FILE so mixed Codex versions do not overwrite one shared model catalog.",
@@ -819,6 +839,10 @@ CODEX_PATCH_MANIFESTS["0.147.0"] = {
         *CODEX_PATCH_MANIFESTS["0.145.0"]["required_source_edits"],
         "Require a non-empty account-scoped Codex Apps cache before reclassifying a failed hosted refresh as degraded-ready.",
     ],
+}
+CODEX_PATCH_MANIFESTS["0.150.0"] = {
+    **CODEX_PATCH_MANIFESTS["0.147.0"],
+    "codex_tag": "rust-v0.150.0",
 }
 
 DEFAULT_CONFIG: dict[str, Any] = {
@@ -1109,7 +1133,7 @@ def qdex_permission_posture(
     source_env = os.environ if env is None else env
     launched_mode = str(source_env.get("QWENDEX_QDEX_PERMISSION_MODE") or "").strip()
     launched_source = str(source_env.get("QWENDEX_QDEX_PERMISSION_SOURCE") or "").strip()
-    valid_modes = {"workspace-write", "yolo"}
+    valid_modes = {"read-only", "workspace-write", "yolo"}
     if launched_mode:
         return {
             "mode": launched_mode,
@@ -1178,6 +1202,11 @@ def agent_policy_env(policy: Mapping[str, Any]) -> dict[str, str]:
         "QWENDEX_EFFECTIVE_AGENT_USE": str(policy["agent_use"]),
         "QWENDEX_AGENT_POLICY_HASH": str(policy["policy_hash"]),
         "QWENDEX_AGENT_POLICY_SOURCE": str(policy["source"]),
+        "QWENDEX_EFFECTIVE_GLOBAL_WORKER_CAP": str(policy.get("max_workers") or 0),
+        "QWENDEX_NATIVE_RESERVATION_MODE": str(
+            policy.get("native_reservation_mode") or "advisory"
+        ),
+        "QWENDEX_EFFECTIVE_AGENT_MAX_DEPTH": str(policy.get("max_depth") or 0),
         "QWENDEX_OUTPUT_POLICY": "kaveman" if kaveman_enabled else "standard",
         "QWENDEX_KAVEMAN_ENABLED": "1" if kaveman_enabled else "0",
         "QWENDEX_KAVEMAN_DIRECTIVE": directive,
@@ -1213,6 +1242,12 @@ def agent_policy_defaults(mode: str) -> dict[str, Any]:
         "emit_agent_status_events": True,
         "mirror_ledger_to_files": mode in {"heavy", "manager"},
         "policy_variant": "qwendex-cli-v1",
+        "nested_spawn": {
+            "enabled": mode == "manager",
+            "max_depth": 2 if mode == "manager" else 1,
+            "parent_profile": "read-only",
+            "leaf_can_spawn": False,
+        },
     }
     table: dict[str, dict[str, Any]] = {
         "off": {
@@ -1303,7 +1338,7 @@ def agent_policy_defaults(mode: str) -> dict[str, Any]:
         "manager": {
             "min_threads": 0,
             "max_threads": 4,
-            "max_depth": 1,
+            "max_depth": 2,
             "root_can_spawn": True,
             "require_agent_ledger": False,
             "require_verifier_for_edits": False,
@@ -1370,12 +1405,66 @@ def resolve_agent_policy(
             mode = "medium"
             selector_source = f"{selector_source}-fallback"
     policy = agent_policy_defaults(mode)
-    configured_capacity = int(manager_mode_profile(config, mode)["max_subagents"])
-    policy["max_threads"] = configured_capacity
-    policy["max_workers"] = configured_capacity
-    policy["native_max_concurrent_threads"] = configured_capacity + 1
+    profile_capacity = int(manager_mode_profile(config, mode)["max_subagents"])
+    configured_capacity = profile_capacity
+    manager_pool_clamped = False
+    if mode == "manager" and configured_capacity > MANAGER_GLOBAL_WORKER_POOL_LIMIT:
+        configured_capacity = MANAGER_GLOBAL_WORKER_POOL_LIMIT
+        manager_pool_clamped = True
+        warnings.append(
+            "Manager mode is capped at the shared four-worker pool; "
+            f"configured capacity {profile_capacity} is advisory"
+        )
+    reservation_mode_raw = str(
+        source_env.get("QWENDEX_NATIVE_RESERVATION_MODE") or "advisory"
+    ).strip().lower()
+    reservation_mode = reservation_mode_raw or "advisory"
+    if reservation_mode not in {"advisory", "strict"}:
+        errors.append(
+            "invalid QWENDEX_NATIVE_RESERVATION_MODE; expected advisory or strict"
+        )
+        reservation_mode = "strict"
+    external_cap_raw = str(source_env.get("QWENDEX_GLOBAL_WORKER_CAP") or "").strip()
+    external_cap: int | None = None
+    invalid_external_cap = False
+    if external_cap_raw:
+        try:
+            parsed_cap = int(external_cap_raw)
+        except (TypeError, ValueError):
+            parsed_cap = -1
+        if 0 <= parsed_cap <= MANAGER_MAX_SUBAGENTS_LIMIT:
+            external_cap = parsed_cap
+        else:
+            invalid_external_cap = True
+            errors.append(
+                "invalid QWENDEX_GLOBAL_WORKER_CAP; refusing to widen the shared worker pool"
+            )
+    effective_capacity = (
+        min(configured_capacity, external_cap)
+        if external_cap is not None
+        else 0 if invalid_external_cap else configured_capacity
+    )
+    policy["configured_max_subagents"] = configured_capacity
+    policy["profile_max_subagents"] = profile_capacity
+    policy["shared_worker_pool_limit"] = MANAGER_GLOBAL_WORKER_POOL_LIMIT
+    policy["manager_pool_clamped"] = manager_pool_clamped
+    policy["global_worker_cap"] = external_cap
+    policy["native_reservation_mode"] = reservation_mode
+    policy["max_threads"] = effective_capacity
+    policy["max_workers"] = effective_capacity
+    policy["native_max_concurrent_threads"] = effective_capacity + 1
     policy["min_threads"] = 0
-    policy["capacity_source"] = "orchestration.mode_profiles"
+    if invalid_external_cap:
+        capacity_source = "invalid_external_global_worker_cap"
+    elif external_cap is not None and external_cap < configured_capacity:
+        capacity_source = "external_global_worker_cap"
+    elif manager_pool_clamped:
+        capacity_source = "manager_global_worker_pool"
+    elif external_cap is not None:
+        capacity_source = "external_global_worker_cap"
+    else:
+        capacity_source = "orchestration.mode_profiles"
+    policy["capacity_source"] = capacity_source
     policy.update({
         "source": selector_source,
         "selector": selector,
@@ -1681,7 +1770,7 @@ def validate_qwendex_config(config: Mapping[str, Any]) -> list[str]:
     qdex = config.get("qdex", {})
     if not isinstance(qdex, Mapping):
         failures.append("invalid qdex")
-    elif qdex.get("permission_mode") not in {"workspace-write", "yolo"}:
+    elif qdex.get("permission_mode") not in {"read-only", "workspace-write", "yolo"}:
         failures.append(
             f"invalid qdex.permission_mode: {qdex.get('permission_mode')}"
         )
@@ -2232,11 +2321,18 @@ def session_turn_policy_projection(
     if effective_mode == str(requested_policy.get("mode") or "") and not local_restart_required:
         effective_policy = requested_policy
     else:
+        launch_capacity_env = {}
+        if os.environ.get("QWENDEX_GLOBAL_WORKER_CAP"):
+            launch_capacity_env["QWENDEX_GLOBAL_WORKER_CAP"] = os.environ["QWENDEX_GLOBAL_WORKER_CAP"]
+        if os.environ.get("QWENDEX_NATIVE_RESERVATION_MODE"):
+            launch_capacity_env["QWENDEX_NATIVE_RESERVATION_MODE"] = os.environ[
+                "QWENDEX_NATIVE_RESERVATION_MODE"
+            ]
         effective_policy = resolve_agent_policy(
             config,
             selected_manager_mode=effective_mode,
             kaveman_enabled=requested_kaveman,
-            env={},
+            env=launch_capacity_env,
             selector_source_override="qwendex-launch-snapshot",
         )
         effective_policy = attach_local_routing_snapshot(
@@ -4855,6 +4951,12 @@ def manager_session_status_payload(
             (repo_root, task_id),
         ).fetchall()
         sessions = [session for row in rows if (session := row_to_agent_session(row))]
+        decision_plan = decision.get("agent_plan")
+        decision_plan = decision_plan if isinstance(decision_plan, Mapping) else {}
+        decision_policy = decision.get("policy_snapshot")
+        decision_policy = decision_policy if isinstance(decision_policy, Mapping) else desired_policy
+        global_native_active_count = native_worker_count(conn)
+        global_native_capacity = native_worker_cap(decision_plan, decision_policy)
     plan = dict(decision.get("agent_plan") or {})
     legacy_required_lanes = list(plan.get("required_lanes") or [])
     optional_lanes = list(plan.get("optional_lanes") or [])
@@ -4923,6 +5025,17 @@ def manager_session_status_payload(
         )
         if not resolved:
             unresolved_suggested_lanes.append(lane)
+    owner_manager_intent_digest, owner_reservation_id, _ = owner_manager_intent_from_env()
+    native_reservation_projection = seal_native_reservation_projection(
+        decision=decision,
+        sessions=sessions,
+        policy=decision_policy,
+        global_active_count=global_native_active_count,
+        global_capacity=global_native_capacity,
+        owner_route_binding_digest=os.environ.get(OWNER_ROUTE_BINDING_DIGEST_ENV, ""),
+        owner_manager_intent_digest=owner_manager_intent_digest,
+        owner_reservation_id=owner_reservation_id,
+    )
     return {
         "schema_version": "qwendex.manager_session_status.v2",
         "session_id": decision.get("session_id"),
@@ -4953,6 +5066,15 @@ def manager_session_status_payload(
         "terminal_agent_count": len(terminal),
         "reserved_agent_count": len(reservations),
         "close_requested_agent_count": len(close_requests),
+        "global_native_active_count": global_native_active_count,
+        "global_native_capacity": global_native_capacity,
+        "global_native_capacity_remaining": (
+            max(0, global_native_capacity - global_native_active_count)
+            if global_native_capacity
+            else None
+        ),
+        "native_pool_scope": "all_repositories",
+        "native_reservation_projection": native_reservation_projection,
         "waiver_count": len(waivers),
         "waivers": [
             {
@@ -5508,7 +5630,7 @@ def codex_source_patch_specs(version: str) -> list[dict[str, Any]]:
         return []
     listed_agent_legacy_field = (
         "            last_task_message: None,\n"
-        if version not in {"0.145.0", "0.147.0"}
+        if version not in {"0.145.0", "0.147.0", "0.150.0"}
         else ""
     )
     specs = [
@@ -6140,7 +6262,10 @@ pub(crate) fn with_terminal_visualization_instructions(
                     """        MultiAgentVersion::V2 => true,
 """,
                     f"""        {marker}
-        MultiAgentVersion::V2 => !turn_context.session_source.is_non_root_agent(),
+        MultiAgentVersion::V2 => !exceeds_thread_spawn_depth_limit(
+            next_thread_spawn_depth(&turn_context.session_source),
+            turn_context.config.agent_max_depth,
+        ),
 """,
                 ),
             ],
@@ -6411,7 +6536,7 @@ max_threads = 2
             ],
         },
     ]
-    if version == "0.147.0":
+    if version in {"0.147.0", "0.150.0"}:
         resume_child_nested_response = """        sse(vec![
             ev_response_created("resp-worker-1"),
             ev_function_call_with_namespace(
@@ -6502,7 +6627,7 @@ max_threads = 2
         mcp_tests_anchor = """#[tokio::test]
 async fn list_all_tools_uses_shared_codex_apps_cache_when_client_startup_fails() {
 """
-    if version in {"0.145.0", "0.147.0"}:
+    if version in {"0.145.0", "0.147.0", "0.150.0"}:
         redundant_v2_config_paths = {
             "codex-rs/core/src/config/mod.rs",
             "codex-rs/core/src/config/config_tests.rs",
@@ -6560,6 +6685,26 @@ async fn multi_agent_v2_uses_agents_max_concurrent_threads_per_session() -> std:
                     "path": "codex-rs/core/src/tools/spec_plan.rs",
                     "replacements": [
                         (
+                            """        if multi_agent_v2_enabled(turn_context) {
+            let exposure = if turn_context.config.multi_agent_v2.non_code_mode_only {
+""",
+                        """        if multi_agent_v2_enabled(turn_context) {{
+            let is_non_root_agent = turn_context.session_source.is_non_root_agent();
+            let exposure = if turn_context.config.multi_agent_v2.non_code_mode_only {{
+""",
+                        ),
+                        (
+                            """            registry.register_trusted_with_exposure(
+                multi_agent_v2_handler(SendMessageHandlerV2, tool_namespace),
+""",
+                            """            if is_non_root_agent {
+                return;
+            }
+            registry.register_trusted_with_exposure(
+                multi_agent_v2_handler(SendMessageHandlerV2, tool_namespace),
+""",
+                        ),
+                        (
                             """                        expose_agent_type: !turn_context.config.agent_roles.is_empty(),
                         hide_agent_type_model_reasoning: hide_spawn_agent_metadata,
 """,
@@ -6590,6 +6735,12 @@ async fn multi_agent_v2_uses_agents_max_concurrent_threads_per_session() -> std:
                 {
                     "path": "codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs",
                     "replacements": [
+                        (
+                            """use crate::agent::next_thread_spawn_depth;
+""",
+                            """use crate::agent::{exceeds_thread_spawn_depth_limit, next_thread_spawn_depth};
+""",
+                        ),
                         (
                             """struct SpawnAgentArgs {
     message: String,
@@ -8041,9 +8192,24 @@ async fn list_all_tools_uses_shared_codex_apps_cache_when_client_startup_fails()
                     "path": "codex-rs/core/src/tools/spec_plan_tests.rs",
                     "replacements": [
                         (
+                            """            update_config(turn, |config| {
+                config.multi_agent_v2.tool_namespace = Some("agents".to_string());
+            });
+            use_bedrock_provider(turn);
+            turn.model_info.slug = model.to_string();
+""",
+                            """            update_config(turn, |config| {
+                config.multi_agent_v2.tool_namespace = Some("agents".to_string());
+                config.agent_max_depth = 2;
+            });
+            use_bedrock_provider(turn);
+            turn.model_info.slug = model.to_string();
+""",
+                        ),
+                        (
                             """    for (model, model_multi_agent_version, supports_delegation) in [
 """,
-                            """    for (model, model_multi_agent_version, _supports_delegation) in [
+                            """    for (model, model_multi_agent_version, supports_delegation) in [
 """,
                         ),
                         (
@@ -8055,10 +8221,16 @@ async fn list_all_tools_uses_shared_codex_apps_cache_when_client_startup_fails()
             plan.assert_registered_lacks(&[&spawn_agent_name, &followup_task_name]);
         }
 """,
-                            f"""        // {QWENDEX_CODEX_PATCH_MARKER}: V2 workers never receive
-        // collaboration-management tools, even when their model supports V2.
-        plan.assert_visible_lacks(&["agents"]);
-        plan.assert_registered_lacks(&[&spawn_agent_name, &followup_task_name]);
+                            f"""        // {QWENDEX_CODEX_PATCH_MARKER}: only a bounded read-only
+        // specialist may request a leaf; root lifecycle tools stay hidden.
+        if supports_delegation {{
+            plan.assert_visible_contains(&["agents"]);
+            plan.assert_registered_contains(&[&spawn_agent_name]);
+            plan.assert_registered_lacks(&[&followup_task_name]);
+        }} else {{
+            plan.assert_visible_lacks(&["agents"]);
+            plan.assert_registered_lacks(&[&spawn_agent_name, &followup_task_name]);
+        }}
 """,
                         ),
                     ],
@@ -8095,7 +8267,7 @@ async fn list_all_tools_uses_shared_codex_apps_cache_when_client_startup_fails()
     assert!(!initial_child_request.body_contains_text(SUBAGENT_DEVELOPER_INSTRUCTIONS));
     assert!(
         !initial_child_request.body_contains_text("\\\"spawn_agent\\\""),
-        "Qwendex V2 workers must not be offered nested spawn_agent",
+        "Qwendex V2 workers remain leaf-only unless the Manager depth budget is bound",
     );
     let initial_root_body = initial_root_request.body_json();
 """,
@@ -8251,14 +8423,14 @@ async fn failed_codex_apps_startup_reports_cached_degraded_ready_events() -> any
                         ),
                     ],
                 },
-                    ] if version == "0.147.0" else []
+                    ] if version in {"0.147.0", "0.150.0"} else []
                 ),
             ]
         )
-    if version == "0.147.0":
-        # Codex 0.147.0 added a side-conversation key after raw output, moved
-        # the Apps cache helper, and made V2 child policy more explicit. Keep
-        # the Qwendex contract intact while preserving those upstream paths.
+    if version in {"0.147.0", "0.150.0"}:
+        # Codex 0.147/0.150 added a side-conversation key after raw output,
+        # moved the Apps cache helper, and made V2 child policy more explicit.
+        # Keep the Qwendex contract intact while preserving those paths.
         side_config_field = (
             "    /// Switch between a side conversation and its parent without closing either.\n"
             "    pub toggle_side_conversation: Option<KeybindingsSpec>,\n"
@@ -8293,7 +8465,12 @@ async fn failed_codex_apps_startup_reports_cached_degraded_ready_events() -> any
         current_v2_arm = """        MultiAgentVersion::V2 => {
             turn_context.session_source.get_agent_path().is_none()
                 || turn_context.model_info.multi_agent_version == Some(MultiAgentVersion::V2)
-        }
+}
+"""
+        qwendex_v2_arm = """        MultiAgentVersion::V2 => !exceeds_thread_spawn_depth_limit(
+            next_thread_spawn_depth(&turn_context.session_source),
+            turn_context.config.agent_max_depth,
+        ),
 """
         current_spawn_setup = """    let args: SpawnAgentArgs = parse_arguments(&arguments)?;
     let fork_mode = args.fork_mode()?;
@@ -8345,6 +8522,11 @@ async fn failed_codex_apps_startup_reports_cached_degraded_ready_events() -> any
     let message = message_content(args.message)?;
     let session_source = turn.session_source.clone();
     let child_depth = next_thread_spawn_depth(&session_source);
+    if exceeds_thread_spawn_depth_limit(child_depth, turn.config.agent_max_depth) {{
+        return Err(FunctionCallError::RespondToModel(
+            "Agent depth limit reached. Solve the task yourself.".to_string(),
+        ));
+    }}
     let mut config = build_agent_spawn_config(
         &session.get_base_instructions().await,
         turn.as_ref(),
@@ -8401,9 +8583,7 @@ async fn failed_codex_apps_startup_reports_cached_degraded_ready_events() -> any
                 elif path == "codex-rs/core/src/tools/spec_plan.rs":
                     if old == "        MultiAgentVersion::V2 => true,\n":
                         old = current_v2_arm
-                        new = f"""        {marker}
-        MultiAgentVersion::V2 => !turn_context.session_source.is_non_root_agent(),
-"""
+                        new = f"{marker}\n{qwendex_v2_arm}"
                 elif path == "codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs":
                     if old.startswith("    let args: SpawnAgentArgs = parse_arguments(&arguments)?;"):
                         old = current_spawn_setup
@@ -8801,6 +8981,300 @@ async fn multi_agent_v2_spawn_rejects_model_override() {
                 },
             ]
         )
+    if version == "0.150.0":
+        # 0.150 keeps the policy seams but changed the V2 handler APIs and
+        # refreshed several integration-test expectations. Rebase those
+        # seams against the released source rather than a 0.147 text match.
+        skipped_paths = {
+            "codex-rs/core/tests/suite/subagent_notifications.rs",
+            "codex-rs/core/tests/suite/multi_agent_resume.rs",
+            "codex-rs/core/src/tools/handlers/multi_agents_tests.rs",
+            "codex-rs/core/src/tools/spec_plan_tests.rs",
+        }
+        rebased: list[dict[str, Any]] = []
+        for original in specs:
+            path = str(original["path"])
+            if path in skipped_paths:
+                continue
+            spec = dict(original)
+            replacements: list[tuple[str, str]] = []
+            for old, new in spec["replacements"]:
+                if path == "codex-rs/core/src/tools/spec_plan.rs" and old.startswith(
+                    "        MultiAgentVersion::V2 => {"
+                ):
+                    old = "__QWENDEX_REGEX__(?m)^        MultiAgentVersion::V2 => \\{\\n.*?^        \\}\\n"
+                    new = "\n".join([
+                        f"        {marker}",
+                        "        MultiAgentVersion::V2 => {",
+                        "            // Qwendex permits one bounded depth-two leaf, independent of",
+                        "            // the native depth-one default, while retaining the upstream",
+                        "            // model capability gate for non-root workers.",
+                        "            const QWENDEX_V2_MAX_DEPTH: i32 = 2;",
+                        "            let depth_allowed = !exceeds_thread_spawn_depth_limit(",
+                        "                next_thread_spawn_depth(&turn_context.session_source),",
+                        "                QWENDEX_V2_MAX_DEPTH,",
+                        "            );",
+                        "            let model_allowed = turn_context.session_source.get_agent_path().is_none()",
+                        "                || turn_context.model_info.multi_agent_version == Some(MultiAgentVersion::V2);",
+                        "            depth_allowed && model_allowed",
+                        "        },",
+                        "",
+                    ])
+                elif path == "codex-rs/core/src/tools/handlers/multi_agents_v2/wait.rs":
+                    if old.startswith("        let deadline = Instant::now()"):
+                        old = "__QWENDEX_REGEX__(?m)^        let deadline = Instant::now\\(\\) \\+ Duration::from_millis\\(timeout_ms as u64\\);\\n        let outcome = wait_for_activity.*?^        let result = WaitAgentResult::from_outcome\\(outcome, requested_timeout_ms, timeout_ms\\);\\n"
+                        new = "\n".join([
+                            "        let outcome = if pending_activity.is_some() {",
+                            "            let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);",
+                            "            wait_for_activity(&mut activity_rx, pending_activity, deadline).await",
+                            "        } else {",
+                            "            session",
+                            "                .services",
+                            "                .agent_control",
+                            "                .register_session_root(session.thread_id, turn.parent_thread_id);",
+                            "            let agents = session",
+                            "                .services",
+                            "                .agent_control",
+                            "                .list_agents(&turn.session_source, None)",
+                            "                .await",
+                            "                .map_err(collab_spawn_error)?;",
+                            "            if has_running_worker(&agents) {",
+                            "                let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);",
+                            "                wait_for_activity(&mut activity_rx, pending_activity, deadline).await",
+                            "            } else {",
+                            "                WaitOutcome::NoRunningAgents",
+                            "            }",
+                            "        };",
+                            "        let result = WaitAgentResult::from_outcome(outcome, requested_timeout_ms, timeout_ms);",
+                            "",
+                        ])
+                    elif "WaitAgentResult::from_outcome(WaitOutcome::NoRunningAgents)" in new:
+                        new = new.replace(
+                            "WaitAgentResult::from_outcome(WaitOutcome::NoRunningAgents)",
+                            "WaitAgentResult::from_outcome(WaitOutcome::NoRunningAgents, None, 0)",
+                        )
+                elif path == "codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs" and old.startswith(
+                    "    let args: SpawnAgentArgs = parse_arguments(&arguments)?;"
+                ):
+                    old = "__QWENDEX_REGEX__(?m)^    let args: SpawnAgentArgs = parse_arguments\\(&arguments\\)\\?;\\n    let fork_mode = args.fork_mode\\(\\)\\?;\\n.*?^    apply_spawn_agent_runtime_overrides\\(&mut config, turn.as_ref\\(\\)\\)\\?;\\n"
+                    new = "\n".join([
+                        "    let args: SpawnAgentArgs = parse_arguments(&arguments)?;",
+                        "    let fork_mode = args.fork_mode()?;",
+                        f"    {marker}",
+                        "    let role_name: Option<&str> = None;",
+                        "    let is_full_history_fork = matches!(fork_mode, Some(SpawnAgentForkMode::FullHistory));",
+                        "",
+                        "    let message = message_content(args.message)?;",
+                        "    let session_source = turn.session_source.clone();",
+                        "    let child_depth = next_thread_spawn_depth(&session_source);",
+                        "    // Qwendex permits one bounded depth-two leaf independent of the native",
+                        "    // depth-one default; depth-three descendants remain unavailable.",
+                        "    const QWENDEX_V2_MAX_DEPTH: i32 = 2;",
+                        "    if exceeds_thread_spawn_depth_limit(child_depth, QWENDEX_V2_MAX_DEPTH) {",
+                        "        return Err(FunctionCallError::RespondToModel(",
+                        '            "Agent depth limit reached. Solve the task yourself.".to_string(),',
+                        "        ));",
+                        "    }",
+                        "    let mut config =",
+                        "        build_agent_spawn_config(&session.get_base_instructions().await, turn.as_ref())?;",
+                        "    apply_requested_spawn_agent_model_overrides(&session, turn.as_ref(), &mut config, None, None)",
+                        "        .await?;",
+                        "    apply_spawn_agent_service_tier(",
+                        "        &session,",
+                        "        &mut config,",
+                        "        turn.config.service_tier.as_deref(),",
+                        "        None,",
+                        "    )",
+                        "    .await?;",
+                        "    apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;",
+                        "",
+                    ])
+                elif path == "codex-rs/codex-mcp/src/connection_manager.rs" and old.startswith(
+                    "                if !publication_gate.wait().await {"
+                ):
+                    new = new.replace(
+                        "return (server_name, Err(StartupOutcomeError::Cancelled), false);",
+                        "return (server_name, Err(StartupOutcomeError::Cancelled), false);",
+                    )
+                replacements.append((old, new))
+            spec["replacements"] = replacements
+            rebased.append(spec)
+        specs = rebased
+        specs.append(
+            {
+                "path": "codex-rs/codex-mcp/src/connection_manager_tests.rs",
+                "replacements": [
+                    (
+                        "let reconnect_factory = Arc::new(|| {",
+                        "let reconnect_factory: Arc<dyn Fn() -> ManagedClientFuture + Send + Sync> = Arc::new(|| {",
+                    ),
+                    (
+                        "        McpRuntimeInput {\n            config: Arc::new(config),\n            plugins_available: false,\n",
+                        "        McpRuntimeInput {\n            startup_policy: McpStartupPolicy::Eager,\n            config: Arc::new(config),\n            plugins_available: false,\n",
+                    ),
+                ],
+            }
+        )
+        specs.append(
+            {
+                "path": "codex-rs/codex-mcp/src/connection_manager.rs",
+                "replacements": [
+                    (
+                        "__QWENDEX_REGEX__(?m)^([ \\t]*)return \\(server_name, Err\\(StartupOutcomeError::Cancelled\\)\\);\\n",
+                        "\\g<1>return (server_name, Err(StartupOutcomeError::Cancelled), false);\n",
+                    ),
+                    (
+                        "                            (server_name, Err(error))",
+                        "                            (server_name, Err(error), false)",
+                    ),
+                    (
+                        "                            (server_name, client.client().await)",
+                        "                            (server_name, client.client().await, false)",
+                    ),
+                ],
+                "expected_occurrences": {
+                    "__QWENDEX_REGEX__(?m)^([ \\t]*)return \\(server_name, Err\\(StartupOutcomeError::Cancelled\\)\\);\\n": 3
+                },
+            }
+        )
+        specs.extend(
+            [
+                {
+                    "path": "codex-rs/core/tests/suite/subagent_notifications.rs",
+                    "replacements": [
+                        (
+                            "#[tokio::test(flavor = \"multi_thread\", worker_threads = 2)]\nasync fn spawned_full_history_v2_child_uses_model_precedence_without_dropping_context(",
+                            f"// {QWENDEX_CODEX_PATCH_MARKER}: upstream V2 model-precedence coverage is superseded by the Qwendex inherited-policy contract.\n#[ignore = \"Qwendex V2 rejects native per-child model and reasoning overrides\"]\n#[tokio::test(flavor = \"multi_thread\", worker_threads = 2)]\nasync fn spawned_full_history_v2_child_uses_model_precedence_without_dropping_context(",
+                        ),
+                    ],
+                },
+                {
+                    "path": "codex-rs/core/tests/suite/multi_agent_resume.rs",
+                    "replacements": [
+                        (
+                            "#[tokio::test(flavor = \"multi_thread\", worker_threads = 2)]\nasync fn cold_root_resume_restores_agent_identity_and_role_on_followup()",
+                            f"// {QWENDEX_CODEX_PATCH_MARKER}: upstream role/resume expectations are superseded by the Qwendex inherited-policy contract.\n#[ignore = \"Qwendex V2 workers inherit root policy and remain leaf-only\"]\n#[tokio::test(flavor = \"multi_thread\", worker_threads = 2)]\nasync fn cold_root_resume_restores_agent_identity_and_role_on_followup()",
+                        ),
+                    ],
+                },
+                {
+                    "path": "codex-rs/core/src/tools/handlers/multi_agents_tests.rs",
+                    "replacements": [
+                        *[
+                            (
+                                "#[tokio::test]\nasync fn " + name + "()",
+                                f"// {QWENDEX_CODEX_PATCH_MARKER}: superseded native expectation.\n#[ignore = \"Qwendex V2 owns the bounded worker contract\"]\n#[tokio::test]\nasync fn "
+                                + name
+                                + "()",
+                            )
+                            for name in [
+                                "multi_agent_v2_spawn_fork_turns_all_applies_agent_type_override",
+                                "multi_agent_v2_full_history_fork_accepts_explicit_service_tier",
+                                "multi_agent_v2_spawn_partial_fork_turns_allows_agent_type_override",
+                                "multi_agent_v2_spawn_agent_ignores_configured_max_depth",
+                                "multi_agent_v2_wait_agent_clamps_timeout_below_configured_min",
+                                "multi_agent_v2_wait_agent_accepts_explicit_timeout_at_configured_min",
+                                "multi_agent_v2_wait_agent_uses_configured_default_timeout",
+                                "multi_agent_v2_wait_agent_allows_zero_configured_timeout",
+                                "multi_agent_v2_wait_agent_accepts_explicit_timeout_at_configured_max",
+                            ]
+                        ],
+                        (
+                            "#[tokio::test]\nasync fn multi_agent_v2_spawn_rejects_legacy_fork_context()",
+                            "\n".join([
+                                "#[tokio::test]",
+                                "async fn qwendex_v2_spawn_rejects_model_override() {",
+                                "    let (mut session, mut turn) = make_session_and_context().await;",
+                                "    let manager = thread_manager();",
+                                "    let root = manager",
+                                "        .start_thread(StartThreadOptions::new((*turn.config).clone()))",
+                                "        .await",
+                                "        .expect(\"root thread should start\");",
+                                "    session.services.agent_control = manager.agent_control();",
+                                "    session.thread_id = root.thread_id;",
+                                "    let mut config = (*turn.config).clone();",
+                                "    config.features.enable(Feature::MultiAgentV2).expect(\"test config should allow feature update\");",
+                                "    set_turn_config(&mut turn, config);",
+                                "    let err = SpawnAgentHandlerV2::default()",
+                                "        .handle(invocation(Arc::new(session), Arc::new(turn), \"spawn_agent\", function_payload(json!({",
+                                "            \"message\": \"inspect this repo\", \"task_name\": \"model_override\", \"model\": \"gpt-5.4\"",
+                                "        }))))",
+                                "        .await",
+                                "        .err()",
+                                "        .expect(\"Qwendex V2 should reject model overrides\");",
+                                "    let FunctionCallError::RespondToModel(message) = err else { panic!(\"expected a model-facing validation error\"); };",
+                                "    assert!(message.contains(\"unknown field `model`\"));",
+                                "}",
+                                "",
+                                "#[tokio::test]",
+                                "async fn multi_agent_v2_spawn_rejects_legacy_fork_context()",
+                            ]),
+                        ),
+                    ],
+                },
+                {
+                    "path": "codex-rs/core/src/tools/spec_plan_tests.rs",
+                    "replacements": [
+                        (
+                            """            update_config(turn, |config| {
+                config.multi_agent_v2.tool_namespace = Some("agents".to_string());
+            });
+            use_bedrock_provider(turn);
+            Arc::make_mut(&mut turn.model_info).slug = model.to_string();
+""",
+                            """            update_config(turn, |config| {
+                config.multi_agent_v2.tool_namespace = Some("agents".to_string());
+                config.agent_max_depth = 2;
+            });
+            use_bedrock_provider(turn);
+            Arc::make_mut(&mut turn.model_info).slug = model.to_string();
+""",
+                        ),
+                        (
+                            """        if supports_delegation {
+            plan.assert_visible_contains(&["agents"]);
+            plan.assert_registered_contains(&[&spawn_agent_name, &followup_task_name]);
+        } else {
+            plan.assert_visible_lacks(&["agents"]);
+            plan.assert_registered_lacks(&[&spawn_agent_name, &followup_task_name]);
+        }
+""",
+                            f"""        // {QWENDEX_CODEX_PATCH_MARKER}: only a bounded read-only
+        // specialist may request a leaf; root lifecycle tools stay hidden.
+        if supports_delegation {{
+            plan.assert_visible_contains(&["agents"]);
+            plan.assert_registered_contains(&[&spawn_agent_name]);
+            plan.assert_registered_lacks(&[&followup_task_name]);
+        }} else {{
+            plan.assert_visible_lacks(&["agents"]);
+            plan.assert_registered_lacks(&[&spawn_agent_name, &followup_task_name]);
+        }}
+""",
+                        ),
+                        (
+                            "#[tokio::test]\nasync fn multi_agent_feature_selects_one_agent_tool_family()",
+                            f"// {QWENDEX_CODEX_PATCH_MARKER}: V2 exposes only bounded worker tools to a root turn.\n#[tokio::test]\nasync fn multi_agent_feature_selects_one_agent_tool_family()",
+                        ),
+                    ],
+                },
+            ]
+        )
+        # Most of the historical patch fragments are Python f-strings, so
+        # their Rust braces were escaped as ``{{``/``}}``.  The 0.147 branch
+        # formatted those fragments as it was assembled; these 0.150
+        # replacements are rebased after that formatting step.  Normalize
+        # every replacement here so the generated Rust remains syntactically
+        # valid (and keep the source patch deterministic).
+        specs = [
+            {
+                **spec,
+                "replacements": [
+                    (old, new.replace("{{", "{").replace("}}", "}"))
+                    for old, new in spec["replacements"]
+                ],
+            }
+            for spec in specs
+        ]
     return specs
 
 
@@ -8816,10 +9290,33 @@ def apply_codex_source_patch(source: Path, version: str, *, dry_run: bool = Fals
             "errors": [f"no source patch is available for Codex {version}"],
         }
 
+    # A complete patch is an idempotent no-op.  Checking the manifest-level
+    # state before replaying individual fragments avoids reapplying a broad
+    # historical anchor that also happens to occur inside its replacement.
+    manifest = CODEX_PATCH_MANIFESTS.get(version)
+    if manifest:
+        state = codex_source_patch_state(root, manifest)
+        if state.get("applied"):
+            return {
+                "changed": False,
+                "changes": [
+                    {
+                        "path": str(file_state.get("path") or ""),
+                        "changed": False,
+                        "replacements": 0,
+                        "dry_run": dry_run,
+                        "missing": [],
+                        "ambiguous": [],
+                    }
+                    for file_state in state.get("files", [])
+                ],
+                "errors": [],
+            }
+
     # Keep the rebase fail-closed: validate every source replacement before
-    # writing any file.  The 0.147.0 contract also requires unique anchors so
+    # writing any file.  The 0.147/0.150 contract also requires unique anchors so
     # a broad fragment cannot silently duplicate a patched Rust test.
-    strict_anchor_cardinality = version == "0.147.0"
+    strict_anchor_cardinality = version in {"0.147.0", "0.150.0"}
     original_texts: dict[str, str] = {}
     updated_texts: dict[str, str] = {}
     for spec in specs:
@@ -8846,11 +9343,34 @@ def apply_codex_source_patch(source: Path, version: str, *, dry_run: bool = Fals
         ambiguous: list[str] = []
         expected_occurrences = spec.get("expected_occurrences", {})
         for old, new in spec["replacements"]:
-            if new in updated:
+            if old.startswith("__QWENDEX_REGEX__"):
+                pattern = old.removeprefix("__QWENDEX_REGEX__")
+                occurrences = len(re.findall(pattern, updated, flags=re.MULTILINE | re.DOTALL))
+                expected_count = int(expected_occurrences.get(old, 1))
+                if occurrences == 0:
+                    if new in updated:
+                        continue
+                    missing.append(pattern[:120])
+                    continue
+                if strict_anchor_cardinality and occurrences != expected_count:
+                    ambiguous.append(
+                        f"{pattern[:120]} (found {occurrences} times; expected {expected_count})"
+                    )
+                    continue
+                updated, replaced_count = re.subn(
+                    pattern,
+                    new,
+                    updated,
+                    count=expected_count if strict_anchor_cardinality else 0,
+                    flags=re.MULTILINE | re.DOTALL,
+                )
+                replacements += replaced_count
                 continue
             occurrences = updated.count(old)
             anchor = old.splitlines()[0] if old.splitlines() else old[:80]
             if occurrences == 0:
+                if new in updated:
+                    continue
                 missing.append(anchor)
                 continue
             expected_count = int(expected_occurrences.get(old, 1))
@@ -9701,6 +10221,8 @@ def seat_execution_policy(
         if authority in {"read_only_review", "isolated_probe"}
         else configured_mode
     )
+    if qdex_permission_posture(config).get("mode") == "read-only":
+        sandbox_mode = "read-only"
     local_backend = seat in {"qwen", "sandbox"} or str(seat_config.get("backend") or "") == "local-responses-adapter"
     isolated_read_only = sandbox_mode == "read-only"
     local_harness_enabled = bool(seat) and not local_backend and not isolated_read_only
@@ -9779,11 +10301,14 @@ def exec_command_for_seat(
     prompt: str,
     *,
     execution_policy: Mapping[str, Any],
+    prompt_from_stdin: bool = False,
     cwd: Path | None = None,
 ) -> list[str]:
     exec_cwd = cwd or qwendex_exec_cwd()
     sandbox_mode = str(execution_policy.get("sandbox_mode") or "read-only")
     if seat in {"qwen", "sandbox"}:
+        if prompt_from_stdin:
+            raise ValueError("private stdin prompt transport requires the primary seat")
         return [
             str(ROOT / "scripts" / "run_local_qwen_codex.sh"),
             "--cwd",
@@ -9817,7 +10342,7 @@ def exec_command_for_seat(
         str(execution_policy.get("runtime_model") or seat_config.get("model", "gpt-5.5")),
         "-C",
         str(exec_cwd),
-        prompt,
+        "-" if prompt_from_stdin else prompt,
     ])
     return command
 
@@ -9829,8 +10354,88 @@ def exec_observation(status: str) -> dict[str, Any]:
     }
 
 
+def read_exec_prompt_from_stdin() -> tuple[str, bytes] | tuple[None, str]:
+    """Read one bounded UTF-8 prompt without putting it in argv or receipts."""
+
+    stream = sys.stdin
+    try:
+        if bool(stream.isatty()):
+            return None, "prompt_stdin_requires_pipe"
+    except (AttributeError, OSError):
+        return None, "prompt_stdin_stream_unavailable"
+    try:
+        binary = getattr(stream, "buffer", None)
+        raw = (
+            binary.read(EXEC_PROMPT_MAX_BYTES + 1)
+            if binary is not None
+            else stream.read(EXEC_PROMPT_MAX_BYTES + 1)
+        )
+    except (OSError, UnicodeError):
+        return None, "prompt_stdin_read_failed"
+    if isinstance(raw, str):
+        raw_bytes = raw.encode("utf-8")
+    elif isinstance(raw, bytes):
+        raw_bytes = raw
+    else:
+        return None, "prompt_stdin_read_failed"
+    if len(raw_bytes) > EXEC_PROMPT_MAX_BYTES:
+        return None, "prompt_stdin_too_large"
+    try:
+        prompt = raw_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        return None, "prompt_stdin_invalid_utf8"
+    if not prompt.strip():
+        return None, "prompt_stdin_empty"
+    return prompt, raw_bytes
+
+
+def exec_output_tail(value: object, *, prompt: str, private_prompt: bool) -> str:
+    """Keep a child that echoes a private prompt from entering receipts."""
+
+    if isinstance(value, bytes):
+        text = value.decode("utf-8", errors="replace")
+    else:
+        text = str(value or "")
+    if private_prompt and prompt:
+        text = text.replace(prompt, "[private_prompt_redacted]")
+    return text[-2000:]
+
+
 def command_exec(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, Any]:
-    prompt = " ".join(args.prompt).strip()
+    prompt_from_stdin = bool(getattr(args, "prompt_stdin", False))
+    prompt_args = list(getattr(args, "prompt", []) or [])
+    if prompt_from_stdin and prompt_args:
+        return stable_envelope(
+            command="exec",
+            status="blocked",
+            summary="Private stdin prompt transport cannot be combined with an argv prompt.",
+            errors=["prompt_stdin_with_argv_prompt"],
+            data={"execution_performed": False, "availability_evidence": False, "prompt_transport": "stdin"},
+        )
+    if prompt_from_stdin:
+        prompt_result = read_exec_prompt_from_stdin()
+        if prompt_result[0] is None:
+            return stable_envelope(
+                command="exec",
+                status="blocked",
+                summary="Private stdin prompt transport was rejected before execution.",
+                errors=[str(prompt_result[1])],
+                data={"execution_performed": False, "availability_evidence": False, "prompt_transport": "stdin"},
+            )
+        prompt = str(prompt_result[0])
+        prompt_bytes = bytes(prompt_result[1])
+    else:
+        if not prompt_args:
+            return stable_envelope(
+                command="exec",
+                status="blocked",
+                summary="Qwendex exec requires a prompt or --prompt-stdin.",
+                errors=["exec_prompt_missing"],
+                data={"execution_performed": False, "availability_evidence": False},
+            )
+        prompt = " ".join(prompt_args).strip()
+        prompt_bytes = prompt.encode("utf-8")
+    prompt_sha256 = hashlib.sha256(prompt_bytes).hexdigest()
     if args.synthetic and not is_exact_qwendex_ok(prompt):
         return stable_envelope(
             command="exec",
@@ -9870,6 +10475,24 @@ def command_exec(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, 
         local_enabled=local_enabled,
     )
     seat = route["seat"]
+    if prompt_from_stdin and seat != "primary":
+        return stable_envelope(
+            command="exec",
+            status="blocked",
+            summary="Private stdin prompt transport is restricted to the primary authority seat.",
+            errors=["prompt_stdin_requires_primary_seat"],
+            data={
+                "seat": seat,
+                "task_class": task_class,
+                "task_class_source": task_class_source,
+                "routing": route,
+                "prompt_transport": "stdin",
+                "prompt_bytes": len(prompt_bytes),
+                "prompt_sha256": prompt_sha256,
+                "execution_performed": False,
+                "availability_evidence": False,
+            },
+        )
     seat_config = config["seats"].get(seat, config["seats"]["primary"])
     base_execution_policy = seat_execution_policy(config, seat, seat_config)
     configured_timeout = int(base_execution_policy.get("max_wall_time_seconds") or -1)
@@ -9898,7 +10521,9 @@ def command_exec(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, 
                 "profile": seat,
                 "task_class": task_class,
                 "task_class_source": task_class_source,
-                "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+                "prompt_transport": "stdin" if prompt_from_stdin else "argv",
+                "prompt_bytes": len(prompt_bytes),
+                "prompt_sha256": prompt_sha256,
                 **exec_observation("not_executed"),
                 "markers": [],
                 "eval_result": "synthetic_not_evidence",
@@ -9929,6 +10554,9 @@ def command_exec(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, 
                 "execution_policy": execution_policy,
                 "execution_performed": False,
                 "availability_evidence": False,
+                "prompt_transport": "stdin" if prompt_from_stdin else "argv",
+                "prompt_bytes": len(prompt_bytes),
+                "prompt_sha256": prompt_sha256,
             },
         )
     cmd = exec_command_for_seat(
@@ -9936,6 +10564,7 @@ def command_exec(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, 
         seat_config,
         prompt,
         execution_policy=execution_policy,
+        prompt_from_stdin=prompt_from_stdin,
         cwd=exec_cwd,
     )
     if args.dry_run:
@@ -9954,6 +10583,9 @@ def command_exec(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, 
                 "execution_policy": execution_policy,
                 "execution_performed": False,
                 "availability_evidence": False,
+                "prompt_transport": "stdin" if prompt_from_stdin else "argv",
+                "prompt_bytes": len(prompt_bytes),
+                "prompt_sha256": prompt_sha256,
             },
             next_actions=["Start the stack with scripts/qwendex up before live exec."],
         )
@@ -9966,6 +10598,7 @@ def command_exec(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, 
             check=False,
             timeout=effective_timeout,
             env={**os.environ, **execution_policy["child_env"]},
+            input=prompt if prompt_from_stdin else None,
         )
     except subprocess.TimeoutExpired as exc:
         path = write_receipt(
@@ -9977,7 +10610,9 @@ def command_exec(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, 
                 "profile": seat,
                 "task_class": task_class,
                 "task_class_source": task_class_source,
-                "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+                "prompt_transport": "stdin" if prompt_from_stdin else "argv",
+                "prompt_bytes": len(prompt_bytes),
+                "prompt_sha256": prompt_sha256,
                 **exec_observation("not_observed"),
                 "markers": ["QWENDEX_TIMEOUT"],
                 "eval_result": "fail",
@@ -9987,8 +10622,8 @@ def command_exec(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, 
                 "execution_performed": True,
                 "availability_evidence": False,
                 "returncode": "timeout",
-                "stdout_tail": (exc.stdout or "")[-2000:],
-                "stderr_tail": (exc.stderr or "")[-2000:],
+                "stdout_tail": exec_output_tail(exc.stdout, prompt=prompt, private_prompt=prompt_from_stdin),
+                "stderr_tail": exec_output_tail(exc.stderr, prompt=prompt, private_prompt=prompt_from_stdin),
             },
         )
         return stable_envelope(
@@ -9997,7 +10632,14 @@ def command_exec(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, 
             summary="Qwendex exec timed out.",
             artifacts=[str(path)],
             next_actions=["Retry with a smaller prompt or a larger bounded timeout."],
-            errors=[subprocess_failure_tail(exc) or "timeout"],
+            errors=[
+                exec_output_tail(
+                    subprocess_failure_tail(exc),
+                    prompt=prompt,
+                    private_prompt=prompt_from_stdin,
+                )
+                or "timeout"
+            ],
             data={
                 "seat": seat,
                 "model": runtime_model,
@@ -10008,6 +10650,9 @@ def command_exec(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, 
                 "execution_policy": execution_policy,
                 "execution_performed": True,
                 "availability_evidence": False,
+                "prompt_transport": "stdin" if prompt_from_stdin else "argv",
+                "prompt_bytes": len(prompt_bytes),
+                "prompt_sha256": prompt_sha256,
             },
         )
     markers = [
@@ -10020,7 +10665,11 @@ def command_exec(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, 
     failure_error = (
         f"guard markers detected: {', '.join(markers)}"
         if markers
-        else subprocess_failure_tail(result)
+        else exec_output_tail(
+            subprocess_failure_tail(result),
+            prompt=prompt,
+            private_prompt=prompt_from_stdin,
+        )
     )
     path = write_receipt(
         config,
@@ -10031,7 +10680,9 @@ def command_exec(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, 
             "profile": seat,
             "task_class": task_class,
             "task_class_source": task_class_source,
-            "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+            "prompt_transport": "stdin" if prompt_from_stdin else "argv",
+            "prompt_bytes": len(prompt_bytes),
+            "prompt_sha256": prompt_sha256,
             **exec_observation("not_observed"),
             "markers": markers,
             "eval_result": status,
@@ -10041,8 +10692,8 @@ def command_exec(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, 
             "execution_performed": True,
             "availability_evidence": result.returncode == 0 and not markers,
             "returncode": result.returncode,
-            "stdout_tail": result.stdout[-2000:],
-            "stderr_tail": result.stderr[-2000:],
+            "stdout_tail": exec_output_tail(result.stdout, prompt=prompt, private_prompt=prompt_from_stdin),
+            "stderr_tail": exec_output_tail(result.stderr, prompt=prompt, private_prompt=prompt_from_stdin),
         },
     )
     return stable_envelope(
@@ -10062,6 +10713,9 @@ def command_exec(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, 
             "execution_policy": execution_policy,
             "execution_performed": True,
             "availability_evidence": result.returncode == 0 and not markers,
+            "prompt_transport": "stdin" if prompt_from_stdin else "argv",
+            "prompt_bytes": len(prompt_bytes),
+            "prompt_sha256": prompt_sha256,
         },
     )
 
@@ -11231,11 +11885,25 @@ def subagent_start_context(
     )
     output_context = agent_output_policy_context(agent_policy, config=config)
     output_sentence = f" {output_context}" if output_context else ""
+    depth = int(event.get("depth") or event.get("spawn_depth") or 0)
+    nested_policy = agent_policy.get("nested_spawn", {})
+    nested_specialist = bool(
+        str(agent_policy.get("mode") or "") == "manager"
+        and depth == 1
+        and event_uses_read_only_profile(event, str(event.get("profile") or ""))
+        and isinstance(nested_policy, Mapping)
+        and bool(nested_policy.get("enabled"))
+    )
+    delegation_sentence = (
+        "A Manager-approved depth-one read-only specialist may request at most one depth-two leaf via spawn_agent; never use root lifecycle tools."
+        if nested_specialist
+        else "Do not spawn subagents."
+    )
     return (
         f"You are Qwendex subagent {agent_id} of type {agent_type}. "
         f"Parent mode is {agent_policy.get('agent_use')}. Execute {task_name} now. "
         f"{assignment}{output_sentence} "
-        "Do not merely acknowledge or stand by. Do not spawn subagents. "
+        f"Do not merely acknowledge or stand by. {delegation_sentence} "
         "Stay within the assigned lane and summarize the outcome, evidence, changed paths, and remaining risk concisely. "
         "A structured FINAL_REPORT is welcome when convenient, but ordinary clear output is accepted."
     )
@@ -11414,6 +12082,90 @@ def registered_assignment_keys(sessions: list[dict[str, Any]]) -> set[tuple[str,
     return keys
 
 
+def native_worker_count(conn: sqlite3.Connection) -> int:
+    """Count nonterminal native workers across every registered repository.
+
+    Manager assignment records are intentionally advisory and may describe
+    work that has not been launched.  Native reservations and SubagentStart
+    bindings use ``origin='qwendex'`` and are the authoritative launch
+    accounting surface, so only those rows consume the shared native pool.
+    The query is used inside the caller's ``BEGIN IMMEDIATE`` transaction.
+    """
+
+    row = conn.execute(
+        """
+        SELECT COUNT(*)
+        FROM qwendex_agent_sessions
+        WHERE origin = 'qwendex'
+          AND status IN ('reserved', 'active', 'close_requested')
+        """
+    ).fetchone()
+    return int(row[0] or 0) if row is not None else 0
+
+
+def native_worker_cap(plan: Mapping[str, Any], policy: Mapping[str, Any]) -> int:
+    """Return the strictest positive native cap advertised by plan/policy."""
+
+    candidates: list[int] = []
+    for source in (plan, policy):
+        for key in ("max_workers", "max_threads"):
+            try:
+                value = int(source.get(key) or 0)
+            except (TypeError, ValueError):
+                value = 0
+            if value > 0:
+                candidates.append(value)
+    return min(candidates) if candidates else 0
+
+
+def native_reservation_is_strict(policy: Mapping[str, Any]) -> bool:
+    """Whether this launch must block when native reservation is not proven."""
+    return str(policy.get("native_reservation_mode") or "advisory").strip().lower() == "strict"
+
+
+OWNER_ROUTE_BINDING_DIGEST_ENV = "QWENDEX_OWNER_ROUTE_BINDING_DIGEST"
+OWNER_ROUTE_BINDING_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
+OWNER_ADMISSION_MODE_ENV = "QWENDEX_OWNER_ADMISSION_MODE"
+OWNER_MANAGER_INTENT_DIGEST_ENV = "QWENDEX_OWNER_MANAGER_INTENT_DIGEST"
+OWNER_RESERVATION_ID_ENV = "QWENDEX_OWNER_RESERVATION_ID"
+OWNER_MANAGER_INTENT_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
+OWNER_RESERVATION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$")
+
+
+def owner_route_binding_digest_from_env() -> tuple[str, bool]:
+    """Read the opaque owner route binding without exposing its contents.
+
+    An external owner supplies only an opaque SHA-256 route binding
+    through the private launch environment.  Invalid non-empty input is
+    reported separately so native reservation can fail closed instead of
+    silently becoming unbound.
+    """
+
+    raw = str(os.environ.get(OWNER_ROUTE_BINDING_DIGEST_ENV) or "").strip().lower()
+    if not raw:
+        return "", False
+    if not OWNER_ROUTE_BINDING_DIGEST_RE.fullmatch(raw):
+        return "", True
+    return raw, False
+
+
+def owner_manager_intent_from_env() -> tuple[str, str, bool]:
+    """Read the optional owner-managed semantic identity and reservation.
+
+    Standalone Qwendex remains compatible when the owner admission marker is
+    absent.  A managed launch is fail-closed: both opaque values must be
+    present and well-formed before native reservation or activation.
+    """
+
+    mode = str(os.environ.get(OWNER_ADMISSION_MODE_ENV) or "").strip().lower()
+    if mode != "managed":
+        return "", "", False
+    intent = str(os.environ.get(OWNER_MANAGER_INTENT_DIGEST_ENV) or "").strip().lower()
+    reservation = str(os.environ.get(OWNER_RESERVATION_ID_ENV) or "").strip()
+    invalid = not OWNER_MANAGER_INTENT_DIGEST_RE.fullmatch(intent) or not OWNER_RESERVATION_ID_RE.fullmatch(reservation)
+    return intent, reservation, invalid
+
+
 def reserve_manager_native_spawn(
     config: Mapping[str, Any],
     event: Mapping[str, Any],
@@ -11421,6 +12173,21 @@ def reserve_manager_native_spawn(
     decision: Mapping[str, Any],
 ) -> dict[str, Any]:
     """Reserve one persisted planned lane before native Codex creates it."""
+    owner_route_binding_digest, owner_route_binding_invalid = owner_route_binding_digest_from_env()
+    if owner_route_binding_invalid:
+        return {
+            "decision": "block",
+            "event": "manager.owner_route_binding_invalid",
+            "reason": "The owner route binding digest is malformed; native child reservation is denied.",
+        }
+    owner_manager_intent_digest, owner_reservation_id, owner_intent_invalid = owner_manager_intent_from_env()
+    if owner_intent_invalid:
+        return {
+            "decision": "block",
+            "event": "manager.owner_intent_binding_invalid",
+            "reason": "Managed native reservation requires a valid owner intent digest and reservation id.",
+        }
+    managed_owner = bool(owner_manager_intent_digest)
     repo_root = str(decision.get("repo_root") or canonical_manager_repo_root(event=event))
     task_id = str(decision.get("agent_task_id") or decision.get("session_id") or "")
     plan = decision.get("agent_plan")
@@ -11475,25 +12242,45 @@ def reserve_manager_native_spawn(
                     "reservation": session,
                     "idempotent_reuse": True,
                 }
-        active_count = sum(
-            1 for session in sessions
-            if str(session.get("status") or "") not in AGENT_TERMINAL_STATUSES
-        )
+        if managed_owner:
+            active_rows = conn.execute(
+                """
+                SELECT * FROM qwendex_agent_sessions
+                WHERE origin='qwendex' AND status IN ('reserved','active','close_requested')
+                """
+            ).fetchall()
+            for active_row in active_rows:
+                active_session = row_to_agent_session(active_row) or {}
+                active_packet = active_session.get("context_packet")
+                active_packet = active_packet if isinstance(active_packet, Mapping) else {}
+                if str(active_packet.get("manager_intent_digest") or "") != owner_manager_intent_digest:
+                    continue
+                if str(active_packet.get("owner_reservation_id") or "") == owner_reservation_id:
+                    conn.commit()
+                    return {
+                        "event": "manager.native_spawn_reserved",
+                        "reservation": active_session,
+                        "idempotent_reuse": True,
+                    }
+                conn.rollback()
+                return {
+                    "decision": "block",
+                    "event": "manager.intent_duplicate",
+                    "reason": "An active native lane already owns this manager intent.",
+                    "scope": "managed_owner_intent",
+                }
         policy_snapshot = decision.get("policy_snapshot")
         policy_snapshot = policy_snapshot if isinstance(policy_snapshot, Mapping) else agent_policy
-        max_workers = int(
-            plan.get("max_workers")
-            or policy_snapshot.get("max_workers")
-            or policy_snapshot.get("max_threads")
-            or 0
-        )
-        if max_workers <= 0 or active_count >= max_workers:
+        max_workers = native_worker_cap(plan, policy_snapshot)
+        global_active_count = native_worker_count(conn)
+        if max_workers <= 0 or global_active_count >= max_workers:
             conn.rollback()
             return {
                 "decision": "block",
                 "event": "manager.capacity_reached",
-                "reason": f"Native worker capacity is {max_workers}; {active_count} lane(s) are already active or reserved.",
-                "active_count": active_count,
+                "reason": f"Global native worker capacity is {max_workers}; {global_active_count} lane(s) are already active or reserved across repositories.",
+                "active_count": global_active_count,
+                "scope": "global_native_pool",
                 "max_workers": max_workers,
             }
         registered = registered_assignment_keys(sessions)
@@ -11555,6 +12342,10 @@ def reserve_manager_native_spawn(
             "root_session_id": str(decision.get("root_session_id") or ""),
             "runtime": "native_v2",
             "runtime_state": "reserved",
+            "owner_route_binding_digest": owner_route_binding_digest,
+            "manager_intent_digest": owner_manager_intent_digest,
+            "owner_reservation_id": owner_reservation_id,
+            "owner_admission_mode": "managed" if managed_owner else "standalone",
         }
         conn.execute(
             """
@@ -11612,6 +12403,13 @@ def activate_manager_native_worker(
     parent_session_id = str(event.get("parent_session_id") or "").strip()
     if not task_name or not parent_session_id:
         return None, "native_spawn_identity_missing"
+    owner_route_binding_digest, owner_route_binding_invalid = owner_route_binding_digest_from_env()
+    if owner_route_binding_invalid:
+        return None, "owner_route_binding_invalid"
+    owner_manager_intent_digest, owner_reservation_id, owner_intent_invalid = owner_manager_intent_from_env()
+    if owner_intent_invalid:
+        return None, "owner_intent_binding_invalid"
+    managed_owner = bool(owner_manager_intent_digest)
     repo_root = canonical_manager_repo_root(event=event)
     launch_ledger_id = str(os.environ.get("QWENDEX_MANAGER_LEDGER_ID") or "").strip()
     policy_hash = str(os.environ.get("QWENDEX_MANAGER_POLICY_HASH") or agent_policy.get("policy_hash") or "").strip()
@@ -11633,6 +12431,37 @@ def activate_manager_native_worker(
                 and str(packet.get("runtime") or "") == "native_v2"
                 and str(packet.get("runtime_state") or "") == "active"
             ):
+                replay_mismatches: list[str] = []
+                if str(existing.get("repo_root") or "") != repo_root:
+                    replay_mismatches.append("repository")
+                if str(existing.get("policy_hash") or "") != policy_hash:
+                    replay_mismatches.append("policy_hash")
+                if str(packet.get("launch_ledger_id") or "") != launch_ledger_id:
+                    replay_mismatches.append("launch_ledger_id")
+                if str(packet.get("root_session_id") or "") != parent_session_id:
+                    replay_mismatches.append("parent_session_id")
+                stored_task_name = str(packet.get("native_task_name") or "")
+                if stored_task_name and stored_task_name != task_name:
+                    replay_mismatches.append("task_name")
+                stored_session_id = str(packet.get("native_session_id") or "")
+                event_session_id = str(event.get("session_id") or "")
+                if stored_session_id and event_session_id and stored_session_id != event_session_id:
+                    replay_mismatches.append("session_id")
+                stored_turn_id = str(packet.get("native_turn_id") or "")
+                event_turn_id = str(event.get("turn_id") or "")
+                if stored_turn_id and event_turn_id and stored_turn_id != event_turn_id:
+                    replay_mismatches.append("turn_id")
+                stored_owner_route_binding_digest = str(packet.get("owner_route_binding_digest") or "")
+                if stored_owner_route_binding_digest != owner_route_binding_digest:
+                    replay_mismatches.append("owner_route_binding_digest")
+                if managed_owner:
+                    if str(packet.get("manager_intent_digest") or "") != owner_manager_intent_digest:
+                        replay_mismatches.append("manager_intent_digest")
+                    if str(packet.get("owner_reservation_id") or "") != owner_reservation_id:
+                        replay_mismatches.append("owner_reservation_id")
+                if replay_mismatches:
+                    conn.rollback()
+                    return None, "native_spawn_replay_mismatch"
                 return existing, ""
             return None, "native_agent_id_collision"
         rows = conn.execute(
@@ -11655,6 +12484,8 @@ def activate_manager_native_worker(
                 str(packet.get("launch_ledger_id") or "") == launch_ledger_id
                 and str(packet.get("root_session_id") or "") == parent_session_id
                 and task_matches
+                and (not managed_owner or str(packet.get("manager_intent_digest") or "") == owner_manager_intent_digest)
+                and (not managed_owner or str(packet.get("owner_reservation_id") or "") == owner_reservation_id)
             ):
                 candidates.append(session)
         if len(candidates) > 1:
@@ -11662,6 +12493,16 @@ def activate_manager_native_worker(
             return None, "native_spawn_reservation_ambiguous"
         pending = candidates[0] if candidates else None
         if pending is None:
+            if managed_owner:
+                conn.rollback()
+                return None, "owner_reservation_missing"
+            if native_reservation_is_strict(agent_policy):
+                # Strict mode is an admission contract, not merely a policy
+                # label.  A hook-bypass or lost PreToolUse event must not
+                # synthesize an active worker from the advisory plan because
+                # that would evade the serialized reservation/capacity gate.
+                conn.rollback()
+                return None, "native_spawn_reservation_missing"
             # Codex V2 collaboration calls do not consistently traverse the
             # generic PreToolUse hook path. SubagentStart still provides the
             # canonical task name, parent root session, child runtime id, and
@@ -11713,19 +12554,11 @@ def activate_manager_native_worker(
             if assignment_key in registered or (assignment_key[0], "") in registered:
                 conn.rollback()
                 return None, "native_spawn_assignment_duplicate"
-            active_count = sum(
-                1 for session in existing_sessions
-                if str(session.get("status") or "") not in AGENT_TERMINAL_STATUSES
-            )
             policy_snapshot = decision.get("policy_snapshot")
             policy_snapshot = policy_snapshot if isinstance(policy_snapshot, Mapping) else agent_policy
-            max_workers = int(
-                plan.get("max_workers")
-                or policy_snapshot.get("max_workers")
-                or policy_snapshot.get("max_threads")
-                or 0
-            )
-            if max_workers <= 0 or active_count >= max_workers:
+            max_workers = native_worker_cap(plan, policy_snapshot)
+            global_active_count = native_worker_count(conn)
+            if max_workers <= 0 or global_active_count >= max_workers:
                 conn.rollback()
                 return None, "native_spawn_capacity_reached"
             lane = str(assignment.get("lane") or "")
@@ -11758,6 +12591,10 @@ def activate_manager_native_worker(
                 "native_agent_type": str(event.get("agent_type") or ""),
                 "native_task_name": task_name,
                 "parent_session_id": parent_session_id,
+                "owner_route_binding_digest": owner_route_binding_digest,
+                "manager_intent_digest": owner_manager_intent_digest,
+                "owner_reservation_id": owner_reservation_id,
+                "owner_admission_mode": "managed" if managed_owner else "standalone",
             }
             conn.execute(
                 """
@@ -11804,6 +12641,23 @@ def activate_manager_native_worker(
             ).fetchone()
             return row_to_agent_session(row), ""
         packet = dict(pending.get("context_packet") or {})
+        # The reservation was created before Codex assigned its runtime agent
+        # id. Bind first activation to the same opaque owner route that
+        # created the pending packet; checking only replayed active rows would
+        # allow a first activation under a different owner route to overwrite
+        # the packet's route identity.
+        stored_owner_route_binding_digest = str(
+            packet.get("owner_route_binding_digest") or ""
+        )
+        if stored_owner_route_binding_digest != owner_route_binding_digest:
+            conn.rollback()
+            return None, "native_spawn_route_binding_mismatch"
+        if managed_owner and str(packet.get("manager_intent_digest") or "") != owner_manager_intent_digest:
+            conn.rollback()
+            return None, "native_spawn_intent_binding_mismatch"
+        if managed_owner and str(packet.get("owner_reservation_id") or "") != owner_reservation_id:
+            conn.rollback()
+            return None, "native_spawn_reservation_id_mismatch"
         packet.update({
             "runtime_state": "active",
             "native_session_id": str(event.get("session_id") or ""),
@@ -11811,6 +12665,10 @@ def activate_manager_native_worker(
             "native_agent_type": str(event.get("agent_type") or ""),
             "native_task_name": task_name,
             "parent_session_id": parent_session_id,
+            "owner_route_binding_digest": owner_route_binding_digest,
+            "manager_intent_digest": owner_manager_intent_digest,
+            "owner_reservation_id": owner_reservation_id,
+            "owner_admission_mode": "managed" if managed_owner else "standalone",
         })
         try:
             conn.execute(
@@ -13089,8 +13947,27 @@ def pre_tool_gate(config: Mapping[str, Any], event: Mapping[str, Any], agent_pol
                     (agent_id,),
                 ).fetchone()
             ) or {}
-        if manager_session_is_read_only(registered_agent_session):
+        if manager_session_is_read_only(registered_agent_session) and profile in READ_ONLY_AGENT_PROFILES:
             read_only_profile = True
+    nested_spawn_policy = agent_policy.get("nested_spawn", {})
+    # A marker in hook input is not an identity authority. Native sessions
+    # must already have an active/reserved read-only ledger row created by the
+    # Manager reservation path; otherwise an arbitrary child could claim
+    # nested approval by setting `nested_spawn_approved` itself.
+    registered_read_only = bool(
+        registered_agent_session
+        and str(registered_agent_session.get("status") or "") in {"active", "reserved", "close_requested"}
+        and manager_session_is_read_only(registered_agent_session)
+    )
+    nested_spawn_allowed = bool(
+        tool_key == "spawn_agent"
+        and depth == 1
+        and manager_mode_active
+        and isinstance(nested_spawn_policy, Mapping)
+        and bool(nested_spawn_policy.get("enabled"))
+        and read_only_profile
+        and registered_read_only
+    )
     allow_read_only_validation = (
         read_only_profile
         and (
@@ -13106,6 +13983,7 @@ def pre_tool_gate(config: Mapping[str, Any], event: Mapping[str, Any], agent_pol
         event_is_write_attempt(tool, command) or managed_shell_event
     )
     if manager_mode_active and codex_root and tool_key == "spawn_agent":
+        strict_reservation = native_reservation_is_strict(agent_policy)
         try:
             spawn_resolution = resolve_manager_decision(
                 config,
@@ -13115,6 +13993,13 @@ def pre_tool_gate(config: Mapping[str, Any], event: Mapping[str, Any], agent_pol
             )
         except Exception as exc:
             reason_code = f"bookkeeping_unavailable:{redact_text(str(exc) or exc.__class__.__name__)}"
+            if strict_reservation:
+                return {
+                    "decision": "block",
+                    "event": "manager.native_spawn_admission_blocked",
+                    "reason": "Qwendex spawn bookkeeping is unavailable; strict native reservation admission denied the worker.",
+                    "reason_code": reason_code,
+                }
             return {
                 "event": "manager.subagent_plan_unavailable",
                 "reason": "Qwendex spawn bookkeeping is unavailable; Codex may still spawn the worker.",
@@ -13122,6 +14007,14 @@ def pre_tool_gate(config: Mapping[str, Any], event: Mapping[str, Any], agent_pol
             }
         if spawn_resolution.get("status") != "attached":
             reason_code = str(spawn_resolution.get("reason") or "decision_not_found")
+            if strict_reservation:
+                return {
+                    "decision": "block",
+                    "event": "manager.native_spawn_admission_blocked",
+                    "reason": f"Qwendex could not attach native spawn bookkeeping ({reason_code}); strict reservation admission denied the worker.",
+                    "reason_code": reason_code,
+                    "manager_resolution": manager_resolution_diagnostic(spawn_resolution),
+                }
             return {
                 "event": "manager.subagent_plan_unavailable",
                 "reason": f"Qwendex could not attach advisory spawn bookkeeping ({reason_code}); Codex may still spawn the worker.",
@@ -13137,12 +14030,31 @@ def pre_tool_gate(config: Mapping[str, Any], event: Mapping[str, Any], agent_pol
             )
         except Exception as exc:
             reason_code = f"bookkeeping_unavailable:{redact_text(str(exc) or exc.__class__.__name__)}"
+            if strict_reservation:
+                return {
+                    "decision": "block",
+                    "event": "manager.native_spawn_admission_blocked",
+                    "reason": "Qwendex spawn reservation is unavailable; strict native reservation admission denied the worker.",
+                    "reason_code": reason_code,
+                }
             return {
                 "event": "manager.subagent_plan_unavailable",
                 "reason": "Qwendex spawn reservation is unavailable; Codex may still spawn the worker.",
                 "reason_code": reason_code,
             }
         if reservation.get("decision") == "block":
+            if strict_reservation:
+                return {
+                    "decision": "block",
+                    "event": "manager.native_spawn_admission_blocked",
+                    "reason": str(
+                        reservation.get("reason")
+                        or "The requested worker is outside the strict Qwendex reservation plan."
+                    ),
+                    "reason_code": str(
+                        reservation.get("event") or "manager.native_spawn_admission_blocked"
+                    ),
+                }
             return {
                 "event": "manager.subagent_plan_advisory",
                 "reason": str(reservation.get("reason") or "The requested worker is outside the advisory Qwendex plan."),
@@ -13154,7 +14066,7 @@ def pre_tool_gate(config: Mapping[str, Any], event: Mapping[str, Any], agent_pol
         # the root. Codex permissions and the live user instruction govern
         # root tools; Qwendex observes child lanes only.
         return {}
-    if (codex_subagent or depth > 0) and tool_key in ROOT_ONLY_AGENT_TOOLS:
+    if (codex_subagent or depth > 0) and tool_key in ROOT_ONLY_AGENT_TOOLS and not nested_spawn_allowed:
         return {
             "decision": "block",
             "event": "agent.spawn_rejected",
@@ -13168,6 +14080,7 @@ def pre_tool_gate(config: Mapping[str, Any], event: Mapping[str, Any], agent_pol
     read_only_tool_rejected = (
         read_only_profile
         and not managed_shell_event
+        and not nested_spawn_allowed
         and not read_only_non_shell_tool_allowed(tool)
     )
     if read_only_profile and (write_attempt or read_only_shell_rejected or read_only_tool_rejected):
@@ -13488,6 +14401,16 @@ def evaluate_agent_hook(
         }
     if canonical == "SubagentStart":
         registered: dict[str, Any] | None = None
+        strict_reservation = native_reservation_is_strict(agent_policy)
+        if strict_reservation and not os.environ.get("QWENDEX_MANAGER_LEDGER_ID"):
+            return "blocked", {
+                "decision": "block",
+                "reason": "Strict native reservation admission requires a live Manager ledger identity.",
+                "hookSpecificOutput": {
+                    "hookEventName": "SubagentStart",
+                    "additionalContext": "Native worker admission is blocked until the owner-local reservation ledger is bound.",
+                },
+            }, {}
         if os.environ.get("QWENDEX_MANAGER_LEDGER_ID"):
             try:
                 registered, registration_error = activate_manager_native_worker(
@@ -13498,6 +14421,16 @@ def evaluate_agent_hook(
             except Exception as exc:
                 registration_error = f"bookkeeping_unavailable:{redact_text(str(exc) or exc.__class__.__name__)}"
             if registration_error:
+                if strict_reservation:
+                    reason = f"Qwendex native worker admission blocked ({registration_error})."
+                    return "blocked", {
+                        "decision": "block",
+                        "reason": reason,
+                        "hookSpecificOutput": {
+                            "hookEventName": "SubagentStart",
+                            "additionalContext": reason,
+                        },
+                    }, {}
                 reason = f"Qwendex could not attach advisory worker bookkeeping ({registration_error})."
                 return "pass", {
                     "hookSpecificOutput": {
@@ -13529,6 +14462,7 @@ def evaluate_agent_hook(
         updated: dict[str, Any] | None = None
         capture: dict[str, Any] = {}
         advisories: list[str] = []
+        lifecycle_mutation_allowed = True
         agent_id = str(event.get("agent_id") or "")
         if agent_id:
             try:
@@ -13544,6 +14478,10 @@ def evaluate_agent_hook(
                             advisories.append("worker has legacy unscoped lifecycle state")
                         elif session_repo != event_repo:
                             advisories.append("worker stop repository differs from its recorded scope")
+                            lifecycle_mutation_allowed = False
+                        if row is not None and str(session.get("status") or "") in AGENT_TERMINAL_STATUSES:
+                            advisories.append("duplicate terminal worker stop ignored")
+                            lifecycle_mutation_allowed = False
                     if (
                         final_status.get("status") == "completed"
                         and session_is_verifier(session)
@@ -13555,7 +14493,7 @@ def evaluate_agent_hook(
                             "reason": "verifier_evidence_not_recorded",
                         }
                     now = utc_now()
-                    if row is not None:
+                    if row is not None and lifecycle_mutation_allowed:
                         try:
                             capture = write_agent_output_artifacts(
                                 event=event,
@@ -15494,6 +16432,7 @@ def manager_launch_health(
         "manager_subagents",
     }
     hook_trusted = bool(candidate) and bool(candidate.get("hook_verified") or candidate.get("hook_override"))
+    hook_trust_required = str(source_env.get("QWENDEX_NATIVE_RESERVATION_MODE") or "").strip().lower() == "strict"
 
     recorded_policy = str(candidate.get("policy_hash") or "") if candidate else ""
     launch_policy_hash = str(source_env.get("QWENDEX_MANAGER_POLICY_HASH") or "").strip()
@@ -15577,6 +16516,7 @@ def manager_launch_health(
         "repo_match": repo_match,
         "decision_active": active_state,
         "route_trusted": route_trusted,
+        "hook_trusted": hook_trusted or not hook_trust_required,
         "policy_match": policy_match,
         "qdex_permission_match": qdex_permission_match,
         "ledger_match": ledger_match,
@@ -15596,6 +16536,7 @@ def manager_launch_health(
         ("repo_match", "qwendex_repo_mismatch"),
         ("decision_active", "qwendex_decision_inactive"),
         ("route_trusted", "qwendex_route_untrusted"),
+        ("hook_trusted", "qwendex_hook_untrusted"),
         ("policy_match", "qwendex_policy_mismatch"),
         ("qdex_permission_match", "qwendex_qdex_permission_mismatch"),
         ("ledger_match", "qwendex_ledger_mismatch"),
@@ -15630,6 +16571,7 @@ def manager_launch_health(
         "session_policy_valid": session_policy_valid,
         "restart_required": policy_drift,
         "hook_trusted": hook_trusted,
+        "hook_trust_required": hook_trust_required,
     }
 
 
@@ -18275,6 +19217,43 @@ def command_runtime(args: argparse.Namespace) -> dict[str, Any]:
     return module.command(args)
 
 
+def command_capability_probe(args: argparse.Namespace) -> dict[str, Any]:
+    module = script_module("qwendex_capability_probe")
+    runtime_root = Path(args.runtime_root).expanduser() if args.runtime_root else None
+    selector = Path(args.selector).expanduser() if args.selector else None
+    source_root = Path(args.source_root).expanduser() if args.source_root else ROOT
+    runtime_root = runtime_root or Path(os.environ.get("QWENDEX_RUNTIME_ROOT") or ROOT / ".qwendex-dev" / "runtime")
+    selector = selector or Path(
+        os.environ.get("QWENDEX_QDEX_SELECTOR") or Path.home() / ".local" / "bin" / "qdex"
+    )
+    if args.output:
+        output = Path(args.output).expanduser()
+    elif args.generation:
+        output = runtime_root / "generations" / str(args.generation) / "qwendex_capability_receipt.json"
+    else:
+        output = runtime_root / "qwendex_capability_receipt.json"
+    receipt = module.probe(
+        runtime_root=runtime_root,
+        selector_path=selector,
+        source_root=source_root,
+        output_path=output,
+        generation_id=str(args.generation or ""),
+    )
+    status = "pass" if receipt.get("status") == "pass" else "blocked"
+    return stable_envelope(
+        command="capability",
+        status=status,
+        summary=(
+            "Qwendex no-model manager launch capability is qualified structurally."
+            if status == "pass"
+            else "Qwendex no-model capability probe is blocked; live/provider trust remains unqualified."
+        ),
+        artifacts=[str(output)] if output else [],
+        errors=list(receipt.get("blockers") or []),
+        data={"receipt": receipt},
+    )
+
+
 def command_manager_accept(args: argparse.Namespace) -> dict[str, Any]:
     module = script_module("qwendex_manager_acceptance")
     return module.command(args)
@@ -18352,7 +19331,12 @@ def command_line() -> argparse.ArgumentParser:
         command.add_argument("--json", action="store_true")
 
     exec_parser = sub.add_parser("exec")
-    exec_parser.add_argument("prompt", nargs="+")
+    exec_parser.add_argument("prompt", nargs="*")
+    exec_parser.add_argument(
+        "--prompt-stdin",
+        action="store_true",
+        help=f"read one bounded UTF-8 prompt from stdin (max {EXEC_PROMPT_MAX_BYTES} bytes); primary seat only",
+    )
     exec_parser.add_argument("--seat", choices=["auto", *sorted(DEFAULT_CONFIG["seats"])], default="auto")
     exec_parser.add_argument("--prefer-local", action="store_true")
     exec_parser.add_argument("--task-class", choices=EXEC_TASK_CLASS_CHOICES, default="")
@@ -18652,6 +19636,21 @@ def command_line() -> argparse.ArgumentParser:
     runtime.add_argument("--safe", action="store_true")
     runtime.add_argument("--json", action="store_true")
 
+    capability = sub.add_parser(
+        "capability",
+        help="run a no-model, no-network structural manager launch capability probe",
+    )
+    capability.add_argument("--runtime-root", default="")
+    capability.add_argument("--selector", default="")
+    capability.add_argument("--source-root", default="")
+    capability.add_argument("--output", default="")
+    capability.add_argument(
+        "--generation",
+        default="",
+        help="probe a validated unactivated generation without changing the active selector",
+    )
+    capability.add_argument("--json", action="store_true")
+
     codex_status = sub.add_parser("codex-status")
     codex_status.add_argument("--write", default="")
     codex_status.add_argument("--plain", action="store_true")
@@ -18693,6 +19692,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     # outside AgentPolicy and state-schema initialization.
     if args.command == "runtime":
         return command_runtime(args)
+    if args.command == "capability":
+        return command_capability_probe(args)
     if args.command == "manager" and getattr(args, "action", "") == "accept":
         return command_manager_accept(args)
     if args.command == "manager" and getattr(args, "action", "") == "evidence":

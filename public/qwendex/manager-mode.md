@@ -92,6 +92,46 @@ scripts/qwendex manager preflight --prompt "..." --json
 qdex --manager-preflight-dry-run --json
 ```
 
+For an owner integration that needs to verify the launch boundary without
+starting Codex, run the no-model capability probe:
+
+```bash
+scripts/qwendex capability --json
+```
+
+This checks the selected validated generation manifest, the actual `qdex`
+wrapper, and an isolated Manager policy preflight. It emits an owner-private,
+digest-bound `qwendex.runtime_capability_receipt.v1` with the read-only
+sandbox, four-worker shared cap, depth-two ceiling, strict native reservation,
+and prompt/plan-free dry-run checks. It does not contact a model or provider
+and does not prove running-process identity; those remain separate trust gates
+for integrations with an external owner supervisor.
+
+After `runtime build --safe`, qualify an unactivated candidate without changing
+the active selector or its canonical receipt:
+
+```bash
+scripts/qwendex capability --generation <generation-id> --json
+```
+
+Candidate evidence is written inside that generation unless `--output` is
+provided explicitly. Candidate qualification is structural only; activation
+remains a separate operator action.
+
+Owner integrations that make an adaptive route decision may bind that decision
+to native bookkeeping with the private `QWENDEX_OWNER_ROUTE_BINDING_DIGEST`
+environment value. It must be a lowercase SHA-256 digest, never a prompt, path,
+model name, or free-form override. Manager status and native reservation
+projections carry the opaque digest through reservation and replay checks; a
+malformed non-empty value fails closed. Qwendex does not interpret the digest or
+choose a child model from it, and the projection remains advisory until the
+owner and provider trust boundaries independently verify it.
+The first native `SubagentStart` activation also has to match the digest stored
+on its pending reservation; a mismatch leaves that reservation untouched and
+cannot replace the owner route identity. Strict reservation mode additionally
+rejects a first activation when no pending reservation exists; only advisory
+compatibility mode may use the unreserved hook-bypass fallback.
+
 Manager Mode may choose a `manager_subagents` route when a known prompt calls
 for bounded lanes. Interactive `qdex` starts before the first prompt is known,
 so it records a `direct_single_writer` exception with
@@ -139,7 +179,9 @@ needed because hooks do not gate launch or work.
 - `Heavy`: capacity 3; non-trivial edits receive proactive read-only exploration
   and verification guidance.
 - `Manager Mode`: capacity 4; the root plans and integrates bounded explorer,
-  verifier, and risk-review lanes while remaining the sole default writer.
+  verifier, and risk-review lanes while remaining the sole default writer. A
+  larger legacy profile value is advisory only: Manager policy resolution
+  clamps the native pool to four workers across active goals and repositories.
 
 Legacy compatibility remains: the `manager_only` spelling maps to
 `Manager Mode`.
@@ -183,6 +225,12 @@ counts, why no worker was used, policy source/hash/drift, restart requirement,
 native proactive source, waivers, and receipt paths. Suggested lanes are
 planning guidance, not completion prerequisites; an unstarted suggestion does
 not change health by itself.
+
+When an owner route digest is present, the same status payload includes a
+path-free `native_reservation_projection` with the opaque owner binding on the
+manager and reservation records. Its `trusted` flag remains false until an
+independent signed provider acknowledgment and owner-side admission check
+exist.
 
 Status JSON may expose these labels in manager health data before every wrapper
 or footer renders them. Treat the JSON fields as the source of truth and verify
@@ -258,13 +306,18 @@ condition of the root response; native capacity and wait limits still apply.
 
 Default manager settings:
 
-- `max_subagents`: defaults are mode-specific, from 0 to 4. Manager capacity is
-  configurable up to the conservative hard ceiling of 8. The effective value
-  drives manager registration and the supported Codex V2 worker ceiling; V2
-  counts the root separately.
+- `max_subagents`: defaults are mode-specific, from 0 to 4. Non-manager legacy
+  profiles may retain the conservative product ceiling of 8, but Manager mode
+  resolves to the four-worker owner-side cap. The policy exposes both the
+  configured profile value and the enforced value; V2 counts the root
+  separately. A cross-repository owner pool is a two-phase integration claim,
+  not one atomic SQLite transaction.
 - `stale_after_minutes`: mode-specific, 15 to 45.
 - Active subagent limits apply per canonical repository root, so independent
-  repositories do not consume each other's lane capacity.
+  repositories do not consume each other's advisory assignment capacity. A
+  managed native launch receives the owner-supplied cap and must carry its
+  reservation claim; until the owner acknowledgment is verified, Qwendex's
+  native ledger remains a separate enforcement surface.
 - Close completed agents after findings are integrated.
 - Status refreshes reconcile idle read-only agents after the stale window.
 - Do not close an active writer record until its changes are integrated or

@@ -72,6 +72,31 @@ def test_exec_sanitizer_module_bounds_dangerous_generated_commands() -> None:
     assert "LOCAL_MODEL_TOOL_CALL_TOO_LARGE" in heredoc_args["cmd"]
 
 
+def test_exec_sanitizer_drops_orphaned_justification_but_preserves_explicit_sandbox() -> None:
+    sanitizer = importlib.import_module("scripts.local_qwen_bridge.exec_sanitizer")
+
+    orphan = json.loads(
+        sanitizer.normalize_function_arguments(
+            "exec_command",
+            {"cmd": "printf ok", "justification": "inspect the fixture"},
+        )
+    )
+    paired = json.loads(
+        sanitizer.normalize_function_arguments(
+            "exec_command",
+            {
+                "cmd": "printf ok",
+                "justification": "operator-approved escalation",
+                "sandbox_permissions": "require_escalated",
+            },
+        )
+    )
+
+    assert "justification" not in orphan
+    assert paired["justification"] == "operator-approved escalation"
+    assert paired["sandbox_permissions"] == "require_escalated"
+
+
 def test_response_and_sse_modules_keep_responses_contract() -> None:
     responses = importlib.import_module("scripts.local_qwen_bridge.responses")
     sse = importlib.import_module("scripts.local_qwen_bridge.sse")
@@ -90,6 +115,169 @@ def test_response_and_sse_modules_keep_responses_contract() -> None:
     assert response["output"][0]["content"][0]["text"] == "OK"
     assert event.startswith(b"data: ")
     assert event.endswith(b"\n\n")
+
+
+def test_bridge_adapts_thinking_to_short_and_tool_requests() -> None:
+    server = importlib.import_module("scripts.local_qwen_bridge.server")
+    handler = server.ProxyHandler
+    previous = (
+        handler.enable_thinking,
+        handler.preserve_thinking,
+        handler.thinking_min_output_tokens,
+        handler.disable_thinking_for_tools,
+    )
+    try:
+        handler.enable_thinking = True
+        handler.preserve_thinking = False
+        handler.thinking_min_output_tokens = 768
+        handler.disable_thinking_for_tools = True
+
+        short = server.responses_payload_to_tabby_chat(
+            {"model": "qwen-local", "input": "Reply OK.", "max_output_tokens": 64}
+        )
+        tool = server.responses_payload_to_tabby_chat(
+            {
+                "model": "qwen-local",
+                "input": "Use the supplied tool.",
+                "max_output_tokens": 1024,
+                "tools": [{"type": "function", "name": "lookup_marker"}],
+            }
+        )
+        long = server.responses_payload_to_tabby_chat(
+            {"model": "qwen-local", "input": "Explain this.", "max_output_tokens": 1024}
+        )
+    finally:
+        (
+            handler.enable_thinking,
+            handler.preserve_thinking,
+            handler.thinking_min_output_tokens,
+            handler.disable_thinking_for_tools,
+        ) = previous
+
+    assert short["chat_template_kwargs"]["enable_thinking"] is False
+    assert tool["chat_template_kwargs"]["enable_thinking"] is False
+    assert long["chat_template_kwargs"]["enable_thinking"] is True
+
+
+def test_bridge_maps_qwen_reasoning_modes_to_bounded_budgets() -> None:
+    server = importlib.import_module("scripts.local_qwen_bridge.server")
+    handler = server.ProxyHandler
+    previous = (
+        handler.enable_thinking,
+        handler.preserve_thinking,
+        handler.thinking_min_output_tokens,
+        handler.disable_thinking_for_tools,
+        handler.max_output_tokens,
+        handler.reasoning_default_effort,
+        handler.reasoning_budget_low,
+        handler.reasoning_budget_medium,
+        handler.reasoning_budget_xhigh,
+        handler.reasoning_output_reserve_tokens,
+    )
+    try:
+        handler.enable_thinking = True
+        handler.preserve_thinking = False
+        handler.thinking_min_output_tokens = 768
+        handler.disable_thinking_for_tools = True
+        handler.max_output_tokens = 5120
+        handler.reasoning_default_effort = "medium"
+        handler.reasoning_budget_low = 1024
+        handler.reasoning_budget_medium = 2048
+        handler.reasoning_budget_xhigh = 4096
+        handler.reasoning_output_reserve_tokens = 1024
+
+        low = server.responses_payload_to_tabby_chat(
+            {
+                "model": "qwen-local",
+                "input": "Solve carefully.",
+                "reasoning_effort": "low",
+                "max_output_tokens": 1024,
+            }
+        )
+        medium = server.responses_payload_to_tabby_chat(
+            {
+                "model": "qwen-local",
+                "input": "Solve carefully.",
+                "reasoning": {"effort": "medium"},
+                "max_output_tokens": 1024,
+            }
+        )
+        xhigh = server.responses_payload_to_tabby_chat(
+            {
+                "model": "qwen-local",
+                "input": "Solve carefully.",
+                "reasoning_effort": "high",
+                "max_output_tokens": 1024,
+            }
+        )
+        disabled = server.responses_payload_to_tabby_chat(
+            {
+                "model": "qwen-local",
+                "input": "Reply briefly.",
+                "reasoning_effort": "none",
+                "max_output_tokens": 1024,
+            }
+        )
+    finally:
+        (
+            handler.enable_thinking,
+            handler.preserve_thinking,
+            handler.thinking_min_output_tokens,
+            handler.disable_thinking_for_tools,
+            handler.max_output_tokens,
+            handler.reasoning_default_effort,
+            handler.reasoning_budget_low,
+            handler.reasoning_budget_medium,
+            handler.reasoning_budget_xhigh,
+            handler.reasoning_output_reserve_tokens,
+        ) = previous
+
+    assert low["thinking_budget_tokens"] == 1024
+    assert low["max_tokens"] == 2048
+    assert low["chat_template_kwargs"]["reasoning_effort"] == "low"
+    assert medium["thinking_budget_tokens"] == 2048
+    assert medium["max_tokens"] == 3072
+    assert medium["chat_template_kwargs"]["reasoning_effort"] == "medium"
+    assert xhigh["thinking_budget_tokens"] == 4096
+    assert xhigh["max_tokens"] == 5120
+    assert xhigh["chat_template_kwargs"]["reasoning_effort"] == "xhigh"
+    assert disabled["chat_template_kwargs"]["enable_thinking"] is False
+    assert "thinking_budget_tokens" not in disabled
+    assert "reasoning_effort" not in disabled["chat_template_kwargs"]
+
+
+def test_native_tools_do_not_also_inject_the_compact_xml_prompt() -> None:
+    server = importlib.import_module("scripts.local_qwen_bridge.server")
+    handler = server.ProxyHandler
+    previous = handler.native_tools
+    payload = {
+        "model": "qwen-local",
+        "input": "Use the supplied tool.",
+        "tools": [
+            {
+                "type": "function",
+                "name": "lookup_marker",
+                "parameters": {"type": "object", "properties": {}},
+            }
+        ],
+    }
+    try:
+        handler.native_tools = False
+        compact = server.responses_payload_to_tabby_chat(payload)
+        handler.native_tools = True
+        native = server.responses_payload_to_tabby_chat(payload)
+    finally:
+        handler.native_tools = previous
+
+    compact_text = "\n".join(
+        str(message.get("content", "")) for message in compact["messages"]
+    )
+    native_text = "\n".join(
+        str(message.get("content", "")) for message in native["messages"]
+    )
+    assert "<tool_call>" in compact_text
+    assert "<tool_call>" not in native_text
+    assert native["tools"][0]["function"]["name"] == "lookup_marker"
 
 
 def test_responses_conversion_accepts_only_requested_tools() -> None:
@@ -168,6 +356,68 @@ def test_responses_conversion_accepts_only_requested_tools() -> None:
     rejected_text = rejected["output"][0]["content"][0]["text"]
     assert "not present in the request tool list" in rejected_text
     assert "LOCAL_MODEL_" not in rejected_text
+
+
+def test_responses_conversion_recovers_duplicate_read_as_static_tool_marker() -> None:
+    server = importlib.import_module("scripts.local_qwen_bridge.server")
+    request = {
+        "model": "qwen-local",
+        "input": [
+            {"type": "message", "role": "user", "content": "Inspect the README."},
+            {
+                "type": "function_call",
+                "call_id": "prior_read",
+                "name": "exec_command",
+                "arguments": {"cmd": "head -40 README.md"},
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "prior_read",
+                "output": "# README\\n",
+            },
+        ],
+        "tools": [
+            {
+                "type": "function",
+                "name": "exec_command",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"cmd": {"type": "string"}},
+                    "required": ["cmd"],
+                },
+            }
+        ],
+    }
+    response = server.chat_completion_to_response(
+        {
+            "model": "qwen-local",
+            "choices": [
+                {
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "id": "duplicate_read",
+                                "type": "function",
+                                "function": {
+                                    "name": "exec_command",
+                                    "arguments": json.dumps({"cmd": "head -40 README.md"}),
+                                },
+                            }
+                        ]
+                    }
+                }
+            ],
+        },
+        request,
+    )
+
+    assert len(response["output"]) == 1
+    recovery = response["output"][0]
+    assert recovery["type"] == "function_call"
+    assert recovery["name"] == "exec_command"
+    assert recovery["call_id"] == "duplicate_read_recovery"
+    assert "DUPLICATE_READ_ALREADY_DONE" in json.loads(recovery["arguments"])["cmd"]
+    assert "head -40 README.md" not in json.loads(recovery["arguments"])["cmd"]
 
 
 def test_responses_conversion_suppresses_guard_markers_and_malformed_arguments() -> (
@@ -444,6 +694,63 @@ def test_http_bridge_converts_upstream_tool_markup_to_responses_sse() -> None:
     assert "LOCAL_MODEL_" not in body
 
 
+def test_http_bridge_rejects_frontier_model_before_upstream_call() -> None:
+    server = importlib.import_module("scripts.local_qwen_bridge.server")
+
+    class UpstreamHandler(BaseHTTPRequestHandler):
+        post_count = 0
+
+        def do_POST(self) -> None:  # noqa: N802
+            type(self).post_count += 1
+            self.send_response(500)
+            self.end_headers()
+
+        def log_message(self, format: str, *args: object) -> None:
+            return None
+
+    upstream = ThreadingHTTPServer(("127.0.0.1", 0), UpstreamHandler)
+    old_target = server.ProxyHandler.target_base
+    old_log = server.ProxyHandler.log_path
+    old_local_model = server.ProxyHandler.local_model
+    server.ProxyHandler.target_base = f"http://127.0.0.1:{upstream.server_port}"
+    server.ProxyHandler.local_model = "qwen-local"
+    server.ProxyHandler.log_path = None
+    bridge = ThreadingHTTPServer(("127.0.0.1", 0), server.ProxyHandler)
+    upstream_thread = threading.Thread(target=upstream.serve_forever, daemon=True)
+    bridge_thread = threading.Thread(target=bridge.serve_forever, daemon=True)
+    upstream_thread.start()
+    bridge_thread.start()
+    try:
+        request = Request(
+            f"http://127.0.0.1:{bridge.server_port}/v1/responses",
+            data=json.dumps(
+                {"model": "gpt-5.6-luna", "input": "Hello", "stream": False}
+            ).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            urlopen(request, timeout=5)
+        except HTTPError as exc:
+            status = exc.code
+            payload = json.loads(exc.read())
+        else:
+            raise AssertionError("frontier model was accepted by the local bridge")
+    finally:
+        bridge.shutdown()
+        upstream.shutdown()
+        bridge.server_close()
+        upstream.server_close()
+        server.ProxyHandler.target_base = old_target
+        server.ProxyHandler.local_model = old_local_model
+        server.ProxyHandler.log_path = old_log
+
+    assert status == 400
+    assert payload["error"]["type"] == "invalid_request"
+    assert payload["error"]["code"] == "local_model_only"
+    assert UpstreamHandler.post_count == 0
+
+
 def test_http_bridge_returns_structured_502_for_non_object_upstream_json() -> None:
     server = importlib.import_module("scripts.local_qwen_bridge.server")
 
@@ -528,9 +835,14 @@ def test_launcher_and_proxy_share_bridge_protocol_version() -> None:
     server = importlib.import_module("scripts.local_qwen_bridge.server")
     launcher = (ROOT / "scripts/run_local_qwen_codex.sh").read_text(encoding="utf-8")
     proxy = (ROOT / "scripts/qwendex_responses_bridge.py").read_text(encoding="utf-8")
+    bridge_launcher = (
+        ROOT / "scripts/run_codex_textgen_bridge.sh"
+    ).read_text(encoding="utf-8")
 
     assert server.BRIDGE_VERSION in launcher
     assert f'BRIDGE_VERSION = "{server.BRIDGE_VERSION}"' in proxy
+    assert "--local-model" in bridge_launcher
+    assert "LOCAL_QWEN_MODEL" in bridge_launcher
     server_text = (ROOT / "scripts/local_qwen_bridge/server.py").read_text(
         encoding="utf-8"
     )

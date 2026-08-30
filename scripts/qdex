@@ -126,14 +126,34 @@ try:
         raise ValueError(
             "selected generation Codex config baseline is missing the Qwendex TUI status line"
         )
-    tree_contract = {
-        str(item.get("path") or ""): item
-        for item in manifest.get("tree_manifest") or []
-    }
-    for relative in ("scripts/qdex", "scripts/qwendex"):
-        entry = tree_contract.get(relative) or {}
-        path = generation / "tree" / relative
-        if sha256_file(path) != str(entry.get("sha256") or ""):
+    tree_root = (generation / "tree").resolve()
+    tree_entries = manifest.get("tree_manifest") or []
+    if not isinstance(tree_entries, list) or not tree_entries:
+        raise ValueError("selected generation tree manifest is missing")
+    # Validate every sealed source entry at the launch boundary. Checking only
+    # the two wrapper files lets a tampered helper/module execute from the
+    # otherwise trusted runtime tree.
+    for item in tree_entries:
+        if not isinstance(item, dict):
+            raise ValueError("selected generation tree manifest entry is invalid")
+        relative = str(item.get("path") or "")
+        relative_path = Path(relative)
+        if relative_path.is_absolute() or ".." in relative_path.parts:
+            raise ValueError(f"selected generation tree path is outside the runtime tree: {relative}")
+        raw_candidate = tree_root / relative
+        if raw_candidate.is_symlink():
+            raise ValueError(f"selected generation source is missing or unsafe: {relative}")
+        candidate = raw_candidate.resolve()
+        try:
+            candidate.relative_to(tree_root)
+        except ValueError as exc:
+            raise ValueError(f"selected generation tree path is outside the runtime tree: {relative}") from exc
+        if not relative or not candidate.is_file():
+            raise ValueError(f"selected generation source is missing or unsafe: {relative}")
+        expected_bytes = int(item.get("bytes") or -1)
+        if candidate.stat().st_size != expected_bytes:
+            raise ValueError(f"selected generation source size drifted: {relative}")
+        if sha256_file(candidate) != str(item.get("sha256") or ""):
             raise ValueError(f"selected generation source digest drifted: {relative}")
     codex_contract = manifest.get("codex") or {}
     for path, key in (
@@ -206,14 +226,14 @@ import sys
 from pathlib import Path
 
 
-VALID = {"workspace-write", "yolo"}
+VALID = {"read-only", "workspace-write", "yolo"}
 cli_value, published_path, operator_path = sys.argv[1:]
 
 
 def fail(scope, value):
     print(
         f"qdex: invalid permission_mode from {scope}: {value!r}; "
-        "expected workspace-write or yolo",
+        "expected read-only, workspace-write, or yolo",
         file=sys.stderr,
     )
     raise SystemExit(2)
@@ -283,6 +303,20 @@ if [[ -z "${QWENDEX_CODEX_HOME:-}" || -z "${QWENDEX_CODEX_RUNTIME:-}" ]]; then
   exit 127
 fi
 export CODEX_HOME="$QWENDEX_CODEX_HOME"
+
+# An external owner may bind this value to its owner-side four-worker cap.  An explicitly
+# supplied but malformed cap must never widen to Qwendex's standalone
+# capacity, because this launcher is also used by the owner-local supervisor.
+if [[ -n "${QWENDEX_GLOBAL_WORKER_CAP:-}" ]]; then
+  if [[ ! "${QWENDEX_GLOBAL_WORKER_CAP}" =~ ^[0-9]+$ ]] || (( QWENDEX_GLOBAL_WORKER_CAP > 8 )); then
+    printf 'qdex: invalid QWENDEX_GLOBAL_WORKER_CAP; refusing to widen the shared worker pool\n' >&2
+    exit 2
+  fi
+  if [[ "${QWENDEX_NATIVE_RESERVATION_MODE:-}" != "strict" ]]; then
+    printf 'qdex: QWENDEX_GLOBAL_WORKER_CAP requires strict native reservation mode; refusing fail-open worker admission\n' >&2
+    exit 2
+  fi
+fi
 QWENDEX_QWENDEX_COMMAND="${QWENDEX_RUNTIME_TREE:-$QWENDEX_DEV_ROOT}/scripts/qwendex"
 if [[ ! -x "$QWENDEX_QWENDEX_COMMAND" ]]; then
   printf 'qdex: selected Qwendex command is not executable: %s\n' "$QWENDEX_QWENDEX_COMMAND" >&2
@@ -374,8 +408,8 @@ while [[ $# -gt 0 ]]; do
       ;;
     --qdex-permission-mode)
       shift
-      if [[ $# -eq 0 || ( "$1" != "yolo" && "$1" != "workspace-write" ) ]]; then
-        printf 'qdex: --qdex-permission-mode requires yolo or workspace-write\n' >&2
+      if [[ $# -eq 0 || ( "$1" != "yolo" && "$1" != "workspace-write" && "$1" != "read-only" ) ]]; then
+        printf 'qdex: --qdex-permission-mode requires yolo or workspace-write (read-only is also accepted)\n' >&2
         exit 2
       fi
       cli_permission_mode="$1"
@@ -503,7 +537,7 @@ reject_deferred_codex_controls() {
         ;;
       agents|agents.*)
         case "$config_key" in
-          agents.max_threads|agents.max_concurrent_threads_per_session)
+          agents.max_threads|agents.max_concurrent_threads_per_session|agents.max_depth)
             ;;
           *)
             printf 'qdex: native [agents] role and default controls are deferred by the Qwendex release policy.\n' >&2
@@ -692,6 +726,7 @@ if not isinstance(policy, dict):
 print(policy.get("mode", ""))
 print(policy.get("max_threads", ""))
 print(policy.get("native_max_concurrent_threads", ""))
+print(policy.get("max_depth", ""))
 print(policy.get("wait_timeout_ms", ""))
 print("1" if data.get("manager_preflight_required") else "0")
 print(data.get("agent_policy_hash", policy.get("policy_hash", "")))
@@ -706,11 +741,28 @@ agent_use="${qwendex_status_fields[0]:-}"
 agent_mode="${qwendex_status_fields[1]:-}"
 agent_policy_max_threads="${qwendex_status_fields[2]:-}"
 agent_policy_native_max_threads="${qwendex_status_fields[3]:-}"
-agent_policy_wait_timeout_ms="${qwendex_status_fields[4]:-}"
-manager_preflight_required="${qwendex_status_fields[5]:-0}"
-agent_policy_hash="${qwendex_status_fields[6]:-}"
-agent_policy_local_enabled="${qwendex_status_fields[7]:-0}"
+agent_policy_max_depth="${qwendex_status_fields[4]:-}"
+agent_policy_wait_timeout_ms="${qwendex_status_fields[5]:-}"
+manager_preflight_required="${qwendex_status_fields[6]:-0}"
+agent_policy_hash="${qwendex_status_fields[7]:-}"
+agent_policy_local_enabled="${qwendex_status_fields[8]:-0}"
 export QWENDEX_QDEX_LAUNCH_POLICY_HASH="$agent_policy_hash"
+
+# A managed owner launch supplies a strict cross-plane worker cap.  The
+# Qwendex status payload is advisory input and must not be able to widen that
+# cap (for example, after a stale or malformed status provider reports eight
+# workers).  The native setting counts the root thread, so the hard bound is
+# worker-cap plus one.
+if [[ "${QWENDEX_GLOBAL_WORKER_CAP:-}" =~ ^[0-9]+$ ]] && [[ "${QWENDEX_NATIVE_RESERVATION_MODE:-}" == "strict" ]]; then
+  shared_worker_cap="$QWENDEX_GLOBAL_WORKER_CAP"
+  shared_native_cap="$((shared_worker_cap + 1))"
+  if [[ "$agent_policy_max_threads" =~ ^[0-9]+$ ]] && (( agent_policy_max_threads > shared_worker_cap )); then
+    agent_policy_max_threads="$shared_worker_cap"
+  fi
+  if [[ "$agent_policy_native_max_threads" =~ ^[0-9]+$ ]] && (( agent_policy_native_max_threads > shared_native_cap )); then
+    agent_policy_native_max_threads="$shared_native_cap"
+  fi
+fi
 
 if [[ -z "$agent_mode" ]]; then
   agent_mode="${agent_use,,}"
@@ -768,6 +820,33 @@ elif (( codex_native_max_threads > QWENDEX_CODEX_MAX_CONCURRENT_THREADS )); then
   codex_native_max_threads="$QWENDEX_CODEX_MAX_CONCURRENT_THREADS"
 fi
 codex_worker_cap="$((codex_native_max_threads - 1))"
+
+# V2 normally exposes collaboration tools only to the root.  Manager mode
+# explicitly permits one read-only specialist level to request a leaf; the
+# native source gate consumes this bounded depth from the same signed policy
+# snapshot.  All other modes retain their single worker level, and malformed
+# values fail closed at the product ceiling.
+if [[ "$agent_policy_max_depth" =~ ^[0-9]+$ ]]; then
+  codex_native_max_depth="$agent_policy_max_depth"
+else
+  case "$agent_mode" in
+    off)
+      codex_native_max_depth=0
+      ;;
+    manager)
+      codex_native_max_depth=2
+      ;;
+    *)
+      codex_native_max_depth=1
+      ;;
+  esac
+fi
+if (( codex_native_max_depth < 0 )); then
+  codex_native_max_depth=0
+elif (( codex_native_max_depth > 2 )); then
+  codex_native_max_depth=2
+fi
+export QWENDEX_QDEX_LAUNCH_MAX_DEPTH="$codex_native_max_depth"
 
 # Keep native collaboration waits inside the immutable AgentPolicy lifecycle
 # budget. Codex otherwise permits one wait call to last up to an hour, which
@@ -832,7 +911,11 @@ case "$agent_mode" in
 esac
 
 root_agent_usage_hint="You are the root Qwendex orchestrator operating under the ${agent_use:-Off} AgentPolicy. Keep the root as the default sole writer and integrator. Delegate independent, purpose-specific lanes within the ${codex_worker_cap}-worker ceiling when doing so saves context or improves quality, then integrate their results. Qwendex plans and lifecycle records are advisory; follow the user's instruction and your task judgment. Do not ask workers to delegate recursively. Call wait_agent only while list_agents shows a running worker. After a wait timeout, inspect list_agents once; if no worker is running, integrate available evidence or finalize. If verifier evidence becomes stale after a root edit, consider a bounded follow-up to that verifier when it would be useful."
-subagent_usage_hint="You are a bounded Qwendex worker. Execute the assigned lane, do not spawn or manage subagents, and respect any explicitly read-only scope. Return a concise outcome with evidence, changed paths, validation, blockers, and remaining risk when available. A structured FINAL_REPORT is optional; ordinary clear output is accepted."
+if [[ "$agent_mode" == "manager" ]]; then
+  subagent_usage_hint="You are a bounded Qwendex worker. Execute the assigned lane, do not spawn or manage subagents unless you are a Manager-approved depth-one read-only specialist requesting one bounded depth-two leaf via spawn_agent. Never use root lifecycle tools, never exceed the shared worker cap, and respect any explicitly read-only scope. Return a concise outcome with evidence, changed paths, validation, blockers, and remaining risk when available. A structured FINAL_REPORT is optional; ordinary clear output is accepted."
+else
+  subagent_usage_hint="You are a bounded Qwendex worker. Execute the assigned lane, do not spawn or manage subagents, and respect any explicitly read-only scope. Return a concise outcome with evidence, changed paths, validation, blockers, and remaining risk when available. A structured FINAL_REPORT is optional; ordinary clear output is accepted."
+fi
 
 cmd=(
   "$QWENDEX_CODEX_RUNTIME"
@@ -851,6 +934,7 @@ codex_policy_args=(
   --config "memories.dedicated_tools=false"
   --config "features.multi_agent_v2.enabled=true"
   --config "features.multi_agent_v2.max_concurrent_threads_per_session=$codex_native_max_threads"
+  --config "agents.max_depth=$codex_native_max_depth"
   --config "features.multi_agent_v2.min_wait_timeout_ms=$codex_wait_min_timeout_ms"
   --config "features.multi_agent_v2.max_wait_timeout_ms=$codex_wait_timeout_ms"
   --config "features.multi_agent_v2.default_wait_timeout_ms=$codex_wait_default_timeout_ms"
@@ -868,6 +952,62 @@ if [[ "$permission_mode" == "yolo" ]]; then
     [[ "$arg" == "$QWENDEX_YOLO_FLAG" ]] && yolo_present=1
   done
   [[ "$yolo_present" == "1" ]] || cmd+=("$QWENDEX_YOLO_FLAG")
+elif [[ "$permission_mode" == "read-only" ]]; then
+  # The injected sandbox flag is intentionally authoritative.  Reject a
+  # caller-provided downgrade or bypass rather than relying on Codex's last
+  # flag-wins behavior.
+  for ((arg_index = 0; arg_index < ${#codex_args[@]}; arg_index++)); do
+    case "${codex_args[$arg_index]}" in
+      "$QWENDEX_YOLO_FLAG")
+        printf 'qdex: read-only permission mode rejects the yolo bypass flag\n' >&2
+        exit 2
+        ;;
+      --sandbox=*)
+        requested_sandbox="${codex_args[$arg_index]#--sandbox=}"
+        if [[ "$requested_sandbox" != "read-only" ]]; then
+          printf 'qdex: read-only permission mode rejects sandbox=%s\n' "$requested_sandbox" >&2
+          exit 2
+        fi
+        ;;
+      --sandbox)
+        if (( arg_index + 1 >= ${#codex_args[@]} )); then
+          printf 'qdex: read-only permission mode received an incomplete sandbox option\n' >&2
+          exit 2
+        fi
+        requested_sandbox="${codex_args[$((arg_index + 1))]}"
+        if [[ "$requested_sandbox" != "read-only" ]]; then
+          printf 'qdex: read-only permission mode rejects sandbox=%s\n' "$requested_sandbox" >&2
+          exit 2
+        fi
+        ;;
+      -s)
+        if (( arg_index + 1 >= ${#codex_args[@]} )); then
+          printf 'qdex: read-only permission mode received an incomplete sandbox option\n' >&2
+          exit 2
+        fi
+        requested_sandbox="${codex_args[$((arg_index + 1))]}"
+        if [[ "$requested_sandbox" != "read-only" ]]; then
+          printf 'qdex: read-only permission mode rejects sandbox=%s\n' "$requested_sandbox" >&2
+          exit 2
+        fi
+        ;;
+      -s=*)
+        requested_sandbox="${codex_args[$arg_index]#-s=}"
+        if [[ "$requested_sandbox" != "read-only" ]]; then
+          printf 'qdex: read-only permission mode rejects sandbox=%s\n' "$requested_sandbox" >&2
+          exit 2
+        fi
+        ;;
+      -s*)
+        requested_sandbox="${codex_args[$arg_index]#-s}"
+        if [[ "$requested_sandbox" != "read-only" ]]; then
+          printf 'qdex: read-only permission mode rejects sandbox=%s\n' "$requested_sandbox" >&2
+          exit 2
+        fi
+        ;;
+    esac
+  done
+  cmd+=(--sandbox read-only)
 else
   cmd+=(--sandbox workspace-write)
 fi

@@ -49,6 +49,7 @@ def assert_qdex_v2_policy_prefix(test: unittest.TestCase, command: list[str]) ->
     test.assertIn("memories.use_memories=false", values)
     test.assertIn("memories.dedicated_tools=false", values)
     test.assertIn("features.multi_agent_v2.enabled=true", values)
+    test.assertTrue(any(value.startswith("agents.max_depth=") for value in values))
     test.assertIn("features.multi_agent_v2.hide_spawn_agent_metadata=true", values)
     test.assertIn("features.multi_agent_v2.expose_spawn_agent_model_overrides=false", values)
     test.assertTrue(any(value.startswith("features.multi_agent_v2.max_concurrent_threads_per_session=") for value in values))
@@ -292,6 +293,10 @@ class QdexManagerAttachmentTests(unittest.TestCase):
             shutil.copy2(QWENDEX, scripts / "qwendex")
             shutil.copy2(QDEX, scripts / "qdex")
             shutil.copy2(ROOT / "scripts" / "qwendex_cli.py", scripts / "qwendex_cli.py")
+            shutil.copy2(
+                ROOT / "scripts" / "qwendex_native_reservation.py",
+                scripts / "qwendex_native_reservation.py",
+            )
             shutil.copy2(ROOT / "scripts" / "qwendex_search.py", scripts / "qwendex_search.py")
             shutil.copy2(ROOT / "scripts" / "qwendex_performance.py", scripts / "qwendex_performance.py")
             shutil.copytree(ROOT / "config", root / "config")
