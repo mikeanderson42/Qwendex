@@ -1,16 +1,16 @@
 # v0.6.10
 
-Codex `0.150.0` compatibility and runtime refresh.
+Codex `0.153.1` compatibility and runtime refresh.
 
 - Rebases the canonical Qwendex TUI, AgentPolicy, V2, and Codex Apps cache
-  patch against official `rust-v0.150.0`.
+  patch against official `rust-v0.153.1`.
 - Pins the official source commit, full-index Qwendex patch digest, normalized
   Cargo.lock digest, and versioned model-cache namespace as one build contract.
 - Builds the sandboxed code-mode host with the independently pinned official
   Rusty V8 archive, generated binding, checksum manifest, target, and HTTPS
-  release URL required by Codex `0.150.0`.
+  release URL required by Codex `0.153.1`.
 - Updates the release gate, dependency helper, manager acceptance contract,
-  runtime fixtures, and public compatibility documentation to Codex `0.150.0`.
+  runtime fixtures, and public compatibility documentation to Codex `0.153.1`.
 - Preserves stock Codex as the Off-mode recovery path and prior release tags as
   immutable history.
 

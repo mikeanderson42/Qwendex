@@ -1,5 +1,19 @@
 # Qwendex Development Decision Log
 
+## Codex 0.153.1 Source-Bound Rebase
+
+Decision: advance the current patched-Qdex target to official Codex
+`rust-v0.153.1` at `985641272869835d01d025ed2a218fbbce35fa9f`, binding its
+full-index Qwendex patch digest and normalized Cargo.lock digest into the
+existing runtime contract. The rebase retains the verified Codex-published
+Rusty V8 `150.4.0` sandbox pair and preserves the Manager footer, hotkeys,
+bounded V2 worker policy, no-child wait, and cached Apps recovery boundaries.
+
+Reason: Codex 0.153.1 changes keymap validation, V2 spawn service-tier input,
+and test harness shapes. Version-specific anchors and a fresh source build keep
+the integration fail-closed while stock Codex remains the independent Off-mode
+recovery path.
+
 ## Codex 0.150 Source-Bound Rebase
 
 Decision: publish Qwendex `0.6.10` against official Codex `rust-v0.150.0` and

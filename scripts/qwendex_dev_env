@@ -33,11 +33,11 @@ CODEX_SOURCE_DIR="$WORK_ROOT/codex-source/codex"
 QWENDEX_CODEX_YOLO_FLAG="--dangerously-bypass-approvals-and-sandbox"
 QWENDEX_RELEASE_CODEX_SOURCE_REPO="https://github.com/openai/codex.git"
 QWENDEX_CODEX_SOURCE_REPO="${QWENDEX_CODEX_SOURCE_REPO:-$QWENDEX_RELEASE_CODEX_SOURCE_REPO}"
-QWENDEX_RELEASE_CODEX_VERSION="0.150.0"
-QWENDEX_RELEASE_CODEX_SOURCE_COMMIT="3b3b4f8fb3f6403e72c2d0533ed0d2f309c59717"
-QWENDEX_RELEASE_CODEX_PATCH_SHA256="92fef6bf441260d97412f27b0e44026292f152d9c12a26a2e9d4c40f1123bbf7"
-QWENDEX_RELEASE_CODEX_CARGO_LOCK_SHA256="d60a7aeaeed42be77d87716bf213edc005d7286d4f168a69be9bf5e803623402"
-# Codex 0.150 enables Rusty V8's sandboxed code-mode runtime. Its own pinned
+QWENDEX_RELEASE_CODEX_VERSION="0.153.1"
+QWENDEX_RELEASE_CODEX_SOURCE_COMMIT="985641272869835d01d025ed2a218fbbce35fa9f"
+QWENDEX_RELEASE_CODEX_PATCH_SHA256="31b7fd1009676f62563585ca9af0c9226296ba5974c8c9baa393950b505b8abb"
+QWENDEX_RELEASE_CODEX_CARGO_LOCK_SHA256="ac278ccc0069bc2fafac2a14188b0b2fa664f25f4aff64499d656f3429ab507d"
+# Codex 0.153 retains Rusty V8's sandboxed code-mode runtime. Its own pinned
 # release publishes the verified archive/binding pair that the generic Rusty
 # V8 release omits; never substitute the non-sandbox archive or build an
 # unverified dependency copy.
@@ -1358,7 +1358,7 @@ cmd_codex_source() {
           CARGO_HOME="$isolated_cargo_home" \
           cargo metadata --format-version 1 >/dev/null
       )
-      # Codex 0.150's code-mode host enables the sandboxed Rusty V8 profile.
+      # Codex 0.153.1's code-mode host enables the sandboxed Rusty V8 profile.
       # Fetch the exact archive and generated binding from the pinned Codex
       # release, verify the manifest before Cargo sees either input, and keep
       # the pair inside this disposable build root.
@@ -1607,7 +1607,7 @@ if source_ref == "rust-v0.145.0":
     # formerly patched in this file, so its canonical patch intentionally
     # leaves it untouched.
     required_patch_paths -= {"codex-rs/core/src/config/mod.rs"}
-elif source_ref in {"rust-v0.147.0", "rust-v0.150.0"}:
+elif source_ref in {"rust-v0.147.0", "rust-v0.150.0", "rust-v0.153.1"}:
     # These releases retain the upstream config/mod.rs behavior but rebase the
     # full Qwendex V2 and Apps-cache patch surface, including rmcp_client.rs.
     required_patch_paths -= {"codex-rs/core/src/config/mod.rs"}
