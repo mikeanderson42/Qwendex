@@ -2831,6 +2831,7 @@ def test_qwendex_session_mode_change_is_requested_until_a_capacity_restart(tmp_p
 
 def test_qwendex_session_local_change_applies_without_restart(tmp_path):
     session_env = {
+        "QWENDEX_LOCAL_SUBAGENTS": "off",
         "QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite"),
         "QWENDEX_MANAGER_SESSION_STATE_FILE": str(tmp_path / "session-a.json"),
         "QWENDEX_QDEX_LAUNCH_ID": "session-a",
@@ -2867,7 +2868,7 @@ def test_qwendex_session_local_change_applies_without_restart(tmp_path):
         policy = prompt["data"]["agent_policy"]
         assert policy["local_routing_snapshot"]["enabled"] is enabled
         context = prompt["data"]["hook_result"]["hookSpecificOutput"]["additionalContext"]
-        assert ("qwendex exec --seat qwen" in context) is enabled
+        assert ("qwendex exec --seat auto --prefer-local" in context) is enabled
 
 
 def test_qwendex_codex_status_reports_unusable_local_state(tmp_path):

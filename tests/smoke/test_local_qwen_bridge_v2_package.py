@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import pytest
 import io
 import json
 import os
@@ -1015,8 +1016,10 @@ def test_bridge_launcher_has_no_hidden_system_prompt_dependency(
     assert args[args.index("--target-base") + 1] == "http://127.0.0.1:4000"
 
 
+@pytest.mark.parametrize("directive", ["", 'Kaveman enabled. Keep "quotes", $literal, and requested detail.\nSecond line.'])
 def test_local_launcher_binds_codex_to_the_verified_bridge_origin(
     tmp_path: Path,
+    directive: str,
 ) -> None:
     server = importlib.import_module("scripts.local_qwen_bridge.server")
 
@@ -1081,6 +1084,7 @@ def test_local_launcher_binds_codex_to_the_verified_bridge_origin(
                 str(tmp_path / "fresh-home"),
                 "--minimal",
                 "--ephemeral",
+                *(["--developer-instructions", directive] if directive else []),
                 "--exec",
                 "Reply OK.",
             ],
@@ -1107,6 +1111,11 @@ def test_local_launcher_binds_codex_to_the_verified_bridge_origin(
     assert captured[captured.index("--local-provider") + 1] == "lmstudio"
     assert "-C" in captured
     assert captured[captured.index("-C") + 1] == str(tmp_path)
+    instructions = [arg for arg in captured if arg.startswith("developer_instructions=")]
+    assert len(instructions) == bool(directive)
+    if directive:
+        assert json.loads(instructions[0].split("=", 1)[1]) == directive
+    assert captured[-1] == "Reply OK."
 
 
 def test_local_launcher_rejects_conflicting_codex_oss_base(tmp_path: Path) -> None:

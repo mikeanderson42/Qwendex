@@ -1,5 +1,35 @@
 # Qwendex Development Decision Log
 
+## Local Execution and Native Manager Functionality Audit
+
+Bounded Local assignments now use root-executed Auto routing with local
+preference and a read-only sandbox. Unavailable Local routes fall back to the
+primary seat. Read-only native workers return Local suggestions to the root;
+their existing tool restrictions remain in force.
+
+Exec captures the accepted turn's Kaveman output policy and passes it directly
+to isolated model execution, including primary fallback. The Local launcher
+accepts `--developer-instructions` before `--exec`, preserving prompt quoting
+and avoiding reliance on hook trust in minimal mode. Writable primary exec
+preserves user-configured developer instructions. Enabling Local waits for
+the next accepted prompt; turning it off also vetoes new local executions
+immediately. Session controls override saved settings and environment defaults.
+An explicit Agent Use launch selector initializes the private mode control;
+later mode selections supersede that selector while native capacity stays
+pinned. This prevents an environment-selected Manager launch from showing a
+false restart requirement after a Kaveman or Local toggle.
+
+Native Codex checks with scripted Responses exercised custom worker reads,
+blocked child writes, root writes, four-worker capacity, Off mode, and strict
+pre-spawn rejection. Codex V2's separator-free `collaborationspawn_agent`
+hook name now reaches the existing reservation gate; exact collaboration
+aliases also preserve worker lifecycle communication. Previously strict
+rejection arrived only at the context-only child-start hook, after spawning.
+These checks prove execution paths and admission behavior;
+Kaveman remains a model instruction that permits requested detail, with no
+hard output-length gate. Advisory bookkeeping continues to leave root tools
+and ordinary work available.
+
 ## Codex 0.154.0 and Live Session Controls
 
 Decision: support official `rust-v0.154.0` at

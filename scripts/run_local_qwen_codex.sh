@@ -76,6 +76,7 @@ CODEX_EXEC_MINIMAL=0
 CODEX_EXEC_JSON=0
 CODEX_OUTPUT_SCHEMA=""
 CODEX_OUTPUT_LAST_MESSAGE=""
+CODEX_DEVELOPER_INSTRUCTIONS=""
 BRIDGE_STATUS_JSON=""
 HEALTH_LOG_FROM_CALLER=0
 [[ "$CALLER_LOCAL_QWEN_HEALTH_LOG" == x* ]] && HEALTH_LOG_FROM_CALLER=1
@@ -578,6 +579,11 @@ run_codex() {
       exec_args+=(--ignore-user-config -c 'mcp_servers={}')
     fi
     exec_args+=(--sandbox "$LOCAL_QWEN_CODEX_SANDBOX_MODE")
+    if [[ -n "$CODEX_DEVELOPER_INSTRUCTIONS" ]]; then
+      local instructions_json
+      instructions_json="$(python3 -c 'import json, sys; print(json.dumps(sys.argv[1]))' "$CODEX_DEVELOPER_INSTRUCTIONS")"
+      exec_args+=(-c "developer_instructions=$instructions_json")
+    fi
     case "$CODEX_EXEC_EPHEMERAL" in
       1|true|TRUE|yes|YES|on|ON) exec_args+=(--ephemeral) ;;
     esac
@@ -718,6 +724,14 @@ main() {
         shift
         run_mcp_login "${1:-}"
         exit 0
+        ;;
+      --developer-instructions)
+        if [[ "$#" -lt 2 ]]; then
+          echo "--developer-instructions requires an instruction string" >&2
+          exit 1
+        fi
+        CODEX_DEVELOPER_INSTRUCTIONS="$2"
+        shift 2
         ;;
       --exec)
         shift

@@ -245,10 +245,12 @@ means intent is on but the probe could not confirm a usable local route.
 These controls are scoped to the open Qdex launch. Inspect
 `codex-status --json` or `manager status --json` for `status_authority` and
 `policy_transition`: Kaveman and Local assistance apply at the next root prompt
-and stay frozen in its child assignments. Local uses the existing
-`qwendex exec --seat qwen --cwd <repo> -- <prompt>` command; inspect its receipt
-for the actual selected seat and result. Native workers inherit the Codex
-provider. The Local switch is also checked at command invocation, so Off always
+and stay frozen in its child assignments. For bounded Local work, the root uses
+`QWENDEX_QDEX_PERMISSION_MODE=read-only qwendex exec --seat auto --prefer-local --cwd <repo> --json -- <prompt>`;
+inspect its receipt for the actual selected seat and result. This command
+falls back when Local is unavailable and carries the accepted Kaveman policy
+to either seat. Read-only native workers inherit the Codex provider and return
+Local task suggestions to the root. The Local switch is also checked at command invocation, so Off always
 prevents a new local execution. Only mode changes that need different native
 capacity require a restart.
 

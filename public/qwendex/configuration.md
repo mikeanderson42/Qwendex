@@ -189,13 +189,17 @@ architecture/protocol, release, and public-doc-claim prompts cannot be forced
 onto the local Qwen seat. Use the validated `--task-class` option when the
 prompt alone does not identify the lane.
 
-Local routing separates intent from availability. `QWENDEX_LOCAL_SUBAGENTS=on`
-or `Local: [Ready]` means Qwendex may consider local subagent lanes and the
-probe has confirmed `local_model`. It still probes `local_probe_url` before
-choosing the `qwen` seat. `Local: [Off]` or `QWENDEX_LOCAL_SUBAGENTS=off` is
-operator intent to skip local lanes even when the endpoint is healthy. If local
-intent is on but the probe cannot confirm the alias, the state is
-`Local: [Unavailable]` and Qwendex falls back to `fallback_seat`.
+Local routing separates intent from availability. `QWENDEX_LOCAL_SUBAGENTS`
+sets the configuration default; a saved repository setting overrides that
+default, and an open Qdex launch's private Local control overrides both.
+An environment value of `off` does not disable the launch's Alt+L control.
+Local-On allows consideration of local lanes; `Local: [Ready]` also confirms
+the configured model alias. Auto routing probes `local_probe_url` before
+choosing `qwen`. If the alias is unavailable, Auto uses `fallback_seat`.
+An explicit `--seat qwen` requests direct execution and can fail when the
+endpoint is unavailable; use `--seat auto --prefer-local` for bounded work
+that should fall back. Effective Local-Off skips local execution even when
+the endpoint is healthy.
 
 `fallback_seat` must be a GPT/Codex authority seat (`primary`, `audit`, or
 `release`). `--prefer-local` and an explicit `--seat qwen` do not override

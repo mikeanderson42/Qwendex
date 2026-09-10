@@ -222,8 +222,10 @@ record exists. A continuation can begin without a prompt hook; later lifecycle
 events may fill the association. Ambiguity stays diagnostic rather than becoming
 an execution gate.
 
-Each Qdex launch owns a private control record and status file. Native worker
-capacity, depth, and waits are immutable for that
+Each Qdex launch owns a private control record and status file.
+An explicit launch Agent Use selector initializes that control's mode; later
+Alt+M selections use the session control rather than the launch default.
+Native worker capacity, depth, and waits are immutable for that
 process. If an `Alt+M` selection needs different capacity, the footer and JSON
 show the requested mode, active mode, and `restart_required` rather than
 pretending the capacity changed live.
@@ -232,7 +234,12 @@ Kaveman and Local assistance are turn-scoped: the next root `UserPromptSubmit` a
 policy hash, while existing child assignments retain their accepted
 snapshot. Turning Kaveman off supersedes its earlier output instruction.
 Local assignments execute through `qwendex exec`; native workers keep the
-inherited Codex provider. `status_authority` exposes the active and
+inherited Codex provider. The root executes bounded Local work with
+`QWENDEX_QDEX_PERMISSION_MODE=read-only qwendex exec --seat auto --prefer-local --cwd <repo> --json -- <prompt>`.
+Read-only children return suggestions for that command to the root. The exec
+receipt records the output policy sent directly to the selected model,
+including primary fallback; this does not depend on Local hook discovery.
+`status_authority` exposes the active and
 next-turn hashes plus the scope of the status source.
 
 `manager launch-status --pid <pid> --repo-root <path> --json` exposes a stable,

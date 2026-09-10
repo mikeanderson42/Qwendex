@@ -10504,6 +10504,12 @@ def exec_command_for_seat(
 ) -> list[str]:
     exec_cwd = cwd or qwendex_exec_cwd()
     sandbox_mode = str(execution_policy.get("sandbox_mode") or "read-only")
+    output_args: list[str] = []
+    if execution_policy.get("ignore_user_config") and isinstance(execution_policy.get("output_policy"), Mapping):
+        output_args = [
+            "-c",
+            "developer_instructions=" + json.dumps(agent_output_policy_context(execution_policy)),
+        ]
     if seat in {"qwen", "sandbox"}:
         if prompt_from_stdin:
             raise ValueError("private stdin prompt transport requires the primary seat")
@@ -10515,6 +10521,7 @@ def exec_command_for_seat(
             sandbox_mode,
             "--minimal",
             "--ephemeral",
+            *(["--developer-instructions", agent_output_policy_context(execution_policy)] if output_args else []),
             "--exec",
             prompt,
         ]
@@ -10523,6 +10530,7 @@ def exec_command_for_seat(
         "exec",
         "--sandbox",
         sandbox_mode,
+        *output_args,
     ]
     if execution_policy.get("ignore_user_config"):
         command.extend(["--ignore-user-config", "-c", "mcp_servers={}"])
@@ -10663,7 +10671,14 @@ def command_exec(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, 
     )
     exec_cwd = qwendex_exec_cwd(args.cwd)
     with connect_state(config) as conn:
-        local_enabled = current_local_enabled(config, conn)
+        accepted_policy = manager_session_active_turn_policy(config, conn, event={}) or {}
+        accepted_local = accepted_policy.get("local_routing_snapshot", {}).get("enabled")
+        # Enabling takes effect at prompt admission; Off also vetoes newly
+        # invoked local work immediately, including during an accepted turn.
+        local_enabled = current_local_enabled(config, conn) and accepted_local is not False
+        output_policy = accepted_policy.get("output_policy") or kaveman_output_policy(
+            config, current_kaveman_enabled(config, conn)
+        )
     route = resolve_route(
         config,
         requested_seat=args.seat or "auto",
@@ -10700,6 +10715,7 @@ def command_exec(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, 
     effective_timeout = min(timeout_candidates) if timeout_candidates else None
     execution_policy = {
         **base_execution_policy,
+        "output_policy": output_policy,
         "requested_timeout_seconds": int(args.timeout),
         "effective_timeout_seconds": effective_timeout,
         "mcp_trusted_roots": (
@@ -11953,9 +11969,10 @@ def routing_assignment_label(routing: Mapping[str, Any]) -> str:
 def spawn_instruction(agent_id: str, routing: Mapping[str, Any]) -> str:
     if routing.get("token_saver_used"):
         return (
-            f"Execute the bounded {agent_id} assignment through qwendex exec --seat qwen --cwd <repo> -- <prompt>. "
+            f"The root should execute the bounded {agent_id} assignment through "
+            "QWENDEX_QDEX_PERMISSION_MODE=read-only qwendex exec --seat auto --prefer-local --cwd <repo> --json -- <prompt>. "
             "Check the execution receipt for the actual selected seat and result before using its output. "
-            "Native spawn_agent workers inherit the Codex provider and do not execute this local assignment."
+            "Native spawn_agent workers inherit the Codex provider. Read-only workers should return local task suggestions to the root."
         )
     reasoning = str(routing.get("selected_reasoning") or "inherited")
     return (
@@ -12042,8 +12059,10 @@ def agent_mode_context(
         local_snapshot = agent_policy.get("local_routing_snapshot", {})
         if isinstance(local_snapshot, Mapping) and local_snapshot.get("enabled"):
             parts.append(
-                "Local Qwen assistance is enabled. For bounded inspection or drafting, use "
-                "qwendex exec --seat qwen --cwd <repo> -- <prompt> and inspect its execution receipt. "
+                "Local Qwen assistance is enabled. For bounded inspection or drafting, the root may use "
+                "QWENDEX_QDEX_PERMISSION_MODE=read-only qwendex exec --seat auto --prefer-local --cwd <repo> --json -- <prompt> "
+                "and inspect its execution receipt; unavailable Local falls back to the primary seat. "
+                "Read-only workers should return local task suggestions to the root. "
                 "Native workers keep the inherited Codex provider. Keep release, security, architecture, "
                 "and public claims under Codex review."
             )
