@@ -355,7 +355,7 @@ claims require GPT/Codex review and the appropriate Qwendex verification tier.
 
 ## Current Release / Known Limits
 
-Current source uses package version `0.6.10` and supports Codex `0.154.0`.
+This checkout is seeded as `v0.6.10` and supports Codex `0.154.0`.
 The published `v0.6.10` tag remains on Codex `0.153.1`.
 It includes the supported-Codex update,
 state-schema/runtime isolation fixes, advisory Agent Management boundary, and

@@ -62,7 +62,7 @@ def test_custom_advisory_workers_register_without_consuming_suggested_lanes(tmp_
         conn.execute("UPDATE qwendex_manager_decisions SET selected_route = ?", (route,))
     planned = {a["agent_id"] for a in prompt["agent_plan"]["assignments"]}
     for index in range(4):
-        event = child(root, f"/root/custom-review-{index}", f"worker-{index}")
+        event = child(root, f"reviews/custom-review-{index}", f"worker-{index}")
         started = hook(env, "SubagentStart", event)
         session = started["agent_session"]
         assert session["status"] == "active"
@@ -70,14 +70,14 @@ def test_custom_advisory_workers_register_without_consuming_suggested_lanes(tmp_
         assert session["context_packet"]["required"] is False
         assert session["context_packet"]["planned_agent_id"] not in planned
         assert hook(env, "SubagentStart", event)["agent_session"]["agent_id"] == f"worker-{index}"
-    overflow = hook(env, "SubagentStart", child(root, "/root/overflow", "overflow"))
+    overflow = hook(env, "SubagentStart", child(root, "reviews/overflow", "overflow"))
     assert overflow["hook_result"]["reason_code"] == "native_spawn_capacity_reached"
 
 
 @pytest.mark.parametrize("changed", ["parent", "repository", "launch", "policy"])
 def test_custom_advisory_worker_requires_matching_launch(tmp_path, changed):
     env, root, _ = launch(tmp_path)
-    event = child(root, "/root/custom-review", "worker")
+    event = child(root, "reviews/custom-review", "worker")
     if changed == "parent":
         event["parent_session_id"] = "other-root"
     elif changed == "repository":
@@ -112,7 +112,7 @@ def test_concurrent_custom_workers_share_capacity_without_identity_race(tmp_path
     with ThreadPoolExecutor(max_workers=2) as pool:
         futures = [pool.submit(
             qwendex.activate_manager_native_worker, config,
-            child(root, f"/root/concurrent-{index}", f"concurrent-{index}"), prompt["agent_policy"],
+            child(root, f"reviews/concurrent-{index}", f"concurrent-{index}"), prompt["agent_policy"],
         ) for index in range(2)]
         results = [future.result(timeout=30) for future in futures]
     assert [error for _, error in results] == ["", ""]
