@@ -848,6 +848,10 @@ CODEX_PATCH_MANIFESTS["0.153.1"] = {
     **CODEX_PATCH_MANIFESTS["0.150.0"],
     "codex_tag": "rust-v0.153.1",
 }
+CODEX_PATCH_MANIFESTS["0.154.0"] = {
+    **CODEX_PATCH_MANIFESTS["0.153.1"],
+    "codex_tag": "rust-v0.154.0",
+}
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "schema_version": "qwendex.config.v1",
@@ -2284,15 +2288,25 @@ def qdex_launch_local_enabled() -> bool | None:
     return normalize_local_toggle(os.environ.get(QDEX_LAUNCH_LOCAL_ENABLED_ENV))
 
 
+def native_policy_restart_required(launch: Mapping[str, Any], desired: Mapping[str, Any]) -> bool:
+    """Mutable output and local assistance policy do not change native capacity."""
+    fields = (
+        "mode", "max_workers", "max_threads", "native_max_concurrent_threads",
+        "max_depth", "wait_timeout_ms", "root_can_spawn", "children_can_spawn",
+        "native_reservation_mode", "nested_spawn",
+    )
+    return bool(launch and desired) and any(launch.get(key) != desired.get(key) for key in fields)
+
+
 def session_turn_policy_projection(
     config: Mapping[str, Any],
     conn: sqlite3.Connection,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Resolve requested controls into the policy usable by the current launch.
 
-    A Qdex process has immutable native capacity and local-routing inputs. Its
-    Kaveman output policy is intentionally refreshed only when a new root turn
-    is accepted. This projection makes both boundaries explicit instead of
+    A Qdex process has immutable native capacity. Kaveman and local assistance
+    are refreshed when a new root turn is accepted; local execution uses the
+    existing qwendex exec path without changing the native provider. This projection makes the boundaries explicit instead of
     presenting a requested TUI value as an already-active runtime policy.
     """
     requested_mode = current_manager_mode(config, conn)
@@ -2311,18 +2325,10 @@ def session_turn_policy_projection(
     requested_policy = attach_native_proactive_source(requested_policy)
 
     launch_mode = qdex_launch_mode()
-    launch_local_enabled = qdex_launch_local_enabled()
     effective_mode = launch_mode or str(requested_policy.get("mode") or requested_mode)
-    if launch_local_enabled is None:
-        launch_local_enabled = requested_local_enabled
     mode_restart_required = bool(launch_mode and effective_mode != requested_mode)
-    local_restart_required = bool(
-        manager_session_state_path() is not None
-        and qdex_launch_local_enabled() is not None
-        and launch_local_enabled != requested_local_enabled
-    )
 
-    if effective_mode == str(requested_policy.get("mode") or "") and not local_restart_required:
+    if effective_mode == str(requested_policy.get("mode") or ""):
         effective_policy = requested_policy
     else:
         launch_capacity_env = {}
@@ -2342,7 +2348,7 @@ def session_turn_policy_projection(
         effective_policy = attach_local_routing_snapshot(
             effective_policy,
             config,
-            enabled=bool(launch_local_enabled),
+            enabled=requested_local_enabled,
         )
         effective_policy = attach_native_proactive_source(effective_policy)
 
@@ -2353,12 +2359,13 @@ def session_turn_policy_projection(
         "effective_turn_mode": str(effective_policy.get("mode") or ""),
         "launch_mode": launch_mode or None,
         "requested_local_enabled": requested_local_enabled,
-        "effective_local_enabled": bool(launch_local_enabled),
+        "effective_local_enabled": requested_local_enabled,
         "kaveman_enabled": requested_kaveman,
         "mode_restart_required": mode_restart_required,
-        "local_restart_required": local_restart_required,
-        "restart_required": mode_restart_required or local_restart_required,
+        "local_restart_required": False,
+        "restart_required": mode_restart_required,
         "kaveman_applies_at": "next_user_prompt" if manager_session_state_path() is not None else "immediate",
+        "local_applies_at": "next_user_prompt" if manager_session_state_path() is not None else "immediate",
         "mode_applies_at": "next_qdex_launch" if mode_restart_required else "next_user_prompt",
     }
     return effective_policy, transition
@@ -2419,6 +2426,7 @@ def manager_session_policy_surface(
             "local_restart_required": False,
             "restart_required": False,
             "kaveman_applies_at": "command_invocation",
+            "local_applies_at": "command_invocation",
             "mode_applies_at": "command_invocation",
         }
         return requested_policy, requested_policy, transition, accepted_turn
@@ -5051,7 +5059,7 @@ def manager_session_status_payload(
         "desired_global_policy_hash": desired_hash,
         "policy_drift": drift,
         "session_policy_valid": bool(session_hash),
-        "restart_required": drift,
+        "restart_required": native_policy_restart_required(decision_policy, desired_policy),
         "prompt_known": bool(decision.get("prompt_known")),
         "prompt_source": decision.get("prompt_source") or None,
         "prompt_length": int(decision.get("prompt_length") or 0),
@@ -5317,6 +5325,7 @@ def status_authority_payload(
         "effective_turn_mode": transition_data.get("effective_turn_mode"),
         "launch_mode": transition_data.get("launch_mode"),
         "kaveman_applies_at": transition_data.get("kaveman_applies_at"),
+        "local_applies_at": transition_data.get("local_applies_at"),
         "mode_applies_at": transition_data.get("mode_applies_at"),
         "policy_drift": drift,
         "restart_required": bool(transition_data.get("restart_required")),
@@ -5634,7 +5643,7 @@ def codex_source_patch_specs(version: str) -> list[dict[str, Any]]:
         return []
     listed_agent_legacy_field = (
         "            last_task_message: None,\n"
-        if version not in {"0.145.0", "0.147.0", "0.150.0", "0.153.1"}
+        if version not in {"0.145.0", "0.147.0", "0.150.0", "0.153.1", "0.154.0"}
         else ""
     )
     specs = [
@@ -6540,7 +6549,7 @@ max_threads = 2
             ],
         },
     ]
-    if version in {"0.147.0", "0.150.0", "0.153.1"}:
+    if version in {"0.147.0", "0.150.0", "0.153.1", "0.154.0"}:
         resume_child_nested_response = """        sse(vec![
             ev_response_created("resp-worker-1"),
             ev_function_call_with_namespace(
@@ -6631,7 +6640,7 @@ max_threads = 2
         mcp_tests_anchor = """#[tokio::test]
 async fn list_all_tools_uses_shared_codex_apps_cache_when_client_startup_fails() {
 """
-    if version in {"0.145.0", "0.147.0", "0.150.0", "0.153.1"}:
+    if version in {"0.145.0", "0.147.0", "0.150.0", "0.153.1", "0.154.0"}:
         redundant_v2_config_paths = {
             "codex-rs/core/src/config/mod.rs",
             "codex-rs/core/src/config/config_tests.rs",
@@ -8427,11 +8436,11 @@ async fn failed_codex_apps_startup_reports_cached_degraded_ready_events() -> any
                         ),
                     ],
                 },
-                    ] if version in {"0.147.0", "0.150.0", "0.153.1"} else []
+                    ] if version in {"0.147.0", "0.150.0", "0.153.1", "0.154.0"} else []
                 ),
             ]
         )
-    if version in {"0.147.0", "0.150.0", "0.153.1"}:
+    if version in {"0.147.0", "0.150.0", "0.153.1", "0.154.0"}:
         # Codex 0.147/0.150 added a side-conversation key after raw output,
         # moved the Apps cache helper, and made V2 child policy more explicit.
         # Keep the Qwendex contract intact while preserving those paths.
@@ -8985,7 +8994,7 @@ async fn multi_agent_v2_spawn_rejects_model_override() {
                 },
             ]
         )
-    if version in {"0.150.0", "0.153.1"}:
+    if version in {"0.150.0", "0.153.1", "0.154.0"}:
         # 0.150 keeps the policy seams but changed the V2 handler APIs and
         # refreshed several integration-test expectations. Rebase those
         # seams against the released source rather than a 0.147 text match.
@@ -9003,7 +9012,7 @@ async fn multi_agent_v2_spawn_rejects_model_override() {
             spec = dict(original)
             replacements: list[tuple[str, str]] = []
             for old, new in spec["replacements"]:
-                if version == "0.153.1" and path == "codex-rs/tui/src/keymap.rs":
+                if version in {"0.153.1", "0.154.0"} and path == "codex-rs/tui/src/keymap.rs":
                     if old.startswith('                ("toggle_fast_mode",') and '"chat.interrupt_turn"' in old:
                         old = """            (
                 keymap.global.toggle_fast_mode.as_ref(),
@@ -9068,7 +9077,7 @@ async fn multi_agent_v2_spawn_rejects_model_override() {
             ],
             approval_overlay_bindings,
 """
-                elif version == "0.153.1" and path == "codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs" and old.startswith("struct SpawnAgentArgs {"):
+                elif version in {"0.153.1", "0.154.0"} and path == "codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs" and old.startswith("struct SpawnAgentArgs {"):
                     old = """struct SpawnAgentArgs {
     message: String,
     task_name: String,
@@ -9079,7 +9088,7 @@ async fn multi_agent_v2_spawn_rejects_model_override() {
     fork_context: Option<bool>,
 }
 """
-                elif version == "0.153.1" and path == "codex-rs/core/src/tools/spec_plan_tests.rs" and old.startswith("            update_config(turn, |config| {"):
+                elif version in {"0.153.1", "0.154.0"} and path == "codex-rs/core/src/tools/spec_plan_tests.rs" and old.startswith("            update_config(turn, |config| {"):
                     old = """            update_config(turn, |config| {
                 config.multi_agent_v2.tool_namespace = Some("agents".to_string());
             });
@@ -9098,7 +9107,7 @@ async fn multi_agent_v2_spawn_rejects_model_override() {
                 ):
                     model_version_check = (
                         "model_info.multi_agent_version"
-                        if version == "0.153.1"
+                        if version in {"0.153.1", "0.154.0"}
                         else "turn_context.model_info.multi_agent_version"
                     )
                     old = "__QWENDEX_REGEX__(?m)^        MultiAgentVersion::V2 => \\{\\n.*?^        \\}\\n"
@@ -9188,7 +9197,7 @@ async fn multi_agent_v2_spawn_rejects_model_override() {
                         "    apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;",
                         "",
                     ])
-                    if version == "0.153.1":
+                    if version in {"0.153.1", "0.154.0"}:
                         new = new.replace(
                             "    apply_spawn_agent_service_tier(\n"
                             "        &session,\n"
@@ -9289,7 +9298,7 @@ async fn multi_agent_v2_spawn_rejects_model_override() {
                             ]
                             + (
                                 []
-                                if version == "0.153.1"
+                                if version in {"0.153.1", "0.154.0"}
                                 else ["multi_agent_v2_full_history_fork_accepts_explicit_service_tier"]
                             )
                         ],
@@ -9373,7 +9382,7 @@ async fn multi_agent_v2_spawn_rejects_model_override() {
                 },
             ]
         )
-        if version == "0.153.1":
+        if version in {"0.153.1", "0.154.0"}:
             for spec in specs:
                 if spec["path"] != "codex-rs/core/src/tools/spec_plan_tests.rs":
                     continue
@@ -9414,6 +9423,42 @@ async fn multi_agent_v2_spawn_rejects_model_override() {
             }
             for spec in specs
         ]
+    if version == "0.154.0":
+        # Upstream moved shared app shortcuts to a bool-returning handler.
+        # Its caller already checks whether app shortcuts are available.
+        for spec in specs:
+            if spec["path"] == "codex-rs/tui/src/terminal_visualization_instructions.rs":
+                spec["replacements"] = [
+                    (old, new.replace(
+                        "    let existing_instructions = if visualization_enabled {\n"
+                        "        control_instructions.or_else(|| config.developer_instructions.clone())\n"
+                        "    } else {\n"
+                        "        control_instructions\n"
+                        "    };",
+                        "    let existing_instructions =\n"
+                        "        control_instructions.or_else(|| config.developer_instructions.clone());",
+                    ))
+                    for old, new in spec["replacements"]
+                ]
+            if spec["path"] != "codex-rs/tui/src/app/input.rs":
+                continue
+            spec["replacements"] = [
+                (
+                    old.replace(
+                        "if app_keymap_shortcuts_available && self.keymap.app.toggle_raw_output.is_pressed(key_event)\n        {",
+                        "if self.keymap.app.toggle_raw_output.is_pressed(key_event) {",
+                    ).replace("return;", "return true;"),
+                    new.replace(
+                        "if app_keymap_shortcuts_available\n            && ", "if "
+                    ).replace(
+                        "if app_keymap_shortcuts_available && self.keymap.app.toggle_raw_output.is_pressed(key_event)\n        {",
+                        "if self.keymap.app.toggle_raw_output.is_pressed(key_event) {",
+                    ).replace("return;", "return true;"),
+                )
+                if old.startswith("        if app_keymap_shortcuts_available")
+                else (old, new)
+                for old, new in spec["replacements"]
+            ]
     return specs
 
 
@@ -9455,7 +9500,7 @@ def apply_codex_source_patch(source: Path, version: str, *, dry_run: bool = Fals
     # Keep the rebase fail-closed: validate every source replacement before
     # writing any file.  The 0.147/0.150 contract also requires unique anchors so
     # a broad fragment cannot silently duplicate a patched Rust test.
-    strict_anchor_cardinality = version in {"0.147.0", "0.150.0", "0.153.1"}
+    strict_anchor_cardinality = version in {"0.147.0", "0.150.0", "0.153.1", "0.154.0"}
     original_texts: dict[str, str] = {}
     updated_texts: dict[str, str] = {}
     for spec in specs:
@@ -11892,6 +11937,12 @@ def routing_assignment_label(routing: Mapping[str, Any]) -> str:
 
 
 def spawn_instruction(agent_id: str, routing: Mapping[str, Any]) -> str:
+    if routing.get("token_saver_used"):
+        return (
+            f"Execute the bounded {agent_id} assignment through qwendex exec --seat qwen --cwd <repo> -- <prompt>. "
+            "Check the execution receipt for the actual selected seat and result before using its output. "
+            "Native spawn_agent workers inherit the Codex provider and do not execute this local assignment."
+        )
     reasoning = str(routing.get("selected_reasoning") or "inherited")
     return (
         f"spawn_agent for {agent_id} using the Qwendex lane assignment; "
@@ -11905,16 +11956,22 @@ def kaveman_context(config: Mapping[str, Any]) -> str:
             enabled = current_kaveman_enabled(config, conn)
     except Exception:
         return ""
-    directive = kaveman_directive(config) if enabled else ""
-    return f"Kaveman directive: {directive}" if directive else ""
+    return agent_output_policy_context({"output_policy": kaveman_output_policy(config, enabled)})
 
 
 def agent_output_policy_context(agent_policy: Mapping[str, Any], config: Mapping[str, Any] | None = None) -> str:
     output_policy = agent_policy.get("output_policy", {})
     if isinstance(output_policy, Mapping) and output_policy.get("kaveman_enabled"):
         directive = str(output_policy.get("directive") or "")
-        return f"Qwendex output policy: Kaveman enabled. Kaveman directive: {directive}" if directive else "Qwendex output policy: Kaveman enabled."
-    return ""
+        return (
+            "Qwendex output policy: Kaveman enabled. This turn's policy supersedes earlier Kaveman settings. "
+            f"Kaveman directive: {directive} "
+            "Include detail requested by the user and evidence needed to complete the task."
+        )
+    return (
+        "Qwendex output policy: Kaveman disabled. This turn's policy supersedes earlier Kaveman settings. "
+        "Use the user's requested level of detail and the normal output instructions."
+    )
 
 
 def hook_local_subagent_status(config: Mapping[str, Any]) -> dict[str, Any]:
@@ -11968,6 +12025,16 @@ def agent_mode_context(
     if config is not None:
         if output_context := agent_output_policy_context(agent_policy, config=config):
             parts.append(output_context)
+        local_snapshot = agent_policy.get("local_routing_snapshot", {})
+        if isinstance(local_snapshot, Mapping) and local_snapshot.get("enabled"):
+            parts.append(
+                "Local Qwen assistance is enabled. For bounded inspection or drafting, use "
+                "qwendex exec --seat qwen --cwd <repo> -- <prompt> and inspect its execution receipt. "
+                "Native workers keep the inherited Codex provider. Keep release, security, architecture, "
+                "and public claims under Codex review."
+            )
+        else:
+            parts.append("Local Qwen assistance is disabled for this turn; keep work on the primary provider.")
     if search_context := experimental_search_candidate_context():
         parts.append(search_context)
     return " ".join(parts)
@@ -12553,6 +12620,36 @@ def activate_manager_native_worker(
     launch_ledger_id = str(os.environ.get("QWENDEX_MANAGER_LEDGER_ID") or "").strip()
     policy_hash = str(os.environ.get("QWENDEX_MANAGER_POLICY_HASH") or agent_policy.get("policy_hash") or "").strip()
     now = utc_now()
+    advisory_decision: dict[str, Any] = {}
+    advisory_trusted = False
+    if not managed_owner and not native_reservation_is_strict(agent_policy):
+        # Resolve launch identity before the write transaction: the health
+        # helpers use their own connections. Recheck this row under the lock.
+        with connect_state(config) as lookup_conn:
+            row = lookup_conn.execute(
+                """
+                SELECT * FROM qwendex_manager_decisions
+                WHERE repo_root = ? AND root_session_id = ? AND policy_hash = ?
+                  AND launch_ledger_id = ?
+                  AND selected_route IN ('manager_subagents', 'direct_single_writer')
+                  AND final_status IN ('preflight_ready', 'validation_pending')
+                ORDER BY timestamp_updated DESC LIMIT 1
+                """,
+                (repo_root, parent_session_id, policy_hash, launch_ledger_id),
+            ).fetchone()
+            advisory_decision = row_to_manager_decision(row) or {}
+        if advisory_decision:
+            mismatch, _ = manager_decision_static_mismatch(config, advisory_decision, env=os.environ)
+            health = manager_launch_health(
+                config,
+                pid=int(advisory_decision.get("launch_pid") or 0),
+                repo_root=repo_root,
+                decision=advisory_decision,
+                env=os.environ,
+                agent_policy=agent_policy,
+                require_environment_identity=True,
+            )
+            advisory_trusted = not mismatch and bool(health.get("trusted"))
     with connect_state(config) as conn:
         if busy_error := begin_immediate(conn):
             return None, busy_error
@@ -12645,19 +12742,32 @@ def activate_manager_native_worker(
             # Codex V2 collaboration calls do not consistently traverse the
             # generic PreToolUse hook path. SubagentStart still provides the
             # canonical task name, parent root session, child runtime id, and
-            # repository. Bind directly to one exact planned assignment when
-            # all immutable launch identities agree; never guess by lane order.
+            # repository. Suggested lane names are advisory; a root-selected
+            # task can register as a neutral read-only lane after launch checks.
             decision_row = conn.execute(
                 """
                 SELECT * FROM qwendex_manager_decisions
                 WHERE repo_root = ? AND root_session_id = ? AND policy_hash = ?
-                  AND launch_ledger_id = ? AND selected_route = 'manager_subagents'
+                  AND launch_ledger_id = ?
+                  AND selected_route IN ('manager_subagents', 'direct_single_writer')
                   AND final_status IN ('preflight_ready', 'validation_pending')
                 ORDER BY timestamp_updated DESC LIMIT 1
                 """,
                 (repo_root, parent_session_id, policy_hash, launch_ledger_id),
             ).fetchone()
             decision = row_to_manager_decision(decision_row) or {}
+            binding_fields = (
+                "ledger_id", "session_id", "root_session_id", "turn_id", "agent_task_id",
+                "policy_hash", "policy_snapshot", "agent_plan", "launch_ledger_id",
+                "launch_pid", "launch_start_ticks", "launch_nonce", "launch_key",
+                "state_db_identity", "ledger_db_identity", "runtime_identity",
+                "runtime_generation", "hook_generation", "codex_home_digest_or_path_policy",
+            )
+            if not advisory_trusted or any(
+                decision.get(key) != advisory_decision.get(key) for key in binding_fields
+            ):
+                conn.rollback()
+                return None, "native_spawn_launch_untrusted"
             plan = decision.get("agent_plan")
             plan = plan if isinstance(plan, Mapping) else {}
             assignments = [
@@ -12671,10 +12781,17 @@ def activate_manager_native_worker(
                 if task_name == str(assignment.get("agent_id") or "").strip()
                 or task_name.endswith(f"/{str(assignment.get('agent_id') or '').strip()}")
             ]
-            if len(matched) != 1:
+            if len(matched) > 1:
                 conn.rollback()
-                return None, "native_spawn_reservation_missing"
-            assignment = matched[0]
+                return None, "native_spawn_reservation_ambiguous"
+            assignment = matched[0] if matched else {
+                "agent_id": "advisory-" + sha256_text(task_name)[:16],
+                "lane": "advisory-" + sha256_text(task_name)[:16],
+                "profile": "read-only",
+                "required": False,
+                "routing": {},
+                "assignment": "Follow the root's scoped task and return a concise outcome.",
+            }
             task_id = str(decision.get("agent_task_id") or decision.get("session_id") or "")
             existing_rows = conn.execute(
                 """
@@ -14088,6 +14205,21 @@ def pre_tool_gate(config: Mapping[str, Any], event: Mapping[str, Any], agent_pol
             ) or {}
         if manager_session_is_read_only(registered_agent_session) and profile in READ_ONLY_AGENT_PROFILES:
             read_only_profile = True
+        packet = registered_agent_session.get("context_packet") or {}
+        if (
+            profile == "default"
+            and registered_agent_session.get("status") == "active"
+            and registered_agent_session.get("origin") == "qwendex"
+            and manager_session_is_read_only(registered_agent_session)
+            and registered_agent_session.get("repo_root") == event_repo_root
+            and registered_agent_session.get("policy_hash") == os.environ.get("QWENDEX_MANAGER_POLICY_HASH")
+            and packet.get("runtime") == "native_v2"
+            and packet.get("native_session_id") == str(event.get("session_id") or "")
+            and packet.get("launch_ledger_id") == os.environ.get("QWENDEX_MANAGER_LEDGER_ID")
+        ):
+            # V2 reports the native type as default even for a registered
+            # verifier. Use the bound lane, not that generic type, for reads.
+            read_only_profile = True
     nested_spawn_policy = agent_policy.get("nested_spawn", {})
     # A marker in hook input is not an identity authority. Native sessions
     # must already have an active/reserved read-only ledger row created by the
@@ -14104,6 +14236,7 @@ def pre_tool_gate(config: Mapping[str, Any], event: Mapping[str, Any], agent_pol
         and manager_mode_active
         and isinstance(nested_spawn_policy, Mapping)
         and bool(nested_spawn_policy.get("enabled"))
+        and event_uses_read_only_profile(event, profile)
         and read_only_profile
         and registered_read_only
     )
@@ -15486,6 +15619,8 @@ def build_agent_team_plan(
         "agent_use": agent_policy.get("agent_use"),
         "output_policy": agent_policy.get("output_policy", {}),
         "task_id": effective_task_id,
+        "local_routing_snapshot": agent_policy.get("local_routing_snapshot", {}),
+        "local_subagents": dict(local_status),
         "repo_root": effective_repo_root,
         "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
         "task_class": task_class,
@@ -15876,7 +16011,7 @@ def manager_preflight_payload(
         "desired_global_policy_hash": str(desired_agent_policy.get("policy_hash") or ""),
         "policy_drift": existing_policy_drift,
         "session_policy_valid": True,
-        "restart_required": existing_policy_drift,
+        "restart_required": native_policy_restart_required(agent_policy, desired_agent_policy),
         "output_policy": agent_policy.get("output_policy", {}),
         "codex_home": str(codex_home),
         "codex_home_digest_or_path_policy": codex_home_identity,
@@ -16588,7 +16723,9 @@ def manager_launch_health(
             config,
             selected_manager_mode=desired_mode,
             kaveman_enabled=desired_kaveman,
-            env={},
+            env={key: source_env[key] for key in (
+                "QWENDEX_GLOBAL_WORKER_CAP", "QWENDEX_NATIVE_RESERVATION_MODE",
+            ) if source_env.get(key)},
         )
         desired_policy = attach_local_routing_snapshot(
             desired_policy,
@@ -16598,6 +16735,7 @@ def manager_launch_health(
         desired_policy_hash = str(desired_policy.get("policy_hash") or "")
     except (OSError, sqlite3.Error, ValueError):
         desired_policy_hash = ""
+        desired_policy = {}
     policy_drift = bool(
         recorded_policy
         and desired_policy_hash
@@ -16708,7 +16846,7 @@ def manager_launch_health(
         "desired_global_policy_hash": desired_policy_hash,
         "policy_drift": policy_drift,
         "session_policy_valid": session_policy_valid,
-        "restart_required": policy_drift,
+        "restart_required": native_policy_restart_required((candidate or {}).get("policy_snapshot") or {}, desired_policy),
         "hook_trusted": hook_trusted,
         "hook_trust_required": hook_trust_required,
     }
@@ -17033,7 +17171,7 @@ def record_manager_prompt_admission_failure(
             ledger_id=str(decision.get("ledger_id") or ""),
         )
     if updated is not None:
-        write_manager_decision_receipt(config, manager_decision_receipt_payload(updated))
+        write_manager_decision_receipt(config, manager_decision_receipt_payload(updated, config=config))
     return updated
 
 
@@ -17074,7 +17212,13 @@ def update_manager_decision_from_prompt(
         decision_repo = str(decision.get("repo_root") or "")
         if decision_repo and event_repo != decision_repo:
             return None
-        local_status = manager_decision_local_status(config, decision)
+        if manager_session_state_path() is not None:
+            local_snapshot = agent_policy.get("local_routing_snapshot") or {}
+            local_status = local_subagent_status(
+                config, enabled=bool(local_snapshot.get("enabled")), env=os.environ, probe=True,
+            )
+        else:
+            local_status = manager_decision_local_status(config, decision)
         estimate = estimate_task(config, prompt=prompt, local_status=local_status)
         effective_turn_id = turn_id
         agent_task_id = str(
@@ -17155,7 +17299,7 @@ def update_manager_decision_from_prompt(
         )
     if updated is None:
         return None
-    write_manager_decision_receipt(config, manager_decision_receipt_payload(updated))
+    write_manager_decision_receipt(config, manager_decision_receipt_payload(updated, config=config))
     return {"manager_decision": updated, "agent_plan": plan, "estimate": estimate}
 
 
@@ -17196,14 +17340,20 @@ def update_manager_decision_terminal(
     row = conn.execute("SELECT * FROM qwendex_manager_decisions WHERE ledger_id = ?", (str(decision.get("ledger_id") or ""),)).fetchone()
     updated = row_to_manager_decision(row)
     if config is not None and updated is not None:
-        write_manager_decision_receipt(config, manager_decision_receipt_payload(updated))
+        write_manager_decision_receipt(config, manager_decision_receipt_payload(updated, config=config))
     return updated
 
 
-def manager_decision_receipt_payload(decision: Mapping[str, Any]) -> dict[str, Any]:
+def manager_decision_receipt_payload(
+    decision: Mapping[str, Any], *, config: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     desired_policy_hash = str(decision.get("desired_global_policy_hash") or decision.get("policy_hash") or "")
     session_policy_hash = str(decision.get("policy_hash") or "")
     policy_drift = bool(desired_policy_hash and session_policy_hash and desired_policy_hash != session_policy_hash)
+    restart_required = bool(decision.get("restart_required"))
+    if config is not None:
+        desired = resolve_agent_policy(config, selected_manager_mode=selected_manager_mode_for_policy(config))
+        restart_required = native_policy_restart_required(decision.get("policy_snapshot") or {}, desired)
     return {
         "ok": str(decision.get("selected_route") or "") != "blocked",
         "schema_version": int(decision.get("schema_version") or 1),
@@ -17243,7 +17393,7 @@ def manager_decision_receipt_payload(decision: Mapping[str, Any]) -> dict[str, A
         "desired_global_policy_hash": desired_policy_hash,
         "policy_drift": policy_drift,
         "session_policy_valid": bool(session_policy_hash),
-        "restart_required": policy_drift,
+        "restart_required": restart_required,
         "codex_home": decision.get("codex_home"),
         "codex_home_digest_or_path_policy": decision.get("codex_home_digest_or_path_policy"),
         "repo_root": decision.get("repo_root"),

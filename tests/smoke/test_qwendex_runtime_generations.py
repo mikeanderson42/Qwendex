@@ -82,7 +82,7 @@ def write_pinned_codex_fixture(dev_root: Path) -> tuple[Path, Path]:
     codex.write_text(
         "#!/usr/bin/env bash\n"
         "if [[ \"${1:-}\" == \"--version\" ]]; then\n"
-        "  printf 'codex-cli 0.153.1\\n'\n"
+        "  printf 'codex-cli 0.154.0\\n'\n"
         "  exit 0\n"
         "fi\n"
         "exit 0\n",
@@ -96,10 +96,10 @@ def write_pinned_codex_fixture(dev_root: Path) -> tuple[Path, Path]:
         "schema_version": "qwendex.dev.codex_build.v1",
         "status": "pass",
         "source_head": "1" * 40,
-        "source_ref": "rust-v0.153.1",
+        "source_ref": "rust-v0.154.0",
         "source_patch_sha256": "2" * 64,
         "binary_sha256": sha256_file(codex),
-        "binary_version": "codex-cli 0.153.1",
+        "binary_version": "codex-cli 0.154.0",
         "code_mode_host": {"binary_sha256": sha256_file(host)},
     }
     receipt_path = dev_root / ".qwendex-dev" / "results" / "meta" / "codex_build.json"

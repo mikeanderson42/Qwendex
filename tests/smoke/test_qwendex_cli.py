@@ -1012,7 +1012,7 @@ def test_qwendex_dev_env_public_surface_is_visible_and_isolated():
     assert dependencies["schema_version"] == "qwendex.dependencies.v1"
     assert {"bash", "python3", "git", "rsync", "curl", "codex"} <= set(dependencies["required_commands"])
     assert {"pytest", "ruff"} <= set(dependencies["validation_python_modules"])
-    assert 'QWENDEX_CODEX_REQUIRED_VERSION:-0.153.1' in installer_text
+    assert 'QWENDEX_CODEX_REQUIRED_VERSION:-0.154.0' in installer_text
     assert 'QWENDEX_CODEX_NPM_SPEC:-@openai/codex@$QWENDEX_CODEX_REQUIRED_VERSION' in installer_text
     assert 'npm install -g --prefix "$HOME/.local" "$codex_npm_spec"' in installer_text
     assert '"pytest==$QWENDEX_PYTEST_REQUIRED_VERSION"' in installer_text
@@ -1189,12 +1189,12 @@ def test_qwendex_install_deps_check_rejects_wrong_executable_codex(tmp_path):
     assert result.returncode == 1, result.stderr or result.stdout
     payload = json.loads(result.stdout)
     assert payload["status"] == "blocked"
-    assert payload["required_codex_version"] == "0.153.1"
+    assert payload["required_codex_version"] == "0.154.0"
     assert payload["codex_compatible"] is False
     assert payload["tools"]["codex"]["path"] == str(fake_codex)
     assert payload["tools"]["codex"]["version"] == "codex-cli 9.9.9"
     assert payload["incompatible_required"] == [
-        "codex version 'codex-cli 9.9.9' does not match required 'codex-cli 0.153.1'"
+        "codex version 'codex-cli 9.9.9' does not match required 'codex-cli 0.154.0'"
     ]
 
 
@@ -1205,7 +1205,7 @@ def test_qwendex_install_deps_check_rejects_codex_version_with_extra_tokens(tmp_
     fake_home.mkdir()
     fake_bin.mkdir()
     fake_codex.write_text(
-        "#!/usr/bin/env bash\nprintf 'codex-cli 0.153.1 extra\\n'\n",
+        "#!/usr/bin/env bash\nprintf 'codex-cli 0.154.0 extra\\n'\n",
         encoding="utf-8",
     )
     fake_codex.chmod(0o755)
@@ -1237,11 +1237,11 @@ def test_qwendex_install_deps_check_rejects_codex_version_with_extra_tokens(tmp_
     assert payload["status"] == "blocked"
     assert payload["codex_compatible"] is False
     assert payload["tools"]["codex"]["normalized_output"] == (
-        "codex-cli 0.153.1 extra"
+        "codex-cli 0.154.0 extra"
     )
     assert payload["incompatible_required"] == [
-        "codex version 'codex-cli 0.153.1 extra' does not match required "
-        "'codex-cli 0.153.1'"
+        "codex version 'codex-cli 0.154.0 extra' does not match required "
+        "'codex-cli 0.154.0'"
     ]
 
 
@@ -1253,7 +1253,7 @@ def test_qwendex_install_deps_failed_npm_logs_real_rc_and_stays_blocked(tmp_path
     fake_bin.mkdir()
 
     scripts = {
-        "codex": "#!/usr/bin/env bash\nprintf 'codex-cli 0.153.1 extra\\n'\n",
+        "codex": "#!/usr/bin/env bash\nprintf 'codex-cli 0.154.0 extra\\n'\n",
         "npm": "#!/usr/bin/env bash\nexit 37\n",
         "python3": (
             "#!/usr/bin/env bash\n"
@@ -1306,7 +1306,7 @@ def test_qwendex_install_deps_failed_npm_logs_real_rc_and_stays_blocked(tmp_path
     log_text = install_log.read_text(encoding="utf-8")
     assert (
         f"command failed (37): npm install -g --prefix {fake_home / '.local'} "
-        "@openai/codex@0.153.1"
+        "@openai/codex@0.154.0"
     ) in log_text
 
 
@@ -1331,7 +1331,7 @@ def test_qwendex_install_deps_requests_system_python_when_version_is_too_old(tmp
             "#!/usr/bin/env bash\n"
             "if [[ \"${1:-}\" == \"-u\" ]]; then printf '0\\n'; else exec /usr/bin/id \"$@\"; fi\n"
         ),
-        "codex": "#!/usr/bin/env bash\nprintf 'codex-cli 0.153.1\\n'\n",
+        "codex": "#!/usr/bin/env bash\nprintf 'codex-cli 0.154.0\\n'\n",
     }
     for name, text in scripts.items():
         path = fake_bin / name
@@ -1423,7 +1423,7 @@ def same_root_dev_env_fixture(tmp_path):
     fake_codex.write_text(
         """#!/usr/bin/env bash
 if [[ "${1:-}" == "--version" ]]; then
-  printf 'codex-cli 0.153.1\\n'
+  printf 'codex-cli 0.154.0\\n'
 fi
 """,
         encoding="utf-8",
@@ -1570,7 +1570,7 @@ def test_qwendex_dev_env_second_same_root_sync_skips_its_codex_wrapper(tmp_path)
 
     assert second_sync.returncode == 0, second_sync.stderr or second_sync.stdout
     assert codex_main.returncode == 0, codex_main.stderr or codex_main.stdout
-    assert codex_main.stdout.strip() == "codex-cli 0.153.1"
+    assert codex_main.stdout.strip() == "codex-cli 0.154.0"
     assert str(fake_codex) in (checkout / "bin" / "codex-main").read_text(encoding="utf-8")
     assert qdex.returncode == 0, qdex.stderr or qdex.stdout
     dry_run = json.loads(qdex.stdout)
@@ -1677,7 +1677,7 @@ def test_qwendex_upgrade_ignores_stale_main_codex_and_installed_qdex_opens_other
 printf '%s\\n' "$@" > "$QWENDEX_FAKE_CODEX_ARGS"
 for arg in "$@"; do
   if [[ "$arg" == "--version" ]]; then
-    printf 'codex-cli 0.153.1\\n'
+    printf 'codex-cli 0.154.0\\n'
     break
   fi
 done
@@ -1733,7 +1733,7 @@ done
     assert not legacy_codex.exists()
     assert installed_qdex.is_file()
     assert launched.returncode == 0, launched.stderr or launched.stdout
-    assert launched.stdout.strip() == "codex-cli 0.153.1"
+    assert launched.stdout.strip() == "codex-cli 0.154.0"
     launched_args = args_file.read_text(encoding="utf-8").splitlines()
     assert launched_args[launched_args.index("-C") + 1] == str(downstream_repo)
     runtime = (checkout / ".qwendex-dev" / "bin" / "qwendex-codex-runtime").read_text(
@@ -1806,7 +1806,7 @@ def test_qwendex_dev_env_preserves_upstream_codex_and_versions_model_cache(tmp_p
     assert sourced.returncode == 0, sourced.stderr or sourced.stdout
     resolved_codex, cache_file, sourced_home, runtime = sourced.stdout.splitlines()
     assert resolved_codex == str(fake_codex)
-    assert cache_file == "models_cache.qwendex-0.153.1.json"
+    assert cache_file == "models_cache.qwendex-0.154.0.json"
     assert sourced_home == "__unset__"
     assert runtime == str(checkout / ".qwendex-dev" / "bin" / "qwendex-codex-runtime")
 
@@ -1829,7 +1829,7 @@ def test_qwendex_dev_codex_wrapper_requires_code_mode_host(tmp_path):
     dev_codex = build_bin / "codex"
     code_mode_host = build_bin / "codex-code-mode-host"
     dev_codex.write_text(
-        "#!/usr/bin/env bash\nprintf 'codex-cli 0.153.1\\n'\n",
+        "#!/usr/bin/env bash\nprintf 'codex-cli 0.154.0\\n'\n",
         encoding="utf-8",
     )
     dev_codex.chmod(0o755)
@@ -1875,7 +1875,7 @@ def test_qwendex_dev_codex_wrapper_requires_code_mode_host(tmp_path):
         timeout=10,
     )
     assert ready.returncode == 0, ready.stderr or ready.stdout
-    assert ready.stdout.strip() == "codex-cli 0.153.1"
+    assert ready.stdout.strip() == "codex-cli 0.154.0"
 
 
 def assert_same_root_supports_quoted_path(tmp_path, path_fragment):
@@ -1964,7 +1964,7 @@ def assert_same_root_supports_quoted_path(tmp_path, path_fragment):
     assert sourced_env.returncode == 0, sourced_env.stderr or sourced_env.stdout
     assert sourced_env.stdout.strip() == str(checkout)
     assert codex.returncode == 0, codex.stderr or codex.stdout
-    assert codex.stdout.strip() == "codex-cli 0.153.1"
+    assert codex.stdout.strip() == "codex-cli 0.154.0"
     assert qdex.returncode == 0, qdex.stderr or qdex.stdout
     dry_run = json.loads(qdex.stdout)
     assert dry_run["target_repo"] == str(checkout)
@@ -2706,7 +2706,7 @@ def test_qwendex_session_kaveman_toggle_snapshots_active_turn_and_refreshes_next
         "UserPromptSubmit",
         "--event-json",
         json.dumps({
-            "session_id": "root-session-b",
+            "session_id": "root-session-a",
             "turn_id": "root-turn-b",
             "cwd": str(repo),
             "prompt": "Inspect the current repository state and report the selected output policy.",
@@ -2724,7 +2724,7 @@ def test_qwendex_session_kaveman_toggle_snapshots_active_turn_and_refreshes_next
             "agent_id": "runtime-child-b",
             "agent_type": assignment["profile"],
             "task_name": assignment["agent_id"],
-            "parent_session_id": "root-session-b",
+            "parent_session_id": "root-session-a",
             "session_id": "child-session-b",
             "turn_id": "child-turn-b",
             "cwd": str(repo),
@@ -2737,8 +2737,9 @@ def test_qwendex_session_kaveman_toggle_snapshots_active_turn_and_refreshes_next
     assert decision["policy_hash"] == initial_hash
     assert "Qwendex output policy: Kaveman enabled." in root_context
     assert "Qwendex output policy: Kaveman enabled." in child_context
-    assert "Qwendex output policy: Kaveman enabled." not in next_root_context
-    assert "Qwendex output policy: Kaveman enabled." not in next_child_context
+    assert "Qwendex output policy: Kaveman disabled." in next_root_context
+    assert "supersedes earlier Kaveman settings" in next_root_context
+    assert "Qwendex output policy: Kaveman disabled." in next_child_context
     assert after["data"]["kaveman_enabled"] is False
     assert after["data"]["agent_policy_hash"] != initial_hash
     assert after["data"]["status_authority"]["effective_policy_hash"] == initial_hash
@@ -2759,6 +2760,18 @@ def test_qwendex_session_kaveman_toggle_snapshots_active_turn_and_refreshes_next
     fresh = json_result("codex-status", "--json", env=fresh_env)
     assert fresh["data"]["mode"] == "off"
     assert fresh["data"]["kaveman_enabled"] is False
+
+
+    json_result("manager", "kaveman", "--set", "on", "--json", env=session_env)
+    enabled_again = json_result(
+        "agent", "hook", "UserPromptSubmit", "--event-json",
+        json.dumps({"session_id": "root-session-a", "turn_id": "root-turn-c", "cwd": str(repo),
+                    "prompt": "Inspect the output policy and include the requested details."}),
+        "--json", env=active_env,
+    )
+    context = enabled_again["data"]["hook_result"]["hookSpecificOutput"]["additionalContext"]
+    assert "Qwendex output policy: Kaveman enabled." in context
+    assert "Include detail requested by the user" in context
 
 
 def test_qwendex_session_mode_change_is_requested_until_a_capacity_restart(tmp_path):
@@ -2816,7 +2829,7 @@ def test_qwendex_session_mode_change_is_requested_until_a_capacity_restart(tmp_p
     assert restored["data"]["local_enabled"] == before["data"]["local_enabled"]
 
 
-def test_qwendex_session_local_change_is_requested_until_a_capacity_restart(tmp_path):
+def test_qwendex_session_local_change_applies_without_restart(tmp_path):
     session_env = {
         "QWENDEX_STATE_DB": str(tmp_path / "qwendex.sqlite"),
         "QWENDEX_MANAGER_SESSION_STATE_FILE": str(tmp_path / "session-a.json"),
@@ -2836,25 +2849,25 @@ def test_qwendex_session_local_change_is_requested_until_a_capacity_restart(tmp_
     requested = json_result("codex-status", "--json", env=session_env)
 
     assert before["data"]["text"] == "{Qwendex} Agent Manager: [Manager Mode] | Kaveman: [N] | Local: [Off] (Alt+M/K/L)"
-    assert requested["data"]["text"] == "{Qwendex} Agent Manager: [Manager Mode] | Kaveman: [N] | Local: [Ready (restart)] (Alt+M/K/L)"
+    assert requested["data"]["text"] == "{Qwendex} Agent Manager: [Manager Mode] | Kaveman: [N] | Local: [Ready] (Alt+M/K/L)"
     assert requested["data"]["local_enabled"] is True
-    assert requested["data"]["effective_local_enabled"] is False
-    assert requested["data"]["policy_transition"]["local_restart_required"] is True
-    assert requested["data"]["status_authority"]["restart_required"] is True
+    assert requested["data"]["effective_local_enabled"] is True
+    assert requested["data"]["policy_transition"]["local_restart_required"] is False
+    assert requested["data"]["status_authority"]["restart_required"] is False
 
-    fresh_env = {
-        **session_env,
-        "QWENDEX_MANAGER_SESSION_STATE_FILE": str(tmp_path / "session-b.json"),
-        "QWENDEX_QDEX_LAUNCH_ID": "session-b",
-        "QWENDEX_CODEX_STATUS_FILE": str(tmp_path / "session-b-status.json"),
-        "QWENDEX_QDEX_LAUNCH_LOCAL_ENABLED": "1",
-    }
-    fresh = json_result("codex-status", "--json", env=fresh_env)
-
-    assert fresh["data"]["local_enabled"] is True
-    assert fresh["data"]["effective_local_enabled"] is True
-    assert fresh["data"]["policy_transition"]["local_restart_required"] is False
-    assert fresh["data"]["status_authority"]["local_restart_required"] is False
+    assert requested["data"]["status_authority"]["local_applies_at"] == "next_user_prompt"
+    for enabled, turn in [(True, "turn-on"), (False, "turn-off"), (True, "turn-on-again")]:
+        json_result("manager", "local", "--set", "on" if enabled else "off", "--json", env=session_env)
+        prompt = json_result(
+            "agent", "hook", "UserPromptSubmit", "--event-json",
+            json.dumps({"session_id": "root-session-a", "turn_id": turn,
+                        "prompt": "Inspect the current repository files."}),
+            "--json", env=session_env,
+        )
+        policy = prompt["data"]["agent_policy"]
+        assert policy["local_routing_snapshot"]["enabled"] is enabled
+        context = prompt["data"]["hook_result"]["hookSpecificOutput"]["additionalContext"]
+        assert ("qwendex exec --seat qwen" in context) is enabled
 
 
 def test_qwendex_codex_status_reports_unusable_local_state(tmp_path):
@@ -3145,12 +3158,12 @@ def test_qwendex_codex_147_manifest_requires_rebased_apps_and_keymap_surfaces():
     assert set(wait_tests_spec["expected_occurrences"].values()) == {4}
 
 
-def test_qwendex_codex_153_manifest_rebases_v2_and_mcp_api_surfaces():
+def test_qwendex_codex_154_manifest_rebases_v2_and_mcp_api_surfaces():
     qwendex = load_qwendex()
 
-    manifest = qwendex.CODEX_PATCH_MANIFESTS["0.153.1"]
-    assert manifest["codex_tag"] == "rust-v0.153.1"
-    specs = qwendex.codex_source_patch_specs("0.153.1")
+    manifest = qwendex.CODEX_PATCH_MANIFESTS["0.154.0"]
+    assert manifest["codex_tag"] == "rust-v0.154.0"
+    specs = qwendex.codex_source_patch_specs("0.154.0")
     patch_text = "\n".join(
         new for spec in specs for _old, new in spec["replacements"]
     )
@@ -3161,6 +3174,9 @@ def test_qwendex_codex_153_manifest_rebases_v2_and_mcp_api_surfaces():
     assert "let role_name: Option<&str> = None;" in patch_text
     assert "|| model_info.multi_agent_version == Some(MultiAgentVersion::V2);" in patch_text
     assert "turn_context.model_info.multi_agent_version" not in patch_text
+    assert "let existing_instructions = if visualization_enabled" not in patch_text
+    assert "control_instructions.or_else(|| config.developer_instructions.clone());" in patch_text
+    assert "if self.keymap.app.qwendex_toggle_kaveman.is_pressed(key_event)" in patch_text
     assert all("{{" not in new and "}}" not in new for spec in specs for _old, new in spec["replacements"])
 
 
@@ -4771,7 +4787,7 @@ def test_manager_prompt_routing_keeps_launch_local_routing_after_global_toggle(t
     assert health["desired_global_policy_hash"] != session_hash
     assert health["policy_drift"] is True
     assert health["session_policy_valid"] is True
-    assert health["restart_required"] is True
+    assert health["restart_required"] is False
 
 
 def test_qwendex_session_context_respects_local_toggle_for_token_saver_context(tmp_path):
@@ -5248,6 +5264,7 @@ def test_qwendex_agent_plan_routes_direct_team_and_release(tmp_path):
     local_assignment = local_plan["assignments"][0]
     assert local_assignment["write_surface"] == "read-only"
     assert "gpt-5.5" not in local_assignment["spawn_instruction"]
+    assert local_assignment["routing"]["token_saver_used"] is False
     assert "model selection inherited from Codex" in local_assignment["spawn_instruction"]
 
 

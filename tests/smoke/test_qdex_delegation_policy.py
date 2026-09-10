@@ -202,7 +202,7 @@ def command_config(command: list[str]) -> dict[str, object]:
                 "native_max_concurrent_threads": 7,
                 "wait_timeout_ms": 60000,
             },
-            7,
+            5,
             60000,
             True,
         ),
@@ -772,8 +772,8 @@ def test_qdex_bounds_native_thread_cap_from_status_payload(tmp_path: Path) -> No
     assert isinstance(command, list)
     overrides = command_config(command)
 
-    assert overrides["features.multi_agent_v2.max_concurrent_threads_per_session"] == 9
-    assert "8 workers" in str(overrides["features.multi_agent_v2.multi_agent_mode_hint_text"])
+    assert overrides["features.multi_agent_v2.max_concurrent_threads_per_session"] == 5
+    assert "4 workers" in str(overrides["features.multi_agent_v2.multi_agent_mode_hint_text"])
 
 
 @pytest.mark.parametrize("argv", [["--help"], ["--version"], ["-V"]])

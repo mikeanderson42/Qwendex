@@ -74,7 +74,7 @@ def test_codex_build_contract_requires_the_current_canonical_patch_surface():
     codex_150_required = release_gate.codex_required_patch_paths("0.150.0")
     assert codex_145_v2_paths <= codex_150_required
     assert "codex-rs/codex-mcp/src/rmcp_client.rs" in codex_150_required
-    codex_153_required = release_gate.codex_required_patch_paths("0.153.1")
+    codex_153_required = release_gate.codex_required_patch_paths("0.154.0")
     assert codex_150_required == codex_153_required
     assert "codex-rs/core/src/config/mod.rs" not in codex_150_required
     dev_env = (ROOT / "scripts" / "qwendex_dev_env").read_text(encoding="utf-8")

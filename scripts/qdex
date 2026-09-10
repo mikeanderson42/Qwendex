@@ -819,6 +819,9 @@ if (( codex_native_max_threads < 1 )); then
 elif (( codex_native_max_threads > QWENDEX_CODEX_MAX_CONCURRENT_THREADS )); then
   codex_native_max_threads="$QWENDEX_CODEX_MAX_CONCURRENT_THREADS"
 fi
+if [[ "$agent_mode" == "manager" ]] && (( codex_native_max_threads > 5 )); then
+  codex_native_max_threads=5
+fi
 codex_worker_cap="$((codex_native_max_threads - 1))"
 
 # V2 normally exposes collaboration tools only to the root.  Manager mode

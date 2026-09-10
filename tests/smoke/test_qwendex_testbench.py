@@ -157,7 +157,7 @@ import sys
 from pathlib import Path
 
 if sys.argv[1:] == ["--version"]:
-    print("codex-cli 0.153.1")
+    print("codex-cli 0.154.0")
     raise SystemExit(0)
 Path(os.environ["QWENDEX_TEST_CODEX_CAPTURE"]).write_text(
     json.dumps({
