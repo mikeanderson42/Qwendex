@@ -312,6 +312,11 @@ COLLABORATION_LIFECYCLE_TOOL_NAMES = {
     "send_message",
     "wait_agent",
 }
+# Codex V2 flattens its namespace into hook names without a separator.
+NATIVE_COLLABORATION_HOOK_NAMES = {
+    f"collaboration{tool}": tool
+    for tool in ROOT_ONLY_AGENT_TOOLS | COLLABORATION_LIFECYCLE_TOOL_NAMES
+}
 READ_ONLY_EXECUTION_TOOL_NAMES = {
     "bash",
     "command",
@@ -1555,7 +1560,7 @@ def policy_mode_for_manager(args: argparse.Namespace, config: Mapping[str, Any],
         return normalize_manager_mode(getattr(args, "mode", "")) or fallback_mode
     policy = resolve_agent_policy(
         config,
-        cli_agent_use=getattr(args, "agent_use", ""),
+        cli_agent_use=getattr(args, "agent_use", "") or (fallback_mode if manager_session_state_path() is not None else ""),
         selected_manager_mode=fallback_mode,
     )
     if policy["errors"]:
@@ -2314,6 +2319,7 @@ def session_turn_policy_projection(
     requested_local_enabled = current_local_enabled(config, conn)
     requested_policy = resolve_agent_policy(
         config,
+        cli_agent_use=requested_mode if manager_session_state_path() is not None else "",
         selected_manager_mode=requested_mode,
         kaveman_enabled=requested_kaveman,
     )
@@ -2395,7 +2401,7 @@ def manager_session_policy_surface(
     requested_local_enabled = current_local_enabled(config, conn)
     requested_policy = resolve_agent_policy(
         config,
-        cli_agent_use=cli_agent_use,
+        cli_agent_use=cli_agent_use or (requested_mode if manager_session_state_path() is not None else ""),
         selected_manager_mode=requested_mode,
         kaveman_enabled=requested_kaveman,
     )
@@ -4062,6 +4068,13 @@ def manager_control_default_values(
     stored_mode = normalize_manager_mode(get_manager_setting(conn, "selected_mode", ""))
     stored_local = normalize_local_toggle(get_manager_setting(conn, "local_subagents_enabled", None))
     stored_kaveman = normalize_local_toggle(get_manager_setting(conn, "kaveman_enabled", None))
+    launch_mode = ""
+    if manager_session_state_path() is not None:
+        launch_mode = qdex_launch_mode() or normalize_agent_use_mode(
+            os.environ.get("QWENDEX_AGENT_USE") or os.environ.get("CODEX_AGENT_USE") or ""
+        )
+    if launch_mode in MANAGER_MODE_ORDER:
+        stored_mode = launch_mode
     return {
         "selected_mode": stored_mode
         if stored_mode in MANAGER_MODE_ORDER
@@ -5392,6 +5405,7 @@ def codex_status_payload(config: Mapping[str, Any], *, write_path: Path | None =
         kaveman_enabled = current_kaveman_enabled(config, conn)
         requested_agent_policy = resolve_agent_policy(
             config,
+            cli_agent_use=selected_mode if manager_session_state_path() is not None else "",
             selected_manager_mode=selected_mode,
             kaveman_enabled=kaveman_enabled,
         )
@@ -13130,6 +13144,8 @@ def segment_has_write_command(tokens: list[str]) -> bool:
 
 def normalized_event_tool_name(tool: str) -> str:
     name = re.split(r"[/:]", tool.strip().lower())[-1].replace("-", "_")
+    if name in NATIVE_COLLABORATION_HOOK_NAMES:
+        return NATIVE_COLLABORATION_HOOK_NAMES[name]
     dotted_name = name.rsplit(".", 1)[-1]
     known_names = READ_ONLY_EXECUTION_TOOL_NAMES | WRITE_TOOL_NAMES | ROOT_ONLY_AGENT_TOOLS
     return dotted_name if dotted_name in known_names else name
@@ -13141,6 +13157,8 @@ def event_tool_components(tool: str) -> list[str]:
 
 
 def event_tool_leaf_name(tool: str) -> str:
+    if tool.strip().lower() in NATIVE_COLLABORATION_HOOK_NAMES:
+        return NATIVE_COLLABORATION_HOOK_NAMES[tool.strip().lower()]
     parts = [part for part in re.split(r"__|[/:.]", tool.strip().lower()) if part]
     return parts[-1].replace("-", "_") if parts else ""
 
@@ -13151,6 +13169,8 @@ def event_tool_is_collaboration_lifecycle(tool: str) -> bool:
     if leaf not in COLLABORATION_LIFECYCLE_TOOL_NAMES:
         return False
     if raw == leaf:
+        return True
+    if raw in NATIVE_COLLABORATION_HOOK_NAMES:
         return True
     return bool(re.search(r"(?:^|__|[/:.])collaboration(?:__|[/:.])", raw))
 

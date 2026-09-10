@@ -4240,7 +4240,8 @@ def test_qwendex_root_spawn_bookkeeping_exception_is_advisory(monkeypatch, failu
     assert result["reason_code"].startswith("bookkeeping_unavailable:")
 
 
-def test_qwendex_strict_native_reservation_blocks_bookkeeping_failure(monkeypatch):
+@pytest.mark.parametrize("tool_name", ["spawn_agent", "collaboration.spawn_agent", "collaborationspawn_agent"])
+def test_qwendex_strict_native_reservation_blocks_bookkeeping_failure(monkeypatch, tool_name):
     qwendex = load_qwendex()
     policy = qwendex.agent_policy_defaults("manager")
     policy["native_reservation_mode"] = "strict"
@@ -4255,7 +4256,7 @@ def test_qwendex_strict_native_reservation_blocks_bookkeeping_failure(monkeypatc
             "session_id": "root-session",
             "turn_id": "root-turn",
             "cwd": str(ROOT),
-            "tool_name": "spawn_agent",
+            "tool_name": tool_name,
             "tool_input": {"task_name": "inspection"},
         },
         policy,
@@ -6900,6 +6901,8 @@ def test_qwendex_non_shell_tools_allow_root_and_restrict_read_only_children():
         {"tool_name": "codex_apps.google_drive.search_files", "profile": "review"},
         {"tool_name": "functions.view_image", "profile": "verifier"},
         {"tool_name": "collaboration.send_message", "profile": "docs_researcher"},
+        {"tool_name": "collaborationsend_message", "profile": "docs_researcher"},
+        {"tool_name": "collaborationlist_agents", "profile": "docs_researcher"},
         {"tool_name": "mcp__collaboration__send_message", "profile": "docs_researcher"},
     )
     rejected_events = (
@@ -6907,6 +6910,7 @@ def test_qwendex_non_shell_tools_allow_root_and_restrict_read_only_children():
         {"tool_name": "codex_apps.google_drive.upload_file", "profile": "review"},
         {"tool_name": "functions.write_stdin", "profile": "verifier"},
         {"tool_name": "mcp__slack__send_message", "profile": "docs_researcher"},
+        {"tool_name": "mcp__unknown__collaborationsend_message", "profile": "docs_researcher"},
         {"tool_name": "mcp__github__createPullRequest", "profile": "review"},
         {"tool_name": "codex_apps.gmail.send_email", "profile": "review"},
         {"tool_name": "mcp__unknown__frobnicate", "profile": "docs_researcher"},
