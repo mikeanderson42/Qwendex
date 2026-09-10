@@ -1,6 +1,6 @@
-# Unreleased
+# v0.6.10
 
-Codex `0.154.0` compatibility and session control fixes. The package version
+Unreleased source update: Codex `0.154.0` compatibility and session control fixes. The package version
 remains `0.6.10`; the published tags below retain their original source.
 
 - Rebase the canonical source patch and pinned build inputs to `rust-v0.154.0`.
@@ -8,7 +8,7 @@ remains `0.6.10`; the published tags below retain their original source.
 - Preserve configured developer instructions and register root-selected advisory
   workers against their launch identity, within the four-worker Manager cap.
 
-# v0.6.10
+## Published v0.6.10
 
 Codex `0.153.1` compatibility and runtime refresh.
 
