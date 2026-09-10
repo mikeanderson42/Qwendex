@@ -290,10 +290,11 @@ thread separately, so Qdex supplies a native per-session ceiling of
 `max_subagents + 1`.
 
 Each Qdex launch has a private control record. Native capacity, depth, wait
-limits, mode guidance, and Local routing are sealed at launch; changing those
-controls shows requested versus active state and needs a restart when capacity
-or Local routing differs. Kaveman is accepted at the next root prompt and is
-then frozen for that root turn and its children. `status_authority` identifies
+limits, and mode guidance are sealed at launch; changing those controls shows
+requested versus active state and needs a restart when capacity differs.
+Kaveman and Local assistance are accepted at the next root prompt and are
+then frozen in that turn's assignments. Local execution uses `qwendex exec`
+and rechecks the Local switch before selecting a provider. `status_authority` identifies
 the per-launch source, active-turn hash, next-turn hash, and any restart reason.
 
 `QWENDEX_MANAGER_MODE` and `QWENDEX_ORCHESTRATION_MODE` override the configured

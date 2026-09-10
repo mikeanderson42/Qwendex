@@ -9,7 +9,7 @@ instead of mutating the binary in place.
 
 With stock Codex, the standalone Qwendex CLI, checks, routing, receipts, and
 offline evals remain supported. Native patched behavior requires the canonical
-Linux/Codex `0.153.1` patch, its matching `codex-code-mode-host`, and one
+Linux/Codex `0.154.0` patch, its matching `codex-code-mode-host`, and one
 validated runtime generation. Managed hooks remain optional observability.
 Unknown versions or anchor drift fail closed for patch/build claims, not for
 ordinary root prompts, tools, publication, or final responses.
@@ -124,7 +124,7 @@ frozen. Projects that want the upstream Git package can install it separately fr
 
 ## Source Locations
 
-For the current Codex `0.153.1` target (`rust-v0.153.1`), the patch touches
+For the current Codex `0.154.0` target (`rust-v0.154.0`), the patch touches
 these source areas. Earlier compatibility manifests retain their own
 version-specific anchor sets:
 

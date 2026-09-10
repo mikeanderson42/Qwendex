@@ -186,13 +186,12 @@ needed because hooks do not gate launch or work.
 Legacy compatibility remains: the `manager_only` spelling maps to
 `Manager Mode`.
 
-Native capacity, depth, waits, and launch-time Local routing are immutable for
-the life of a Qdex process. A later Manager or Local selection that conflicts
-with that snapshot is requested state and needs restart; `codex-status` and
-`manager status` expose both values and the precise restart reason. Kaveman is
-different: it is accepted at the next root prompt, then frozen for that root
-turn and its child hooks. Lifecycle planning keeps launch-time Local
-availability and does not re-probe or reinterpret it inside a prompt hook.
+Native capacity, depth, and waits are fixed for a Qdex process. A mode change
+that requires different native capacity needs a restart. Kaveman and Local
+assistance are accepted at the next root prompt; Manager planning uses that
+accepted policy and probes local availability for that turn. Existing child
+assignments keep their snapshot. Local execution rechecks the switch before
+selecting a provider, so Off prevents a new local request.
 
 Qdex always enables the supported Codex V2 surface and injects the selected
 worker cap plus root/worker usage hints. For non-Ultra reasoning it also injects
@@ -387,9 +386,11 @@ running; terminal evidence is integrated or the turn is finalized instead.
 
 ## Recovery And Rollback
 
-When a mode or Local status reports restart-required, restart Qdex to adopt the
-requested native snapshot; do not rewrite the live one. A Kaveman selection
-instead applies at the next root prompt and remains frozen for that turn.
+When a mode status reports restart-required, restart Qdex to adopt the
+requested native capacity. Kaveman and Local assistance apply at the next root
+prompt without restarting. Local assignments use `qwendex exec`; native workers
+retain their inherited Codex provider. Turning Kaveman off explicitly cancels
+its earlier instruction while preserving the user's requested detail.
 Missing hooks or patch features reduce Manager observability and should produce
 repair guidance, not block the session. Setting the next-launch mode to `Off`
 selects stock delegation behavior. Preserve lifecycle receipts when useful for

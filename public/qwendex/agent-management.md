@@ -223,15 +223,16 @@ events may fill the association. Ambiguity stays diagnostic rather than becoming
 an execution gate.
 
 Each Qdex launch owns a private control record and status file. Native worker
-capacity, depth, waits, and launch-time Local routing are immutable for that
+capacity, depth, and waits are immutable for that
 process. If an `Alt+M` selection needs different capacity, the footer and JSON
 show the requested mode, active mode, and `restart_required` rather than
 pretending the capacity changed live.
 
-Kaveman is turn-scoped: the next root `UserPromptSubmit` accepts a fresh output
-policy hash, while the active root turn and its children retain their accepted
-snapshot. A Kaveman toggle therefore changes the next turn without partially
-mutating an in-flight root/child pair. `status_authority` exposes the active and
+Kaveman and Local assistance are turn-scoped: the next root `UserPromptSubmit` accepts a fresh output
+policy hash, while existing child assignments retain their accepted
+snapshot. Turning Kaveman off supersedes its earlier output instruction.
+Local assignments execute through `qwendex exec`; native workers keep the
+inherited Codex provider. `status_authority` exposes the active and
 next-turn hashes plus the scope of the status source.
 
 `manager launch-status --pid <pid> --repo-root <path> --json` exposes a stable,

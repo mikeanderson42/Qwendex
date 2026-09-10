@@ -1,5 +1,35 @@
 # Qwendex Development Decision Log
 
+## Codex 0.154.0 and Live Session Controls
+
+Decision: support official `rust-v0.154.0` at
+`6b9826e3aa83b1a5947db50f4332cb9c65f1b340`, preserving the pinned sandboxed
+Rusty V8 150.4.0 pair and binding the new source patch, Cargo lock, Codex binary,
+and code-mode host. Hotkeys now enter upstream's shared app shortcut handler.
+
+Kaveman emits an explicit enabled or disabled policy for each accepted turn,
+allows requested detail and necessary evidence, and always preserves existing
+developer instructions when the native TUI appends its directive. Local
+assistance is accepted with the next root prompt and uses the existing guarded
+`qwendex exec` path; native workers inherit the Codex provider. Execution also
+checks the current Local switch, so Off prevents a new local request. Capacity
+changes still require a new Qdex launch; output/local policy drift does not.
+
+Standalone advisory workers may use root-chosen task names after matching the
+existing launch identity. Registration retains strict-owner admission,
+serialized capacity, replay checks, and read-only defaults. A bound native
+worker of type `default` can use its registered verifier lane without gaining
+write or recursive-spawn permission. Manager launch fallback is capped at four
+workers. Immutable runtime selection remains the update boundary: active
+sessions keep their original generation.
+
+Reason: the upstream input refactor moved a patch anchor, while the current
+control and registration paths could show settings that did not take effect
+or reject useful root-authorized worker inspection. These corrections connect
+the supported workflow without introducing a new execution backend or making
+advisory planning an operator authorization gate.
+
+
 ## Codex 0.153.1 Source-Bound Rebase
 
 Decision: advance the current patched-Qdex target to official Codex

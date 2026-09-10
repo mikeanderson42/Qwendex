@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Support official Codex `0.154.0` with the matching source, patch, Cargo lock,
+  sandboxed V8 artifacts, binary pair, installer pin, and model cache.
+- Adapt Manager/Kaveman/Local hotkeys to the new shared app input handler.
+- Apply Local assistance at the next root prompt without a restart, route
+  eligible work through `qwendex exec`, and retain invocation-time Local-Off
+  fallback to the primary provider.
+- Explicitly supersede Kaveman state on each accepted turn and preserve
+  configured developer instructions when terminal visualization is disabled.
+- Register custom advisory worker names against their launch identity, permit
+  bound default-type verifiers to validate, and clamp Manager fallback capacity
+  to four workers. Concurrent registrations keep serialized capacity checks.
+
 ## 0.6.10
 
 - Rebased the canonical source patch to official Codex `0.153.1`, including

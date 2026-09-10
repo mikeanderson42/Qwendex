@@ -244,9 +244,13 @@ means intent is on but the probe could not confirm a usable local route.
 
 These controls are scoped to the open Qdex launch. Inspect
 `codex-status --json` or `manager status --json` for `status_authority` and
-`policy_transition`: Kaveman applies at the next root prompt and stays frozen
-for its children, while mode or Local changes that exceed the launch snapshot
-are explicitly restart-required.
+`policy_transition`: Kaveman and Local assistance apply at the next root prompt
+and stay frozen in its child assignments. Local uses the existing
+`qwendex exec --seat qwen --cwd <repo> -- <prompt>` command; inspect its receipt
+for the actual selected seat and result. Native workers inherit the Codex
+provider. The Local switch is also checked at command invocation, so Off always
+prevents a new local execution. Only mode changes that need different native
+capacity require a restart.
 
 Manager Mode defaults to `max_subagents: 4`. Operators may configure a lower
 value; a higher legacy profile remains visible for compatibility but resolves
