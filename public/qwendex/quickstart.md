@@ -14,7 +14,7 @@ git switch --detach <published-release-tag>
 git status --short
 ```
 
-The published annotated `v0.6.10` tag supports Codex `0.153.1`. Current
+The published annotated `v0.6.10` source tag supports Codex `0.150.0`. Current
 `main` targets Codex `0.157.1`; that source update remains untagged candidate
 material. Use the dependency helper from the checkout you selected.
 
@@ -40,7 +40,7 @@ scripts/qwendex check --json
 
 On current `main`, the dependency helper requires Codex CLI `0.157.1` and
 installs that version when the active binary differs. The published `v0.6.10`
-checkout instead pins `0.153.1` for its native-patch contract. For intentional compatibility testing, set both
+checkout instead pins `0.150.0` for its native-patch contract. For intentional compatibility testing, set both
 `QWENDEX_CODEX_NPM_SPEC` and `QWENDEX_CODEX_REQUIRED_VERSION`.
 
 `sync` installs the tracked `scripts/qdex` wrapper into `~/.local/bin/qdex` and

@@ -21,6 +21,11 @@ The same verified Codex/code-mode-host pair feeds new immutable generations.
 Continue the single-build upgrade workflow and keep package version 0.6.10
 until a separate tagged release is prepared.
 
+Release labels must follow the actual remote tag contents: published
+`v0.6.10` resolves to `63174442bd2226c1c35d225b14e3993709de42a8` and pins
+Codex `0.150.0`. Later compatibility work is an untagged source update, even
+when the package metadata still says 0.6.10.
+
 ## Codex 0.155.0 Upgrade
 
 Decision: support official `rust-v0.155.0` at

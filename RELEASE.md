@@ -1,7 +1,9 @@
 # v0.6.10
 
 Unreleased source update: Codex `0.157.1` compatibility and session control fixes. The package version
-remains `0.6.10`; the published tags below retain their original source.
+remains `0.6.10`. The published `v0.6.10` source tag at
+`63174442bd2226c1c35d225b14e3993709de42a8` retains its Codex `0.150.0` pin.
+Subsequent compatibility updates described here are untagged source changes.
 
 - Rebase the canonical source patch and pinned build inputs to `rust-v0.157.1`.
 - Preserve SubagentStart hooks for forked workers and document the single-build upgrade sequence.
@@ -9,7 +11,7 @@ remains `0.6.10`; the published tags below retain their original source.
 - Preserve configured developer instructions and register root-selected advisory
   workers against their launch identity, within the four-worker Manager cap.
 
-## Published v0.6.10
+## Earlier Untagged Source Update
 
 Codex `0.153.1` compatibility and runtime refresh.
 

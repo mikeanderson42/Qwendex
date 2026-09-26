@@ -356,7 +356,7 @@ claims require GPT/Codex review and the appropriate Qwendex verification tier.
 ## Current Release / Known Limits
 
 This checkout is seeded as `v0.6.10` and supports Codex `0.157.1`.
-The published `v0.6.10` tag remains on Codex `0.153.1`.
+The published `v0.6.10` source tag remains on Codex `0.150.0`.
 It includes the supported-Codex update,
 state-schema/runtime isolation fixes, advisory Agent Management boundary, and
 validated Agent Manager/Kaveman/Local TUI controls described in the release
