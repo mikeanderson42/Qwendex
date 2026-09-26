@@ -23,10 +23,10 @@
   bound default-type verifiers to validate, and clamp Manager fallback capacity
   to four workers. Concurrent registrations keep serialized capacity checks.
 
-## 0.6.10 Source Updates (Untagged)
+## 0.6.10
 
 The published `v0.6.10` source tag still pins Codex `0.150.0`; the following
-`0.153.1` compatibility work was added afterward.
+`0.153.1` compatibility work was added afterward as untagged source updates.
 
 - Rebased the canonical source patch to official Codex `0.153.1`, including
   the V2 handler/API changes, refreshed MCP startup runtime input, and the
