@@ -9,7 +9,7 @@ instead of mutating the binary in place.
 
 With stock Codex, the standalone Qwendex CLI, checks, routing, receipts, and
 offline evals remain supported. Native patched behavior requires the canonical
-Linux/Codex `0.154.0` patch, its matching `codex-code-mode-host`, and one
+Linux/Codex `0.155.0` patch, its matching `codex-code-mode-host`, and one
 validated runtime generation. Managed hooks remain optional observability.
 Unknown versions or anchor drift fail closed for patch/build claims, not for
 ordinary root prompts, tools, publication, or final responses.
@@ -124,7 +124,7 @@ frozen. Projects that want the upstream Git package can install it separately fr
 
 ## Source Locations
 
-For the current Codex `0.154.0` target (`rust-v0.154.0`), the patch touches
+For the current Codex `0.155.0` target (`rust-v0.155.0`), the patch touches
 these source areas. Earlier compatibility manifests retain their own
 version-specific anchor sets:
 
@@ -194,9 +194,15 @@ warning, retained cached tools, and unchanged failure classification outside
 that narrow case, including reauthentication-required failures. This does not
 claim that Qwendex can prevent or repair a hosted plugin-service outage.
 
-The canonical development workflow is `qwendex-dev codex-patch apply`, focused
-Rust tests, `cargo fmt --check`, `codex-patch preflight --require-applied`, and
-`qwendex-dev build-codex --release`. A successful build receipt records the
+The canonical development workflow is `qwendex-dev codex-source sync`,
+`qwendex-dev codex-source patch`, Rust formatting and relevant regression
+checks, `qwendex-dev codex-source preflight`, and
+`qwendex-dev codex-source build`. During an upgrade, point both
+`QWENDEX_MAIN_CODEX_BIN` and `QWENDEX_DEV_CODEX_BIN` at the exact target stock
+binary until source preflight passes, so an older dev binary cannot select the
+wrong manifest. Finalize the source, normalized lock, patch, and V8 pins before
+building the binary pair once; clear the temporary dev-binary override before
+validating and activating that pair. A successful build receipt records the
 manifest/source digest and binary SHA-256; changing a required source edit
 invalidates that evidence until the patch is reapplied and rebuilt.
 

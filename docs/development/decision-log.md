@@ -1,5 +1,25 @@
 # Qwendex Development Decision Log
 
+## Codex 0.155.0 Upgrade
+
+Decision: support official `rust-v0.155.0` at
+`f0a1b8f0849d90960bc406b848f32e5a129b0457`. Rebase the versioned patch and
+normalized Cargo lock while retaining Codex's sandboxed Rusty V8 150.4.0
+archive/binding contract. Preserve upstream SubagentStart dispatch for both
+startup and full-history forks when attaching Qwendex task and parent identity.
+The Local launcher already sets `model_reasoning_summary="none"` explicitly,
+so the new upstream TUI default requires no bridge adjustment.
+
+Finalize source compatibility and provenance before the single binary-pair
+build. Select the exact target stock binary for source patch/preflight, then
+clear the temporary dev-binary override for validation and activation. Reuse
+that verified pair for runtime generations; existing sessions retain theirs.
+Keep the package version at 0.6.10 until a separate tagged release is prepared.
+
+Reason: this is a supported Codex source update. Publishing the verified
+source change does not require a new Qwendex package release or repeated
+compilation, and unrelated operator edits remain outside the upgrade branch.
+
 ## Local Execution and Native Manager Functionality Audit
 
 Bounded Local assignments now use root-executed Auto routing with local

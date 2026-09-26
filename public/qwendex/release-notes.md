@@ -2,8 +2,13 @@
 
 ## Unreleased
 
-- Support official Codex `0.154.0` with the matching source, patch, Cargo lock,
+- Support official Codex `0.155.0` with the matching source, patch, Cargo lock,
   sandboxed V8 artifacts, binary pair, installer pin, and model cache.
+- Preserve upstream SubagentStart dispatch for forked workers while adding
+  Qwendex task and parent identity. Local launches already explicitly disable
+  reasoning summaries and retain that setting.
+- Clarify the upgrade sequence: select the target stock binary for preflight,
+  finalize all source pins, build the binary pair once, and reuse it on sync.
 - Adapt Manager/Kaveman/Local hotkeys to the new shared app input handler.
 - Apply Local assistance at the next root prompt without a restart, route
   eligible work through `qwendex exec`, and retain invocation-time Local-Off

@@ -106,7 +106,7 @@ captured upstream Codex binary with an explicit fallback diagnostic. Only
 `qdex` invokes this runtime and sets `QWENDEX_CODEX_HOME` as its child's
 `CODEX_HOME`. A selected dev binary must
 have an executable `codex-code-mode-host` companion in the same directory; the
-wrapper blocks before launch when that Codex 0.154.0 runtime contract is
+wrapper blocks before launch when that Codex 0.155.0 runtime contract is
 incomplete.
 
 The isolated Qwendex Codex home links the operator's authentication file for
@@ -197,7 +197,12 @@ Do not use them as the normal worktree workflow.
 
 ## Patch Codex Source
 
-Use the normal Qwendex patch contract from inside the dev environment:
+Use the normal Qwendex patch contract from inside the dev environment. For an
+upgrade, install the exact target stock Codex side by side and point
+`QWENDEX_MAIN_CODEX_BIN` and temporarily `QWENDEX_DEV_CODEX_BIN` at it; patch and
+preflight otherwise prefer an existing dev binary. Use a fresh source checkout
+and finish anchor review, idempotence, formatting, and source/lock/patch/V8 pins
+before starting the build:
 
 ```bash
 qwendex-dev codex-source sync
@@ -205,6 +210,13 @@ qwendex-dev codex-source patch
 qwendex-dev codex-source preflight
 qwendex-dev codex-source build
 ```
+
+The build compiles both binaries in one Cargo invocation. Keep polling that
+same process if an observation times out. Clear the temporary
+`QWENDEX_DEV_CODEX_BIN` override after compilation, validate the receipt and
+pair, then run `qwendex-dev sync` to activate them for new sessions. Sync reuses
+the built pair. The separate fresh-install acceptance script starts another
+source build and is not an incidental upgrade check.
 
 Unknown Codex versions or moved anchors block before writing. The build command
 installs both of these sibling files:

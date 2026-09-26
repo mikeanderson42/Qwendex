@@ -858,6 +858,11 @@ CODEX_PATCH_MANIFESTS["0.154.0"] = {
     "codex_tag": "rust-v0.154.0",
 }
 
+CODEX_PATCH_MANIFESTS["0.155.0"] = {
+    **CODEX_PATCH_MANIFESTS["0.154.0"],
+    "codex_tag": "rust-v0.155.0",
+}
+
 DEFAULT_CONFIG: dict[str, Any] = {
     "schema_version": "qwendex.config.v1",
     "version": VERSION,
@@ -5657,7 +5662,7 @@ def codex_source_patch_specs(version: str) -> list[dict[str, Any]]:
         return []
     listed_agent_legacy_field = (
         "            last_task_message: None,\n"
-        if version not in {"0.145.0", "0.147.0", "0.150.0", "0.153.1", "0.154.0"}
+        if version not in {"0.145.0", "0.147.0", "0.150.0", "0.153.1", "0.154.0", "0.155.0"}
         else ""
     )
     specs = [
@@ -6563,7 +6568,7 @@ max_threads = 2
             ],
         },
     ]
-    if version in {"0.147.0", "0.150.0", "0.153.1", "0.154.0"}:
+    if version in {"0.147.0", "0.150.0", "0.153.1", "0.154.0", "0.155.0"}:
         resume_child_nested_response = """        sse(vec![
             ev_response_created("resp-worker-1"),
             ev_function_call_with_namespace(
@@ -6654,7 +6659,7 @@ max_threads = 2
         mcp_tests_anchor = """#[tokio::test]
 async fn list_all_tools_uses_shared_codex_apps_cache_when_client_startup_fails() {
 """
-    if version in {"0.145.0", "0.147.0", "0.150.0", "0.153.1", "0.154.0"}:
+    if version in {"0.145.0", "0.147.0", "0.150.0", "0.153.1", "0.154.0", "0.155.0"}:
         redundant_v2_config_paths = {
             "codex-rs/core/src/config/mod.rs",
             "codex-rs/core/src/config/config_tests.rs",
@@ -8450,11 +8455,11 @@ async fn failed_codex_apps_startup_reports_cached_degraded_ready_events() -> any
                         ),
                     ],
                 },
-                    ] if version in {"0.147.0", "0.150.0", "0.153.1", "0.154.0"} else []
+                    ] if version in {"0.147.0", "0.150.0", "0.153.1", "0.154.0", "0.155.0"} else []
                 ),
             ]
         )
-    if version in {"0.147.0", "0.150.0", "0.153.1", "0.154.0"}:
+    if version in {"0.147.0", "0.150.0", "0.153.1", "0.154.0", "0.155.0"}:
         # Codex 0.147/0.150 added a side-conversation key after raw output,
         # moved the Apps cache helper, and made V2 child policy more explicit.
         # Keep the Qwendex contract intact while preserving those paths.
@@ -9008,7 +9013,7 @@ async fn multi_agent_v2_spawn_rejects_model_override() {
                 },
             ]
         )
-    if version in {"0.150.0", "0.153.1", "0.154.0"}:
+    if version in {"0.150.0", "0.153.1", "0.154.0", "0.155.0"}:
         # 0.150 keeps the policy seams but changed the V2 handler APIs and
         # refreshed several integration-test expectations. Rebase those
         # seams against the released source rather than a 0.147 text match.
@@ -9026,7 +9031,7 @@ async fn multi_agent_v2_spawn_rejects_model_override() {
             spec = dict(original)
             replacements: list[tuple[str, str]] = []
             for old, new in spec["replacements"]:
-                if version in {"0.153.1", "0.154.0"} and path == "codex-rs/tui/src/keymap.rs":
+                if version in {"0.153.1", "0.154.0", "0.155.0"} and path == "codex-rs/tui/src/keymap.rs":
                     if old.startswith('                ("toggle_fast_mode",') and '"chat.interrupt_turn"' in old:
                         old = """            (
                 keymap.global.toggle_fast_mode.as_ref(),
@@ -9091,7 +9096,7 @@ async fn multi_agent_v2_spawn_rejects_model_override() {
             ],
             approval_overlay_bindings,
 """
-                elif version in {"0.153.1", "0.154.0"} and path == "codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs" and old.startswith("struct SpawnAgentArgs {"):
+                elif version in {"0.153.1", "0.154.0", "0.155.0"} and path == "codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs" and old.startswith("struct SpawnAgentArgs {"):
                     old = """struct SpawnAgentArgs {
     message: String,
     task_name: String,
@@ -9102,7 +9107,7 @@ async fn multi_agent_v2_spawn_rejects_model_override() {
     fork_context: Option<bool>,
 }
 """
-                elif version in {"0.153.1", "0.154.0"} and path == "codex-rs/core/src/tools/spec_plan_tests.rs" and old.startswith("            update_config(turn, |config| {"):
+                elif version in {"0.153.1", "0.154.0", "0.155.0"} and path == "codex-rs/core/src/tools/spec_plan_tests.rs" and old.startswith("            update_config(turn, |config| {"):
                     old = """            update_config(turn, |config| {
                 config.multi_agent_v2.tool_namespace = Some("agents".to_string());
             });
@@ -9121,7 +9126,7 @@ async fn multi_agent_v2_spawn_rejects_model_override() {
                 ):
                     model_version_check = (
                         "model_info.multi_agent_version"
-                        if version in {"0.153.1", "0.154.0"}
+                        if version in {"0.153.1", "0.154.0", "0.155.0"}
                         else "turn_context.model_info.multi_agent_version"
                     )
                     old = "__QWENDEX_REGEX__(?m)^        MultiAgentVersion::V2 => \\{\\n.*?^        \\}\\n"
@@ -9211,7 +9216,7 @@ async fn multi_agent_v2_spawn_rejects_model_override() {
                         "    apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;",
                         "",
                     ])
-                    if version in {"0.153.1", "0.154.0"}:
+                    if version in {"0.153.1", "0.154.0", "0.155.0"}:
                         new = new.replace(
                             "    apply_spawn_agent_service_tier(\n"
                             "        &session,\n"
@@ -9312,7 +9317,7 @@ async fn multi_agent_v2_spawn_rejects_model_override() {
                             ]
                             + (
                                 []
-                                if version in {"0.153.1", "0.154.0"}
+                                if version in {"0.153.1", "0.154.0", "0.155.0"}
                                 else ["multi_agent_v2_full_history_fork_accepts_explicit_service_tier"]
                             )
                         ],
@@ -9396,7 +9401,7 @@ async fn multi_agent_v2_spawn_rejects_model_override() {
                 },
             ]
         )
-        if version in {"0.153.1", "0.154.0"}:
+        if version in {"0.153.1", "0.154.0", "0.155.0"}:
             for spec in specs:
                 if spec["path"] != "codex-rs/core/src/tools/spec_plan_tests.rs":
                     continue
@@ -9437,7 +9442,7 @@ async fn multi_agent_v2_spawn_rejects_model_override() {
             }
             for spec in specs
         ]
-    if version == "0.154.0":
+    if version in {"0.154.0", "0.155.0"}:
         # Upstream moved shared app shortcuts to a bool-returning handler.
         # Its caller already checks whether app shortcuts are available.
         for spec in specs:
@@ -9473,6 +9478,98 @@ async fn multi_agent_v2_spawn_rejects_model_override() {
                 else (old, new)
                 for old, new in spec["replacements"]
             ]
+    if version == "0.155.0":
+        # Upstream dispatches SubagentStart for full-history forks as well as
+        # fresh workers. Preserve both while adding Qwendex hook identity.
+        for spec in specs:
+            if spec["path"] != "codex-rs/core/src/hook_runtime.rs":
+                continue
+            spec["replacements"] = [
+                (
+                    old.replace(
+                        "                    codex_hooks::SessionStartSource::Startup\n",
+                        "                    codex_hooks::SessionStartSource::Startup\n"
+                        "                        | codex_hooks::SessionStartSource::Fork\n",
+                    ),
+                    new.replace(
+                        "                codex_hooks::SessionStartSource::Startup\n",
+                        "                codex_hooks::SessionStartSource::Startup\n"
+                        "                    | codex_hooks::SessionStartSource::Fork\n",
+                    ),
+                )
+                for old, new in spec["replacements"]
+            ]
+        # Keep the canonical 0.155 patch byte-for-byte rustfmt clean without
+        # changing historical source digests.
+        formatting = [
+            (
+                'codex-rs/codex-mcp/src/connection_manager.rs',
+                '                    startup_failure_uses_cached_codex_apps_tools(\n                        &async_managed_client,\n                        &outcome,\n                    );\n',
+                '                    startup_failure_uses_cached_codex_apps_tools(&async_managed_client, &outcome);\n',
+            ),
+            (
+                'codex-rs/codex-mcp/src/connection_manager_tests.rs',
+                '        vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "cached_search")],\n',
+                '        vec![create_test_tool(\n            CODEX_APPS_MCP_SERVER_NAME,\n            "cached_search",\n        )],\n',
+            ),
+            (
+                'codex-rs/codex-mcp/src/connection_manager_tests.rs',
+                '    assert!(summary\n        .ready\n        .contains(&CODEX_APPS_MCP_SERVER_NAME.to_string()));\n',
+                '    assert!(\n        summary\n            .ready\n            .contains(&CODEX_APPS_MCP_SERVER_NAME.to_string())\n    );\n',
+            ),
+            (
+                'codex-rs/core/src/hook_runtime.rs',
+                '                codex_hooks::SessionStartSource::Startup\n                    | codex_hooks::SessionStartSource::Fork\n',
+                '                codex_hooks::SessionStartSource::Startup | codex_hooks::SessionStartSource::Fork\n',
+            ),
+            (
+                'codex-rs/core/src/tools/handlers/multi_agents_tests.rs',
+                '    config.features.enable(Feature::MultiAgentV2).expect("test config should allow feature update");\n',
+                '    config\n        .features\n        .enable(Feature::MultiAgentV2)\n        .expect("test config should allow feature update");\n',
+            ),
+            (
+                'codex-rs/core/src/tools/handlers/multi_agents_tests.rs',
+                '        .handle(invocation(Arc::new(session), Arc::new(turn), "spawn_agent", function_payload(json!({\n            "message": "inspect this repo", "task_name": "model_override", "model": "gpt-5.4"\n        }))))\n',
+                '        .handle(invocation(\n            Arc::new(session),\n            Arc::new(turn),\n            "spawn_agent",\n            function_payload(json!({\n                "message": "inspect this repo", "task_name": "model_override", "model": "gpt-5.4"\n            })),\n        ))\n',
+            ),
+            (
+                'codex-rs/core/src/tools/handlers/multi_agents_tests.rs',
+                '    let FunctionCallError::RespondToModel(message) = err else { panic!("expected a model-facing validation error"); };\n',
+                '    let FunctionCallError::RespondToModel(message) = err else {\n        panic!("expected a model-facing validation error");\n    };\n',
+            ),
+            (
+                'codex-rs/core/src/tools/spec_plan.rs',
+                '        },\n',
+                '        }\n',
+            ),
+            (
+                'codex-rs/tui/src/app/input.rs',
+                '        if self.keymap.app.qwendex_toggle_manager.is_pressed(key_event)\n        {\n',
+                '        if self.keymap.app.qwendex_toggle_manager.is_pressed(key_event) {\n',
+            ),
+            (
+                'codex-rs/tui/src/app/input.rs',
+                '        if self.keymap.app.qwendex_toggle_kaveman.is_pressed(key_event)\n        {\n',
+                '        if self.keymap.app.qwendex_toggle_kaveman.is_pressed(key_event) {\n',
+            ),
+            (
+                'codex-rs/tui/src/app/input.rs',
+                '        if self.keymap.app.qwendex_toggle_local.is_pressed(key_event)\n        {\n',
+                '        if self.keymap.app.qwendex_toggle_local.is_pressed(key_event) {\n',
+            ),
+        ]
+        for spec in specs:
+            replacements = []
+            for old, new in spec["replacements"]:
+                if spec["path"].endswith("multi_agents_v2/spawn.rs") and old == "use crate::agent::next_thread_spawn_depth;\n":
+                    role_import = "use crate::agent::role::DEFAULT_ROLE_NAME;\n"
+                    old += role_import
+                    new = role_import + new
+                for path, unformatted, formatted in formatting:
+                    if spec["path"] == path:
+                        new = new.replace(unformatted, formatted)
+                replacements.append((old, new))
+            spec["replacements"] = replacements
     return specs
 
 
@@ -9514,7 +9611,7 @@ def apply_codex_source_patch(source: Path, version: str, *, dry_run: bool = Fals
     # Keep the rebase fail-closed: validate every source replacement before
     # writing any file.  The 0.147/0.150 contract also requires unique anchors so
     # a broad fragment cannot silently duplicate a patched Rust test.
-    strict_anchor_cardinality = version in {"0.147.0", "0.150.0", "0.153.1", "0.154.0"}
+    strict_anchor_cardinality = version in {"0.147.0", "0.150.0", "0.153.1", "0.154.0", "0.155.0"}
     original_texts: dict[str, str] = {}
     updated_texts: dict[str, str] = {}
     for spec in specs:
