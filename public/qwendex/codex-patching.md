@@ -9,10 +9,15 @@ instead of mutating the binary in place.
 
 With stock Codex, the standalone Qwendex CLI, checks, routing, receipts, and
 offline evals remain supported. Native patched behavior requires the canonical
-Linux/Codex `0.155.0` patch, its matching `codex-code-mode-host`, and one
+Linux/Codex `0.157.1` patch, its matching `codex-code-mode-host`, and one
 validated runtime generation. Managed hooks remain optional observability.
 Unknown versions or anchor drift fail closed for patch/build claims, not for
 ordinary root prompts, tools, publication, or final responses.
+
+Qdex pins embedded local execution with `--no-daemon` and inline rendering
+with `--no-alt-screen`. Shared background-server and remote TUI sessions are
+outside the supported Qwendex control contract: they do not share the launch
+environment or the sealed binary pair. Resume and fork retain embedded mode.
 
 ## Contract
 
@@ -124,7 +129,7 @@ frozen. Projects that want the upstream Git package can install it separately fr
 
 ## Source Locations
 
-For the current Codex `0.155.0` target (`rust-v0.155.0`), the patch touches
+For the current Codex `0.157.1` target (`rust-v0.157.1`), the patch touches
 these source areas. Earlier compatibility manifests retain their own
 version-specific anchor sets:
 
@@ -142,7 +147,7 @@ version-specific anchor sets:
 - `codex-rs/core/src/tools/spec_plan.rs`
 - `codex-rs/core/src/tools/handlers/multi_agents_v2.rs`
 - `codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs`
-- `codex-rs/core/src/tools/handlers/multi_agents_common.rs`
+- `codex-rs/core/src/agent/child_config.rs`
 - `codex-rs/core/src/tools/handlers/multi_agents_v2/wait.rs`
 - `codex-rs/core/src/tools/handlers/multi_agents_spec.rs`
 - `codex-rs/core/src/tools/handlers/multi_agents_spec_tests.rs`

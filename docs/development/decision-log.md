@@ -1,5 +1,26 @@
 # Qwendex Development Decision Log
 
+## Codex 0.157.1 Upgrade
+
+Decision: support official `rust-v0.157.1` at
+`36650394c5b38c2990ccf2a3457165ca3e9d9726`, verified against the official
+GitHub latest stable release and npm latest tag. Keep prior manifests intact
+and retain the sandboxed Rusty V8 150.4.0 artifact contract.
+
+Rebase inherited worker policy onto upstream's shared child-config helper and
+LiveAgent metadata. V2 workers retain the root model, provider, reasoning, and
+developer contract for fresh starts, forks, and reloads; native V1 role behavior
+stays unchanged. Keep the fixed spawn schema when the model catalog supplies
+alternate parameters. Preserve catalog descriptions and management-tool
+execution checks.
+
+Qdex explicitly supplies `--no-daemon` alongside `--no-alt-screen`. Its supported
+native integration remains embedded and local: a shared background server can
+select a different binary and cannot inherit each launch's private controls.
+The same verified Codex/code-mode-host pair feeds new immutable generations.
+Continue the single-build upgrade workflow and keep package version 0.6.10
+until a separate tagged release is prepared.
+
 ## Codex 0.155.0 Upgrade
 
 Decision: support official `rust-v0.155.0` at

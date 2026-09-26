@@ -14,9 +14,9 @@ git switch --detach <published-release-tag>
 git status --short
 ```
 
-The annotated `v0.6.10` tag is the publication boundary for this stable
-release. Untagged source is candidate material until the release operation
-creates and pushes that tag.
+The published annotated `v0.6.10` tag supports Codex `0.153.1`. Current
+`main` targets Codex `0.157.1`; that source update remains untagged candidate
+material. Use the dependency helper from the checkout you selected.
 
 Stop if `git status --short` prints unexpected files. Install the
 release-compatible dependencies, create isolated runtime wiring, and load the
@@ -38,9 +38,9 @@ qwendex-dev doctor
 scripts/qwendex check --json
 ```
 
-The dependency helper requires Codex CLI `0.155.0`, the version covered by this
-release's native-patch contract, and installs that version when the active
-binary differs. For intentional compatibility testing, set both
+On current `main`, the dependency helper requires Codex CLI `0.157.1` and
+installs that version when the active binary differs. The published `v0.6.10`
+checkout instead pins `0.153.1` for its native-patch contract. For intentional compatibility testing, set both
 `QWENDEX_CODEX_NPM_SPEC` and `QWENDEX_CODEX_REQUIRED_VERSION`.
 
 `sync` installs the tracked `scripts/qdex` wrapper into `~/.local/bin/qdex` and
@@ -69,7 +69,7 @@ upstream Codex remains available for recovery; `codex-main` is an explicit
 captured-upstream alias. The release tag pins the Qwendex source. Patched Codex
 footer/hotkey support and native delegation capacity, depth, wait, and child
 tool-surface behavior remain a separately built, version-checked integration.
-For the supported Codex `0.155.0` runtime, Qdex canonicalizes and validates the
+For the supported Codex `0.157.1` runtime, Qdex canonicalizes and validates the
 `qwendex-manager` status-line item in an immutable config baseline, keeps
 Codex's live config writable, and repeats the status item as a trailing launch
 override.
@@ -293,7 +293,7 @@ The tmux session starts a Qwendex console plus `qwendex-local` and
 `qwendex-full` Codex panes. Each Codex pane launches with a visible banner:
 
 ```text
->_ OpenAI Codex (v0.155.0) /w Qwendex
+>_ OpenAI Codex (v0.157.1) /w Qwendex
 ```
 
 `codex-preflight` detects the installed Codex CLI version and checks it against

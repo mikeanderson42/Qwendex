@@ -1,9 +1,9 @@
 # v0.6.10
 
-Unreleased source update: Codex `0.155.0` compatibility and session control fixes. The package version
+Unreleased source update: Codex `0.157.1` compatibility and session control fixes. The package version
 remains `0.6.10`; the published tags below retain their original source.
 
-- Rebase the canonical source patch and pinned build inputs to `rust-v0.155.0`.
+- Rebase the canonical source patch and pinned build inputs to `rust-v0.157.1`.
 - Preserve SubagentStart hooks for forked workers and document the single-build upgrade sequence.
 - Apply Kaveman and Local assistance at the next root prompt without restarting.
 - Preserve configured developer instructions and register root-selected advisory

@@ -923,6 +923,7 @@ fi
 cmd=(
   "$QWENDEX_CODEX_RUNTIME"
   --no-alt-screen
+  --no-daemon
 )
 codex_policy_args=(
   --config "suppress_unstable_features_warning=true"

@@ -77,6 +77,9 @@ def test_codex_build_contract_requires_the_current_canonical_patch_surface():
     for version in ("0.153.1", "0.154.0", "0.155.0"):
         assert codex_150_required == release_gate.codex_required_patch_paths(version)
     assert "codex-rs/core/src/config/mod.rs" not in codex_150_required
+    assert release_gate.codex_required_patch_paths("0.157.1") == (
+        codex_150_required - {"codex-rs/core/src/tools/handlers/multi_agents_common.rs"}
+    ) | {"codex-rs/core/src/agent/child_config.rs"}
     dev_env = (ROOT / "scripts" / "qwendex_dev_env").read_text(encoding="utf-8")
     for path in {
         "codex-rs/codex-mcp/src/connection_manager.rs",

@@ -863,6 +863,26 @@ CODEX_PATCH_MANIFESTS["0.155.0"] = {
     "codex_tag": "rust-v0.155.0",
 }
 
+CODEX_PATCH_MANIFESTS["0.157.1"] = {
+    **CODEX_PATCH_MANIFESTS["0.155.0"],
+    "codex_tag": "rust-v0.157.1",
+    "source_anchors": [
+        {
+            **spec,
+            "path": "codex-rs/core/src/agent/child_config.rs",
+            "anchors": ["async fn apply_requested_spawn_agent_model_overrides", "agent_default_subagent_model"],
+        }
+        if spec["path"] == "codex-rs/core/src/tools/handlers/multi_agents_common.rs"
+        else {
+            **spec,
+            "anchors": ["struct SpawnAgentArgs", "thread_spawn_source("],
+        }
+        if spec["path"] == "codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs"
+        else spec
+        for spec in CODEX_PATCH_MANIFESTS["0.155.0"]["source_anchors"]
+    ],
+}
+
 DEFAULT_CONFIG: dict[str, Any] = {
     "schema_version": "qwendex.config.v1",
     "version": VERSION,
@@ -5662,7 +5682,7 @@ def codex_source_patch_specs(version: str) -> list[dict[str, Any]]:
         return []
     listed_agent_legacy_field = (
         "            last_task_message: None,\n"
-        if version not in {"0.145.0", "0.147.0", "0.150.0", "0.153.1", "0.154.0", "0.155.0"}
+        if version not in {"0.145.0", "0.147.0", "0.150.0", "0.153.1", "0.154.0", "0.155.0", "0.157.1"}
         else ""
     )
     specs = [
@@ -6568,7 +6588,7 @@ max_threads = 2
             ],
         },
     ]
-    if version in {"0.147.0", "0.150.0", "0.153.1", "0.154.0", "0.155.0"}:
+    if version in {"0.147.0", "0.150.0", "0.153.1", "0.154.0", "0.155.0", "0.157.1"}:
         resume_child_nested_response = """        sse(vec![
             ev_response_created("resp-worker-1"),
             ev_function_call_with_namespace(
@@ -6659,7 +6679,7 @@ max_threads = 2
         mcp_tests_anchor = """#[tokio::test]
 async fn list_all_tools_uses_shared_codex_apps_cache_when_client_startup_fails() {
 """
-    if version in {"0.145.0", "0.147.0", "0.150.0", "0.153.1", "0.154.0", "0.155.0"}:
+    if version in {"0.145.0", "0.147.0", "0.150.0", "0.153.1", "0.154.0", "0.155.0", "0.157.1"}:
         redundant_v2_config_paths = {
             "codex-rs/core/src/config/mod.rs",
             "codex-rs/core/src/config/config_tests.rs",
@@ -8455,11 +8475,11 @@ async fn failed_codex_apps_startup_reports_cached_degraded_ready_events() -> any
                         ),
                     ],
                 },
-                    ] if version in {"0.147.0", "0.150.0", "0.153.1", "0.154.0", "0.155.0"} else []
+                    ] if version in {"0.147.0", "0.150.0", "0.153.1", "0.154.0", "0.155.0", "0.157.1"} else []
                 ),
             ]
         )
-    if version in {"0.147.0", "0.150.0", "0.153.1", "0.154.0", "0.155.0"}:
+    if version in {"0.147.0", "0.150.0", "0.153.1", "0.154.0", "0.155.0", "0.157.1"}:
         # Codex 0.147/0.150 added a side-conversation key after raw output,
         # moved the Apps cache helper, and made V2 child policy more explicit.
         # Keep the Qwendex contract intact while preserving those paths.
@@ -9013,7 +9033,7 @@ async fn multi_agent_v2_spawn_rejects_model_override() {
                 },
             ]
         )
-    if version in {"0.150.0", "0.153.1", "0.154.0", "0.155.0"}:
+    if version in {"0.150.0", "0.153.1", "0.154.0", "0.155.0", "0.157.1"}:
         # 0.150 keeps the policy seams but changed the V2 handler APIs and
         # refreshed several integration-test expectations. Rebase those
         # seams against the released source rather than a 0.147 text match.
@@ -9031,7 +9051,7 @@ async fn multi_agent_v2_spawn_rejects_model_override() {
             spec = dict(original)
             replacements: list[tuple[str, str]] = []
             for old, new in spec["replacements"]:
-                if version in {"0.153.1", "0.154.0", "0.155.0"} and path == "codex-rs/tui/src/keymap.rs":
+                if version in {"0.153.1", "0.154.0", "0.155.0", "0.157.1"} and path == "codex-rs/tui/src/keymap.rs":
                     if old.startswith('                ("toggle_fast_mode",') and '"chat.interrupt_turn"' in old:
                         old = """            (
                 keymap.global.toggle_fast_mode.as_ref(),
@@ -9096,7 +9116,7 @@ async fn multi_agent_v2_spawn_rejects_model_override() {
             ],
             approval_overlay_bindings,
 """
-                elif version in {"0.153.1", "0.154.0", "0.155.0"} and path == "codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs" and old.startswith("struct SpawnAgentArgs {"):
+                elif version in {"0.153.1", "0.154.0", "0.155.0", "0.157.1"} and path == "codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs" and old.startswith("struct SpawnAgentArgs {"):
                     old = """struct SpawnAgentArgs {
     message: String,
     task_name: String,
@@ -9107,7 +9127,7 @@ async fn multi_agent_v2_spawn_rejects_model_override() {
     fork_context: Option<bool>,
 }
 """
-                elif version in {"0.153.1", "0.154.0", "0.155.0"} and path == "codex-rs/core/src/tools/spec_plan_tests.rs" and old.startswith("            update_config(turn, |config| {"):
+                elif version in {"0.153.1", "0.154.0", "0.155.0", "0.157.1"} and path == "codex-rs/core/src/tools/spec_plan_tests.rs" and old.startswith("            update_config(turn, |config| {"):
                     old = """            update_config(turn, |config| {
                 config.multi_agent_v2.tool_namespace = Some("agents".to_string());
             });
@@ -9126,7 +9146,7 @@ async fn multi_agent_v2_spawn_rejects_model_override() {
                 ):
                     model_version_check = (
                         "model_info.multi_agent_version"
-                        if version in {"0.153.1", "0.154.0", "0.155.0"}
+                        if version in {"0.153.1", "0.154.0", "0.155.0", "0.157.1"}
                         else "turn_context.model_info.multi_agent_version"
                     )
                     old = "__QWENDEX_REGEX__(?m)^        MultiAgentVersion::V2 => \\{\\n.*?^        \\}\\n"
@@ -9216,7 +9236,7 @@ async fn multi_agent_v2_spawn_rejects_model_override() {
                         "    apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;",
                         "",
                     ])
-                    if version in {"0.153.1", "0.154.0", "0.155.0"}:
+                    if version in {"0.153.1", "0.154.0", "0.155.0", "0.157.1"}:
                         new = new.replace(
                             "    apply_spawn_agent_service_tier(\n"
                             "        &session,\n"
@@ -9317,7 +9337,7 @@ async fn multi_agent_v2_spawn_rejects_model_override() {
                             ]
                             + (
                                 []
-                                if version in {"0.153.1", "0.154.0", "0.155.0"}
+                                if version in {"0.153.1", "0.154.0", "0.155.0", "0.157.1"}
                                 else ["multi_agent_v2_full_history_fork_accepts_explicit_service_tier"]
                             )
                         ],
@@ -9401,7 +9421,7 @@ async fn multi_agent_v2_spawn_rejects_model_override() {
                 },
             ]
         )
-        if version in {"0.153.1", "0.154.0", "0.155.0"}:
+        if version in {"0.153.1", "0.154.0", "0.155.0", "0.157.1"}:
             for spec in specs:
                 if spec["path"] != "codex-rs/core/src/tools/spec_plan_tests.rs":
                     continue
@@ -9442,7 +9462,7 @@ async fn multi_agent_v2_spawn_rejects_model_override() {
             }
             for spec in specs
         ]
-    if version in {"0.154.0", "0.155.0"}:
+    if version in {"0.154.0", "0.155.0", "0.157.1"}:
         # Upstream moved shared app shortcuts to a bool-returning handler.
         # Its caller already checks whether app shortcuts are available.
         for spec in specs:
@@ -9478,7 +9498,7 @@ async fn multi_agent_v2_spawn_rejects_model_override() {
                 else (old, new)
                 for old, new in spec["replacements"]
             ]
-    if version == "0.155.0":
+    if version in {"0.155.0", "0.157.1"}:
         # Upstream dispatches SubagentStart for full-history forks as well as
         # fresh workers. Preserve both while adding Qwendex hook identity.
         for spec in specs:
@@ -9570,6 +9590,100 @@ async fn multi_agent_v2_spawn_rejects_model_override() {
                         new = new.replace(unformatted, formatted)
                 replacements.append((old, new))
             spec["replacements"] = replacements
+    if version == "0.157.1":
+        # Upstream centralized child configuration and moved the loaded-agent
+        # representation. Rebase only this manifest; historical digests stay fixed.
+        for spec in specs:
+            if spec["path"] == "codex-rs/core/src/tools/handlers/multi_agents_common.rs":
+                spec["path"] = "codex-rs/core/src/agent/child_config.rs"
+            replacements = []
+            for old, new in spec["replacements"]:
+                if spec["path"] == "codex-rs/core/src/tools/spec_plan.rs":
+                    if old.startswith("        if multi_agent_v2_enabled(turn_context) {"):
+                        old = "        if multi_agent_v2_enabled(turn_context) {\n"
+                        new = old + "            let is_non_root_agent = turn_context.session_source.is_non_root_agent();\n"
+                    elif "multi_agent_v2_handler(SendMessageHandlerV2, tool_namespace)" in old:
+                        old = (
+                            "            registry.register_trusted_with_exposure(\n"
+                            "                multi_agent_v2_handler(\n"
+                            "                    SendMessageHandlerV2,\n"
+                        )
+                        new = "            if is_non_root_agent {\n                return;\n            }\n" + old
+                    elif old.startswith("                        expose_"):
+                        old = "\n".join("    " + line if line else line for line in old.split("\n"))
+                        new = "\n".join("    " + line if line else line for line in new.split("\n"))
+                elif spec["path"].endswith("multi_agents_v2/spawn.rs") and old.startswith("use crate::agent::next_thread_spawn_depth;"):
+                    new = new.replace("use crate::agent::{exceeds_thread_spawn_depth_limit, next_thread_spawn_depth};\n", "")
+                elif spec["path"].endswith("multi_agents_v2/spawn.rs") and old.startswith("__QWENDEX_REGEX__"):
+                    old = (
+                        r"__QWENDEX_REGEX__(?m)^    let args: SpawnAgentArgs = parse_arguments\(&arguments\)\?;\n"
+                        r"    let fork_mode = args.fork_mode\(\)\?;\n.*?^    let config = prepared.config;\n"
+                        r"    let is_full_history_fork = matches!\(fork_mode, Some\(SpawnAgentForkMode::FullHistory\)\);\n"
+                    )
+                    new = new[:new.index("    let mut config =")] + """    let prepared = prepare_agent_spawn_config(
+        &session,
+        step_context.as_ref(),
+        SpawnConfigOptions {
+            version: SpawnConfigVersion::V2,
+            full_history_fork: is_full_history_fork,
+            role_name,
+            model: None,
+            reasoning_effort: None,
+        },
+    )
+    .await
+    .map_err(FunctionCallError::RespondToModel)?;
+    let config = prepared.config;
+"""
+                elif spec["path"].endswith("multi_agents_v2/wait.rs"):
+                    new = new.replace("use crate::agent::control::ListedAgent;\nuse crate::session::InputQueueActivity;", "use crate::agent::types::LiveAgent;\nuse crate::session::InputQueueActivity;\nuse codex_protocol::AgentPath;")
+                    new = new.replace("agents: &[ListedAgent]", "agents: &[LiveAgent]")
+                    new = new.replace(
+                        "agent.agent_name != AgentPath::ROOT",
+                        "agent\n            .metadata\n            .agent_path\n            .as_ref()\n            .is_some_and(|path| path.as_str() != AgentPath::ROOT)",
+                    ).replace("agent.agent_status,", "agent.status,")
+                    new = new.replace("fn listed_agent(name: &str, status: AgentStatus) -> ListedAgent {\n        ListedAgent {\n            agent_name: name.to_string(),\n            agent_status: status,\n        }", "fn listed_agent(name: &str, status: AgentStatus) -> LiveAgent {\n        LiveAgent {\n            thread_id: codex_protocol::ThreadId::new(),\n            metadata: crate::agent::types::AgentMetadata {\n                agent_path: Some(AgentPath::try_from(name).expect(\"agent path\")),\n                ..Default::default()\n            },\n            status,\n        }")
+                elif spec["path"] == "codex-rs/codex-mcp/src/connection_manager_tests.rs":
+                    new = new.replace("codex_apps_auth_manager: None,", "auth_manager: None,")
+                replacements.append((old, new))
+            spec["replacements"] = replacements
+        specs.extend([
+            {
+                "path": "codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs",
+                "replacements": [
+                    (
+                        "use crate::agent::types::SpawnAgentOptions;\n",
+                        "use crate::agent::types::SpawnAgentOptions;\nuse crate::agent::{exceeds_thread_spawn_depth_limit, next_thread_spawn_depth};\n",
+                    ),
+                ],
+            },
+            {
+                "path": "codex-rs/core/src/agent/child_config.rs",
+                "replacements": [
+                    (
+                        r"__QWENDEX_REGEX__(?m)^    if !options.full_history_fork\n.*?^    }\n",
+                        "    // QWENDEX_CODEX_TUI_PATCH_V1: V2 inherits the root contract, including for fresh workers.\n    if options.version == SpawnConfigVersion::V1 && !options.full_history_fork {\n        apply_spawn_agent_role(session, &mut config, options.role_name).await?;\n    }\n",
+                    ),
+                    (
+                        r"__QWENDEX_REGEX__(?m)^    // Remember an applied configured default.*?^        \.map\(str::to_owned\);\n",
+                        "    // QWENDEX_CODEX_TUI_PATCH_V1: cold reload must not restore a native V2 default role.\n    let role_name = options\n        .role_name\n        .filter(|_| options.version == SpawnConfigVersion::V1)\n        .map(str::to_owned);\n",
+                    ),
+                    (
+                        "use crate::agent::role::DEFAULT_ROLE_NAME;\n",
+                        "",
+                    ),
+                ],
+            },
+            {
+                "path": "codex-rs/core/src/tools/spec_plan.rs",
+                "replacements": [
+                    (
+                        '                    model_messages.multi_agent_tool_parameters_override("spawn_agent"),\n',
+                        '                    // QWENDEX_CODEX_TUI_PATCH_V1: catalog schemas cannot replace the fixed worker contract.\n                    None,\n',
+                    ),
+                ],
+            },
+        ])
     return specs
 
 
@@ -9611,7 +9725,7 @@ def apply_codex_source_patch(source: Path, version: str, *, dry_run: bool = Fals
     # Keep the rebase fail-closed: validate every source replacement before
     # writing any file.  The 0.147/0.150 contract also requires unique anchors so
     # a broad fragment cannot silently duplicate a patched Rust test.
-    strict_anchor_cardinality = version in {"0.147.0", "0.150.0", "0.153.1", "0.154.0", "0.155.0"}
+    strict_anchor_cardinality = version in {"0.147.0", "0.150.0", "0.153.1", "0.154.0", "0.155.0", "0.157.1"}
     original_texts: dict[str, str] = {}
     updated_texts: dict[str, str] = {}
     for spec in specs:

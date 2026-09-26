@@ -10,7 +10,9 @@ Use this skill for native Codex footer/hotkey integration.
 ## Workflow
 
 For a version upgrade, preserve unrelated work in the primary worktree and use
-a named task branch. Verify the official target tag/commit and install that
+a named task branch. Verify the official target tag/commit; when the operator
+asks for the latest stable version, check both the official GitHub latest
+release and npm `@openai/codex` latest tag before pinning it. Install that
 exact stock Codex version side by side. Set `QWENDEX_MAIN_CODEX_BIN` to it.
 During source sync, patch, and preflight, also set `QWENDEX_DEV_CODEX_BIN` to
 that stock executable: these commands otherwise prefer an existing, older dev
@@ -19,7 +21,9 @@ binary and can select its manifest.
 1. Update the supported manifest, installer/test pins, and current docs;
    retain historical manifests. Sync a fresh pinned source checkout.
 2. Dry-run and apply the patch with the target stock binary. Check moved
-   anchors, idempotence, and Rust formatting before compilation.
+   anchors, idempotence, and Rust formatting before compilation. Review new
+   upstream API types and launch defaults as well as textual anchors; preserve
+   Qdex embedded execution with `--no-daemon` and verify its private controls.
 3. Normalize `Cargo.lock` using `cargo metadata --format-version 1` with an
    empty isolated `CARGO_HOME`, as the build does. Pin the official source
    commit, normalized lock SHA-256, and `git diff HEAD --binary --full-index

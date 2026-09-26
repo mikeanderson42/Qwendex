@@ -2,8 +2,12 @@
 
 ## Unreleased
 
-- Support official Codex `0.155.0` with the matching source, patch, Cargo lock,
+- Support official Codex `0.157.1` with the matching source, patch, Cargo lock,
   sandboxed V8 artifacts, binary pair, installer pin, and model cache.
+- Rebase worker inheritance and waits onto the new child-config and LiveAgent
+  APIs, retaining the fixed spawn schema when catalog overrides are present.
+- Keep Qdex embedded with `--no-daemon` so background-server defaults cannot
+  bypass its selected binary pair and private session controls.
 - Preserve upstream SubagentStart dispatch for forked workers while adding
   Qwendex task and parent identity. Local launches already explicitly disable
   reasoning summaries and retain that setting.
