@@ -1,5 +1,22 @@
 # Qwendex Development Decision Log
 
+## Codex 0.158.0 Upgrade
+
+Decision: support the official `rust-v0.158.0` source commit
+`064c6b8c737f5b41d171fdda80bd9ef10ad06eb3`, matching the GitHub stable
+release and npm latest tag. Retain historical manifests and pin the normalized
+Cargo lock and complete Qwendex source patch independently. Codex still pins
+V8 150.4.0, so keep the verified sandboxed archive and binding contract.
+
+Upstream wrapped V2 direct message tools in an optional block. Place the
+Qwendex non-root management-tool guard before that block while preserving the
+new upstream option. Use `AgentControl::list` to check for running workers in
+the wait handler; the prior registration and list methods are no longer on the
+shared API. Keep Qdex on embedded execution with `--no-daemon` and
+retain its private Manager, Kaveman, and Local controls. The verified Codex and
+code-mode-host pair feeds new immutable generations; existing sessions retain
+their selected generation. This is an untagged source update to package 0.6.10.
+
 ## Codex 0.157.1 Upgrade
 
 Decision: support official `rust-v0.157.1` at

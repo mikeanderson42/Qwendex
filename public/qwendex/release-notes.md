@@ -2,8 +2,11 @@
 
 ## Unreleased
 
-- Support official Codex `0.157.1` with the matching source, patch, Cargo lock,
+- Support official Codex `0.158.0` with the matching source, patch, Cargo lock,
   sandboxed V8 artifacts, binary pair, installer pin, and model cache.
+- Adapt the V2 collaboration tool guard to the upstream optional direct-message
+  block and rebase worker waits onto the shared agent-control API. Retain
+  embedded Qdex execution and sealed worker inheritance.
 - Rebase worker inheritance and waits onto the new child-config and LiveAgent
   APIs, retaining the fixed spawn schema when catalog overrides are present.
 - Keep Qdex embedded with `--no-daemon` so background-server defaults cannot

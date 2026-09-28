@@ -125,7 +125,7 @@ scripts/qwendex_install_deps --check --json
 The supported runtime baseline is Bash 4+ and Python 3.11+; the dependency
 receipt blocks older interpreters instead of failing later in Qwendex startup.
 
-The installer requires `@openai/codex@0.157.1`, matching the current
+The installer requires `@openai/codex@0.158.0`, matching the current
 native-patch compatibility contract. For intentional compatibility testing,
 override both `QWENDEX_CODEX_NPM_SPEC` and
 `QWENDEX_CODEX_REQUIRED_VERSION`.
@@ -355,7 +355,7 @@ claims require GPT/Codex review and the appropriate Qwendex verification tier.
 
 ## Current Release / Known Limits
 
-This checkout is seeded as `v0.6.10` and supports Codex `0.157.1`.
+This checkout is seeded as `v0.6.10` and supports Codex `0.158.0`.
 The published `v0.6.10` source tag remains on Codex `0.150.0`.
 It includes the supported-Codex update,
 state-schema/runtime isolation fixes, advisory Agent Management boundary, and
@@ -378,7 +378,7 @@ Known limits:
 - Patched Codex footer and hotkeys depend on a supported source checkout and a
   rebuilt Codex binary.
 - Native Manager delegation integration is certified only on the tested Linux /
-  Codex `0.157.1` canonical patch combination. Stock Codex remains supported for
+  Codex `0.158.0` canonical patch combination. Stock Codex remains supported for
   standalone Qwendex CLI functions without that patched capacity, depth, wait,
   child-tool-surface, or lifecycle-observability integration.
 - Qdex keeps Codex 0.147 history persistence, memories, external-agent memory
