@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Support official Codex `0.159.3`, including its TUI updates, with the
+  matching source, normalized Cargo lock, canonical Qwendex patch, and rebuilt
+  Codex/code-mode-host pair. Keep Qdex's embedded launch and private controls.
 - Support official Codex `0.158.0` with the matching source, patch, Cargo lock,
   sandboxed V8 artifacts, binary pair, installer pin, and model cache.
 - Adapt the V2 collaboration tool guard to the upstream optional direct-message

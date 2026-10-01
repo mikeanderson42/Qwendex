@@ -37,7 +37,7 @@ The Codex TUI header itself is owned by Codex. Unpatched Codex builds get a
 visible launch banner above the TUI and run without the alternate screen:
 
 ```text
->_ OpenAI Codex (v0.157.1) /w Qwendex
+>_ OpenAI Codex (v0.159.3) /w Qwendex
 ```
 
 The banner also prints the Qwendex mode, selected model, project folder,

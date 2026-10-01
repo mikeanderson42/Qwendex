@@ -1,14 +1,21 @@
 # v0.6.10
 
-Unreleased source update: Codex `0.157.1` compatibility and session control fixes. The package version
+Unreleased source update: Codex `0.159.3` compatibility and TUI refresh. The package version
 remains `0.6.10`. The published `v0.6.10` source tag at
 `63174442bd2226c1c35d225b14e3993709de42a8` retains its Codex `0.150.0` pin.
 Subsequent compatibility updates described here are untagged source changes.
 
-- Rebase the canonical source patch and pinned build inputs to `rust-v0.157.1`.
-- Preserve SubagentStart hooks for forked workers and document the single-build upgrade sequence.
-- Apply Kaveman and Local assistance at the next root prompt without restarting.
-- Preserve configured developer instructions and register root-selected advisory
+- Rebase the canonical source patch and pinned build inputs to `rust-v0.159.3`.
+- Rebuild and validate the matching Codex and code-mode-host binaries while
+  retaining embedded Qdex execution and the Manager, Kaveman, and Local controls.
+
+## Earlier Untagged Source Updates
+
+- Codex `0.158.0` adapted the V2 direct-message guard and wait API to upstream.
+- Codex `0.157.1` rebased worker inheritance onto upstream child configuration.
+- Preserved SubagentStart hooks for forked workers and documented the single-build upgrade sequence.
+- Applied Kaveman and Local assistance at the next root prompt without restarting.
+- Preserved configured developer instructions and registered root-selected advisory
   workers against their launch identity, within the four-worker Manager cap.
 
 ## Earlier Untagged Source Update

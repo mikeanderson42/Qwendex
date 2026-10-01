@@ -1,5 +1,21 @@
 # Qwendex Development Decision Log
 
+## Codex 0.159.3 Upgrade
+
+Decision: advance the untagged Qwendex source contract to official
+`rust-v0.159.3` at `01fc69f4026735edfdf6789820549727a4867b11`, the
+GitHub and npm stable target. Keep the older manifests and published
+`v0.6.10` tag as history. Pin this source's normalized Cargo lock and complete
+Qwendex patch digest, and retain the verified Rusty V8 150.4.0 sandbox pair.
+
+The upstream TUI adds optional account security reminders and changes other
+presentation paths. The Qwendex patch still applies with unique anchors and
+passes its idempotence and Rust formatting checks. Preserve embedded Qdex
+execution with `--no-daemon`, the private Manager/Kaveman/Local status and
+hotkeys, V2 worker boundaries, and the matching code-mode host. Activate the
+verified binary pair only for new runtime generations; existing sessions keep
+their selected generation.
+
 ## Codex 0.158.0 Upgrade
 
 Decision: support the official `rust-v0.158.0` source commit
