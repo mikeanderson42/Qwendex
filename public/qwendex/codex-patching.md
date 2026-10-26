@@ -9,7 +9,7 @@ instead of mutating the binary in place.
 
 With stock Codex, the standalone Qwendex CLI, checks, routing, receipts, and
 offline evals remain supported. Native patched behavior requires the canonical
-Linux/Codex `0.159.3` patch, its matching `codex-code-mode-host`, and one
+Linux/Codex `0.164.0` patch, its matching `codex-code-mode-host`, and one
 validated runtime generation. Managed hooks remain optional observability.
 Unknown versions or anchor drift fail closed for patch/build claims, not for
 ordinary root prompts, tools, publication, or final responses.
@@ -129,7 +129,7 @@ frozen. Projects that want the upstream Git package can install it separately fr
 
 ## Source Locations
 
-For the current Codex `0.159.3` target (`rust-v0.159.3`), the patch touches
+For the current Codex `0.164.0` target (`rust-v0.164.0`), the patch touches
 these source areas. Earlier compatibility manifests retain their own
 version-specific anchor sets:
 
@@ -148,6 +148,7 @@ version-specific anchor sets:
 - `codex-rs/core/src/tools/handlers/multi_agents_v2.rs`
 - `codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs`
 - `codex-rs/core/src/agent/child_config.rs`
+- `codex-rs/core/src/thread_spawn.rs`
 - `codex-rs/core/src/tools/handlers/multi_agents_v2/wait.rs`
 - `codex-rs/core/src/tools/handlers/multi_agents_spec.rs`
 - `codex-rs/core/src/tools/handlers/multi_agents_spec_tests.rs`
@@ -170,6 +171,12 @@ Inspect the active manifest with:
 ```bash
 scripts/qwendex codex-patch locations --json
 ```
+
+Codex `0.164.0` shares V2 worker preparation through `thread_spawn.rs`.
+Qwendex seals that request against role/model/reasoning overrides and retains
+the depth-two limit, inherited environments, and parent/root turn identity.
+The V2 tool gate still honors upstream's `disable_native_tools` setting, and
+immediate waits with no running child retain upstream duration telemetry.
 
 The Manager-specific edits add canonical `task_name` and parent identity to
 `SubagentStart`, remove collaboration-management tools from child V2 threads,

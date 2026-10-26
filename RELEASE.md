@@ -1,16 +1,20 @@
 # v0.6.10
 
-Unreleased source update: Codex `0.159.3` compatibility and TUI refresh. The package version
+Unreleased source update: Codex `0.164.0` compatibility and TUI refresh. The package version
 remains `0.6.10`. The published `v0.6.10` source tag at
 `63174442bd2226c1c35d225b14e3993709de42a8` retains its Codex `0.150.0` pin.
 Subsequent compatibility updates described here are untagged source changes.
 
-- Rebase the canonical source patch and pinned build inputs to `rust-v0.159.3`.
+- Rebase the canonical source patch and pinned build inputs to `rust-v0.164.0`,
+  including the sandboxed Rusty V8 `152.2.0` artifact pair.
+- Preserve sealed worker inheritance through upstream's shared spawn path,
+  no-running-worker waits and timing telemetry, and the native-tools switch.
 - Rebuild and validate the matching Codex and code-mode-host binaries while
   retaining embedded Qdex execution and the Manager, Kaveman, and Local controls.
 
 ## Earlier Untagged Source Updates
 
+- Codex `0.159.3` refreshed the TUI patch and canonical build inputs.
 - Codex `0.158.0` adapted the V2 direct-message guard and wait API to upstream.
 - Codex `0.157.1` rebased worker inheritance onto upstream child configuration.
 - Preserved SubagentStart hooks for forked workers and documented the single-build upgrade sequence.

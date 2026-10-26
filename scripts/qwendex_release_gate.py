@@ -76,7 +76,26 @@ CODEX_153_V8_BASE_URL = CODEX_V8_BASE_URL
 CODEX_153_V8_DOWNLOAD_POLICY = CODEX_V8_DOWNLOAD_POLICY
 CODEX_153_V8_TARGET = CODEX_V8_TARGET
 CODEX_153_V8_ARTIFACTS = CODEX_V8_ARTIFACTS
-CODEX_V8_PINNED_VERSIONS = frozenset({"0.147.0", "0.150.0", "0.153.1", "0.154.0", "0.155.0", "0.157.1", "0.158.0", "0.159.3"})
+CODEX_V8_PINNED_VERSIONS = frozenset({"0.147.0", "0.150.0", "0.153.1", "0.154.0", "0.155.0", "0.157.1", "0.158.0", "0.159.3", "0.164.0"})
+CODEX_164_V8_PIN = {
+    "version": "152.2.0",
+    "release_tag": "rusty-v8-v152.2.0",
+    "base_url": "https://github.com/openai/codex/releases/download/rusty-v8-v152.2.0",
+    "artifacts": {
+        "archive": {
+            "name": CODEX_V8_ARTIFACTS["archive"]["name"],
+            "sha256": "b3b490f2aa809eda7f6ac727f851fb00ce8355be72827577cfaac28c7137dbcd",
+        },
+        "binding": {
+            "name": CODEX_V8_ARTIFACTS["binding"]["name"],
+            "sha256": "3e4d5fecdbe0f98a6017e69d7ca82519a77fb032c5eb5e4cdbecdd3e2ec519d5",
+        },
+        "checksums": {
+            "name": CODEX_V8_ARTIFACTS["checksums"]["name"],
+            "sha256": "1ec730635970ab1c0e8f4764ea113ad29d69d7f8d4c2ae69f3d766434a759350",
+        },
+    },
+}
 REQUIRED_RECEIPTS = {
     "bootstrap": "bootstrap.json",
     "static_gate": "static_gate.json",
@@ -170,6 +189,7 @@ CODEX_ALLOWED_BUILD_PATHS = {
     "codex-rs/core/src/hook_runtime.rs",
     "codex-rs/core/src/tools/handlers/multi_agents_common.rs",
     "codex-rs/core/src/agent/child_config.rs",
+    "codex-rs/core/src/thread_spawn.rs",
     "codex-rs/core/src/tools/handlers/multi_agents_spec.rs",
     "codex-rs/core/src/tools/handlers/multi_agents_v2.rs",
     "codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs",
@@ -1360,7 +1380,9 @@ def validate_receipt_binding(
 def codex_required_patch_paths(version: str) -> set[str]:
     """Return the fail-closed source-patch footprint for a supported Codex version."""
     required = set(CODEX_REQUIRED_PATCH_PATHS)
-    if version in {"0.157.1", "0.158.0", "0.159.3"}:
+    if version != "0.164.0":
+        required.discard("codex-rs/core/src/thread_spawn.rs")
+    if version in {"0.157.1", "0.158.0", "0.159.3", "0.164.0"}:
         required.discard("codex-rs/core/src/tools/handlers/multi_agents_common.rs")
     else:
         required.discard("codex-rs/core/src/agent/child_config.rs")
@@ -1368,7 +1390,7 @@ def codex_required_patch_paths(version: str) -> set[str]:
         # Upstream 0.145 incorporates the config/mod.rs compatibility behavior,
         # while Qwendex adds the V2 role/default hardening files.
         required -= CODEX_145_UPSTREAM_PATCH_PATHS
-    elif version in {"0.147.0", "0.150.0", "0.153.1", "0.154.0", "0.155.0", "0.157.1", "0.158.0", "0.159.3"}:
+    elif version in {"0.147.0", "0.150.0", "0.153.1", "0.154.0", "0.155.0", "0.157.1", "0.158.0", "0.159.3", "0.164.0"}:
         # Upstream supplies config/mod.rs compatibility, while these rebases
         # require the complete Qwendex V2 and Apps-cache footprint.
         required -= CODEX_147_UPSTREAM_PATCH_PATHS
@@ -1447,31 +1469,37 @@ def validate_codex_build_receipt(
         )
     )
     if required_version in CODEX_V8_PINNED_VERSIONS:
+        v8_pin = CODEX_164_V8_PIN if required_version == "0.164.0" else {
+            "version": CODEX_V8_VERSION,
+            "release_tag": CODEX_V8_RELEASE_TAG,
+            "base_url": CODEX_V8_BASE_URL,
+            "artifacts": CODEX_V8_ARTIFACTS,
+        }
         v8_target = str(v8_artifacts_data.get("target") or "")
         v8_artifacts_valid = v8_artifacts_valid and all(
             (
                 v8_artifacts_data.get("provider") == CODEX_V8_PROVIDER,
-                v8_artifacts_data.get("crate_version") == CODEX_V8_VERSION,
-                v8_artifacts_data.get("release_tag") == CODEX_V8_RELEASE_TAG,
+                v8_artifacts_data.get("crate_version") == v8_pin["version"],
+                v8_artifacts_data.get("release_tag") == v8_pin["release_tag"],
                 v8_artifacts_data.get("profile") == CODEX_V8_PROFILE,
                 v8_target == CODEX_V8_TARGET,
-                v8_artifacts_data.get("base_url") == CODEX_V8_BASE_URL,
+                v8_artifacts_data.get("base_url") == v8_pin["base_url"],
                 v8_artifacts_data.get("download_policy")
                 == CODEX_V8_DOWNLOAD_POLICY,
                 isinstance(v8_archive, dict)
                 and all(
                     v8_archive.get(key) == value
-                    for key, value in CODEX_V8_ARTIFACTS["archive"].items()
+                    for key, value in v8_pin["artifacts"]["archive"].items()
                 ),
                 isinstance(v8_binding, dict)
                 and all(
                     v8_binding.get(key) == value
-                    for key, value in CODEX_V8_ARTIFACTS["binding"].items()
+                    for key, value in v8_pin["artifacts"]["binding"].items()
                 ),
                 isinstance(v8_checksums, dict)
                 and all(
                     v8_checksums.get(key) == value
-                    for key, value in CODEX_V8_ARTIFACTS["checksums"].items()
+                    for key, value in v8_pin["artifacts"]["checksums"].items()
                 ),
             )
         )

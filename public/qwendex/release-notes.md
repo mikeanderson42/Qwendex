@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Support official Codex `0.164.0` with the matching source, normalized Cargo
+  lock, canonical patch, sandboxed Rusty V8 `152.2.0`, and binary pair. Rebase
+  sealed worker inheritance onto shared spawning; preserve wait telemetry,
+  the native-tools switch, and Manager/Kaveman/Local controls. Honor an explicit
+  stock Codex override during upgrades through the generated dev wrapper.
 - Support official Codex `0.159.3`, including its TUI updates, with the
   matching source, normalized Cargo lock, canonical Qwendex patch, and rebuilt
   Codex/code-mode-host pair. Keep Qdex's embedded launch and private controls.

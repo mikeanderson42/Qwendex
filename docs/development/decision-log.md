@@ -1,5 +1,26 @@
 # Qwendex Development Decision Log
 
+## Codex 0.164.0 Shared-Spawn Rebase
+
+Decision: use official stable `rust-v0.164.0` at
+`6aaac694803004a63c6f393d153c96d22521a6b9` for the current compatibility
+build. GitHub's stable release and npm's latest tag both resolve to `0.164.0`.
+Pin its normalized Cargo lock, complete source diff, and independently
+verified Codex-published sandboxed Rusty V8 `152.2.0` archive, binding, and
+checksum manifest. Historical source manifests and V8 receipts keep their pins.
+
+Rebase sealed V2 workers onto upstream's shared `thread_spawn.rs` preparation
+path, removing role/model/reasoning override fields while preserving captured
+settings, environments, parent/root identity, and the bounded depth-two
+exception. Retain upstream's native-tools veto and wait-duration telemetry
+alongside immediate no-running-worker waits. Manager, Kaveman, and Local keep
+their existing status source, hotkeys, and accepted-turn boundaries.
+
+Generated dev wrappers honor an explicit stock Codex override so initial
+upgrade preflight and builds cannot silently select an older installation.
+Compatibility updates remain untagged source changes at package version
+`0.6.10`; a public package release requires its separate release contracts.
+
 ## Codex 0.159.3 Upgrade
 
 Decision: advance the untagged Qwendex source contract to official

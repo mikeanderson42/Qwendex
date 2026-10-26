@@ -106,7 +106,7 @@ captured upstream Codex binary with an explicit fallback diagnostic. Only
 `qdex` invokes this runtime and sets `QWENDEX_CODEX_HOME` as its child's
 `CODEX_HOME`. A selected dev binary must
 have an executable `codex-code-mode-host` companion in the same directory; the
-wrapper blocks before launch when that Codex 0.159.3 runtime contract is
+wrapper blocks before launch when that Codex 0.164.0 runtime contract is
 incomplete.
 
 The isolated Qwendex Codex home links the operator's authentication file for
@@ -226,10 +226,10 @@ installs both of these sibling files:
 ~/qwendex-dev/.qwendex-dev/codex-build/bin/codex-code-mode-host
 ```
 
-For Codex 0.147, Qwendex retrieves the sandboxed Rusty V8 archive and generated
+For Codex 0.164.0, Qwendex retrieves the sandboxed Rusty V8 152.2.0 archive and generated
 binding from the matching official Codex release into that ignored, isolated
-build directory. This is intentional: the generic `rusty_v8` 150.4.0 Linux
-release lacks the sandbox archive that Codex 0.147 requests. Qwendex permits
+build directory. The matching sandbox archive and binding must come from the
+pinned Codex artifact release. Historical manifests retain their own pins. Qwendex permits
 only its pinned Linux target, HTTPS-only downloads from the exact Codex release,
 and independently pinned archive, binding, and manifest digests before Cargo
 sees the pair. It does not install or modify a host compiler or system package,

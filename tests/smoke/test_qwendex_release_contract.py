@@ -9,6 +9,7 @@ import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 MODULE_PATH = ROOT / "scripts" / "qwendex_release_gate.py"
@@ -82,6 +83,9 @@ def test_codex_build_contract_requires_the_current_canonical_patch_surface():
     ) | {"codex-rs/core/src/agent/child_config.rs"}
     assert release_gate.codex_required_patch_paths("0.158.0") == release_gate.codex_required_patch_paths("0.157.1")
     assert release_gate.codex_required_patch_paths("0.159.3") == release_gate.codex_required_patch_paths("0.158.0")
+    assert release_gate.codex_required_patch_paths("0.164.0") == (
+        release_gate.codex_required_patch_paths("0.159.3") | {"codex-rs/core/src/thread_spawn.rs"}
+    )
     dev_env = (ROOT / "scripts" / "qwendex_dev_env").read_text(encoding="utf-8")
     for path in {
         "codex-rs/codex-mcp/src/connection_manager.rs",
@@ -555,7 +559,8 @@ def test_codex_147_v8_release_pair_is_independently_pinned():
     assert "--proto '=https' --proto-redir '=https'" in dev_env
 
 
-def test_release_gate_rejects_unpinned_codex_147_v8_artifacts(tmp_path):
+@pytest.mark.parametrize("version", ["0.147.0", "0.164.0"])
+def test_release_gate_rejects_unpinned_codex_v8_artifacts(tmp_path, version):
     fixture = release_fixture(tmp_path)
     release_gate = load_release_gate()
     payload = json.loads(
@@ -564,22 +569,28 @@ def test_release_gate_rejects_unpinned_codex_147_v8_artifacts(tmp_path):
         )
     )
     build_inputs = payload["build_inputs"]
-    payload["source_ref"] = "rust-v0.147.0"
-    build_inputs["source_ref"] = "rust-v0.147.0"
-    payload["binary_version"] = "codex-cli 0.147.0"
+    payload["source_ref"] = f"rust-v{version}"
+    build_inputs["source_ref"] = f"rust-v{version}"
+    payload["binary_version"] = f"codex-cli {version}"
+    pin = release_gate.CODEX_164_V8_PIN if version == "0.164.0" else {
+        "version": release_gate.CODEX_147_V8_VERSION,
+        "release_tag": release_gate.CODEX_147_V8_RELEASE_TAG,
+        "base_url": release_gate.CODEX_147_V8_BASE_URL,
+        "artifacts": release_gate.CODEX_147_V8_ARTIFACTS,
+    }
     artifacts = {
         "schema_version": "qwendex.dev.codex_v8_artifacts.v1",
         "status": "pass",
         "provider": release_gate.CODEX_147_V8_PROVIDER,
-        "crate_version": release_gate.CODEX_147_V8_VERSION,
-        "release_tag": release_gate.CODEX_147_V8_RELEASE_TAG,
+        "crate_version": pin["version"],
+        "release_tag": pin["release_tag"],
         "profile": release_gate.CODEX_147_V8_PROFILE,
         "target": release_gate.CODEX_147_V8_TARGET,
-        "base_url": release_gate.CODEX_147_V8_BASE_URL,
+        "base_url": pin["base_url"],
         "download_policy": release_gate.CODEX_147_V8_DOWNLOAD_POLICY,
         **{
             name: {**expected, "bytes": 1}
-            for name, expected in release_gate.CODEX_147_V8_ARTIFACTS.items()
+            for name, expected in pin["artifacts"].items()
         },
     }
     payload["v8_build_mode"] = "verified-codex-release-archive"
@@ -592,7 +603,7 @@ def test_release_gate_rejects_unpinned_codex_147_v8_artifacts(tmp_path):
     def validate(candidate: dict) -> tuple[dict, list[str]]:
         return release_gate.validate_codex_build_receipt(
             candidate,
-            "0.147.0",
+            version,
             CANONICAL_CODEX_SOURCE_COMMIT,
             CANONICAL_CODEX_SOURCE_ORIGIN,
             CANONICAL_CODEX_PATCH_SHA256,
@@ -611,6 +622,8 @@ def test_release_gate_rejects_unpinned_codex_147_v8_artifacts(tmp_path):
         "archive.sha256": "0" * 64,
         "binding.name": "different-binding.rs",
         "checksums.sha256": "f" * 64,
+        "crate_version": "150.4.0" if version == "0.164.0" else "152.2.0",
+        "release_tag": "rusty-v8-v150.4.0" if version == "0.164.0" else "rusty-v8-v152.2.0",
     }
     for field, value in mutations.items():
         candidate = json.loads(json.dumps(payload))

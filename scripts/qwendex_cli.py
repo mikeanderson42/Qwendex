@@ -893,6 +893,20 @@ CODEX_PATCH_MANIFESTS["0.159.3"] = {
     "codex_tag": "rust-v0.159.3",
 }
 
+CODEX_PATCH_MANIFESTS["0.164.0"] = {
+    **CODEX_PATCH_MANIFESTS["0.159.3"],
+    "codex_tag": "rust-v0.164.0",
+    "source_anchors": [
+        {**spec, "anchors": ["struct SpawnAgentArgs", "ThreadSpawnRequest {"]}
+        if spec["path"] == "codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs"
+        else spec
+        for spec in CODEX_PATCH_MANIFESTS["0.159.3"]["source_anchors"]
+    ] + [{
+        "path": "codex-rs/core/src/thread_spawn.rs",
+        "anchors": ["pub(crate) async fn spawn(", "prepare_agent_spawn_config("],
+    }],
+}
+
 DEFAULT_CONFIG: dict[str, Any] = {
     "schema_version": "qwendex.config.v1",
     "version": VERSION,
@@ -5692,7 +5706,7 @@ def codex_source_patch_specs(version: str) -> list[dict[str, Any]]:
         return []
     listed_agent_legacy_field = (
         "            last_task_message: None,\n"
-        if version not in {"0.145.0", "0.147.0", "0.150.0", "0.153.1", "0.154.0", "0.155.0", "0.157.1", "0.158.0", "0.159.3"}
+        if version not in {"0.145.0", "0.147.0", "0.150.0", "0.153.1", "0.154.0", "0.155.0", "0.157.1", "0.158.0", "0.159.3", "0.164.0"}
         else ""
     )
     specs = [
@@ -6598,7 +6612,7 @@ max_threads = 2
             ],
         },
     ]
-    if version in {"0.147.0", "0.150.0", "0.153.1", "0.154.0", "0.155.0", "0.157.1", "0.158.0", "0.159.3"}:
+    if version in {"0.147.0", "0.150.0", "0.153.1", "0.154.0", "0.155.0", "0.157.1", "0.158.0", "0.159.3", "0.164.0"}:
         resume_child_nested_response = """        sse(vec![
             ev_response_created("resp-worker-1"),
             ev_function_call_with_namespace(
@@ -6689,7 +6703,7 @@ max_threads = 2
         mcp_tests_anchor = """#[tokio::test]
 async fn list_all_tools_uses_shared_codex_apps_cache_when_client_startup_fails() {
 """
-    if version in {"0.145.0", "0.147.0", "0.150.0", "0.153.1", "0.154.0", "0.155.0", "0.157.1", "0.158.0", "0.159.3"}:
+    if version in {"0.145.0", "0.147.0", "0.150.0", "0.153.1", "0.154.0", "0.155.0", "0.157.1", "0.158.0", "0.159.3", "0.164.0"}:
         redundant_v2_config_paths = {
             "codex-rs/core/src/config/mod.rs",
             "codex-rs/core/src/config/config_tests.rs",
@@ -8485,11 +8499,11 @@ async fn failed_codex_apps_startup_reports_cached_degraded_ready_events() -> any
                         ),
                     ],
                 },
-                    ] if version in {"0.147.0", "0.150.0", "0.153.1", "0.154.0", "0.155.0", "0.157.1", "0.158.0", "0.159.3"} else []
+                    ] if version in {"0.147.0", "0.150.0", "0.153.1", "0.154.0", "0.155.0", "0.157.1", "0.158.0", "0.159.3", "0.164.0"} else []
                 ),
             ]
         )
-    if version in {"0.147.0", "0.150.0", "0.153.1", "0.154.0", "0.155.0", "0.157.1", "0.158.0", "0.159.3"}:
+    if version in {"0.147.0", "0.150.0", "0.153.1", "0.154.0", "0.155.0", "0.157.1", "0.158.0", "0.159.3", "0.164.0"}:
         # Codex 0.147/0.150 added a side-conversation key after raw output,
         # moved the Apps cache helper, and made V2 child policy more explicit.
         # Keep the Qwendex contract intact while preserving those paths.
@@ -9043,7 +9057,7 @@ async fn multi_agent_v2_spawn_rejects_model_override() {
                 },
             ]
         )
-    if version in {"0.150.0", "0.153.1", "0.154.0", "0.155.0", "0.157.1", "0.158.0", "0.159.3"}:
+    if version in {"0.150.0", "0.153.1", "0.154.0", "0.155.0", "0.157.1", "0.158.0", "0.159.3", "0.164.0"}:
         # 0.150 keeps the policy seams but changed the V2 handler APIs and
         # refreshed several integration-test expectations. Rebase those
         # seams against the released source rather than a 0.147 text match.
@@ -9061,7 +9075,7 @@ async fn multi_agent_v2_spawn_rejects_model_override() {
             spec = dict(original)
             replacements: list[tuple[str, str]] = []
             for old, new in spec["replacements"]:
-                if version in {"0.153.1", "0.154.0", "0.155.0", "0.157.1", "0.158.0", "0.159.3"} and path == "codex-rs/tui/src/keymap.rs":
+                if version in {"0.153.1", "0.154.0", "0.155.0", "0.157.1", "0.158.0", "0.159.3", "0.164.0"} and path == "codex-rs/tui/src/keymap.rs":
                     if old.startswith('                ("toggle_fast_mode",') and '"chat.interrupt_turn"' in old:
                         old = """            (
                 keymap.global.toggle_fast_mode.as_ref(),
@@ -9126,7 +9140,7 @@ async fn multi_agent_v2_spawn_rejects_model_override() {
             ],
             approval_overlay_bindings,
 """
-                elif version in {"0.153.1", "0.154.0", "0.155.0", "0.157.1", "0.158.0", "0.159.3"} and path == "codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs" and old.startswith("struct SpawnAgentArgs {"):
+                elif version in {"0.153.1", "0.154.0", "0.155.0", "0.157.1", "0.158.0", "0.159.3", "0.164.0"} and path == "codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs" and old.startswith("struct SpawnAgentArgs {"):
                     old = """struct SpawnAgentArgs {
     message: String,
     task_name: String,
@@ -9137,7 +9151,7 @@ async fn multi_agent_v2_spawn_rejects_model_override() {
     fork_context: Option<bool>,
 }
 """
-                elif version in {"0.153.1", "0.154.0", "0.155.0", "0.157.1", "0.158.0", "0.159.3"} and path == "codex-rs/core/src/tools/spec_plan_tests.rs" and old.startswith("            update_config(turn, |config| {"):
+                elif version in {"0.153.1", "0.154.0", "0.155.0", "0.157.1", "0.158.0", "0.159.3", "0.164.0"} and path == "codex-rs/core/src/tools/spec_plan_tests.rs" and old.startswith("            update_config(turn, |config| {"):
                     old = """            update_config(turn, |config| {
                 config.multi_agent_v2.tool_namespace = Some("agents".to_string());
             });
@@ -9156,7 +9170,7 @@ async fn multi_agent_v2_spawn_rejects_model_override() {
                 ):
                     model_version_check = (
                         "model_info.multi_agent_version"
-                        if version in {"0.153.1", "0.154.0", "0.155.0", "0.157.1", "0.158.0", "0.159.3"}
+                        if version in {"0.153.1", "0.154.0", "0.155.0", "0.157.1", "0.158.0", "0.159.3", "0.164.0"}
                         else "turn_context.model_info.multi_agent_version"
                     )
                     old = "__QWENDEX_REGEX__(?m)^        MultiAgentVersion::V2 => \\{\\n.*?^        \\}\\n"
@@ -9246,7 +9260,7 @@ async fn multi_agent_v2_spawn_rejects_model_override() {
                         "    apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;",
                         "",
                     ])
-                    if version in {"0.153.1", "0.154.0", "0.155.0", "0.157.1", "0.158.0", "0.159.3"}:
+                    if version in {"0.153.1", "0.154.0", "0.155.0", "0.157.1", "0.158.0", "0.159.3", "0.164.0"}:
                         new = new.replace(
                             "    apply_spawn_agent_service_tier(\n"
                             "        &session,\n"
@@ -9347,7 +9361,7 @@ async fn multi_agent_v2_spawn_rejects_model_override() {
                             ]
                             + (
                                 []
-                                if version in {"0.153.1", "0.154.0", "0.155.0", "0.157.1", "0.158.0", "0.159.3"}
+                                if version in {"0.153.1", "0.154.0", "0.155.0", "0.157.1", "0.158.0", "0.159.3", "0.164.0"}
                                 else ["multi_agent_v2_full_history_fork_accepts_explicit_service_tier"]
                             )
                         ],
@@ -9431,7 +9445,7 @@ async fn multi_agent_v2_spawn_rejects_model_override() {
                 },
             ]
         )
-        if version in {"0.153.1", "0.154.0", "0.155.0", "0.157.1", "0.158.0", "0.159.3"}:
+        if version in {"0.153.1", "0.154.0", "0.155.0", "0.157.1", "0.158.0", "0.159.3", "0.164.0"}:
             for spec in specs:
                 if spec["path"] != "codex-rs/core/src/tools/spec_plan_tests.rs":
                     continue
@@ -9472,7 +9486,7 @@ async fn multi_agent_v2_spawn_rejects_model_override() {
             }
             for spec in specs
         ]
-    if version in {"0.154.0", "0.155.0", "0.157.1", "0.158.0", "0.159.3"}:
+    if version in {"0.154.0", "0.155.0", "0.157.1", "0.158.0", "0.159.3", "0.164.0"}:
         # Upstream moved shared app shortcuts to a bool-returning handler.
         # Its caller already checks whether app shortcuts are available.
         for spec in specs:
@@ -9508,7 +9522,7 @@ async fn multi_agent_v2_spawn_rejects_model_override() {
                 else (old, new)
                 for old, new in spec["replacements"]
             ]
-    if version in {"0.155.0", "0.157.1", "0.158.0", "0.159.3"}:
+    if version in {"0.155.0", "0.157.1", "0.158.0", "0.159.3", "0.164.0"}:
         # Upstream dispatches SubagentStart for full-history forks as well as
         # fresh workers. Preserve both while adding Qwendex hook identity.
         for spec in specs:
@@ -9600,7 +9614,7 @@ async fn multi_agent_v2_spawn_rejects_model_override() {
                         new = new.replace(unformatted, formatted)
                 replacements.append((old, new))
             spec["replacements"] = replacements
-    if version in {"0.157.1", "0.158.0", "0.159.3"}:
+    if version in {"0.157.1", "0.158.0", "0.159.3", "0.164.0"}:
         # Upstream centralized child configuration and moved the loaded-agent
         # representation. Rebase only this manifest; historical digests stay fixed.
         for spec in specs:
@@ -9613,7 +9627,7 @@ async fn multi_agent_v2_spawn_rejects_model_override() {
                         old = "        if multi_agent_v2_enabled(turn_context) {\n"
                         new = old + "            let is_non_root_agent = turn_context.session_source.is_non_root_agent();\n"
                     elif "multi_agent_v2_handler(SendMessageHandlerV2, tool_namespace)" in old:
-                        if version in {"0.158.0", "0.159.3"}:
+                        if version in {"0.158.0", "0.159.3", "0.164.0"}:
                             old = "            if !turn_context.config.multi_agent_v2.disable_direct_message {\n"
                         else:
                             old = (
@@ -9656,7 +9670,7 @@ async fn multi_agent_v2_spawn_rejects_model_override() {
                         "agent\n            .metadata\n            .agent_path\n            .as_ref()\n            .is_some_and(|path| path.as_str() != AgentPath::ROOT)",
                     ).replace("agent.agent_status,", "agent.status,")
                     new = new.replace("fn listed_agent(name: &str, status: AgentStatus) -> ListedAgent {\n        ListedAgent {\n            agent_name: name.to_string(),\n            agent_status: status,\n        }", "fn listed_agent(name: &str, status: AgentStatus) -> LiveAgent {\n        LiveAgent {\n            thread_id: codex_protocol::ThreadId::new(),\n            metadata: crate::agent::types::AgentMetadata {\n                agent_path: Some(AgentPath::try_from(name).expect(\"agent path\")),\n                ..Default::default()\n            },\n            status,\n        }")
-                    if version in {"0.158.0", "0.159.3"}:
+                    if version in {"0.158.0", "0.159.3", "0.164.0"}:
                         new = new.replace(
                             "            session\n                .services\n                .agent_control\n                .register_session_root(session.thread_id, turn.parent_thread_id);\n",
                             "",
@@ -9705,6 +9719,149 @@ async fn multi_agent_v2_spawn_rejects_model_override() {
                 ],
             },
         ])
+    if version == "0.164.0":
+        # Keep historical patches fixed while adapting the current upstream
+        # status, startup reuse, and parameterized pending-input test surfaces.
+        for spec in specs:
+            path = spec["path"]
+            replacements = []
+            for old, new in spec["replacements"]:
+                if path.endswith("bottom_pane/status_line_style.rs"):
+                    old = (
+                        "            StatusLineItem::FastMode | StatusLineItem::Daybreak | StatusLineItem::RawOutput => {\n"
+                        "                Self::Mode\n"
+                        "            }\n"
+                    )
+                    new = (
+                        "            // QWENDEX_CODEX_TUI_PATCH_V1\n"
+                        "            StatusLineItem::FastMode\n"
+                        "            | StatusLineItem::Daybreak\n"
+                        "            | StatusLineItem::RawOutput\n"
+                        "            | StatusLineItem::QwendexManager => Self::Mode,\n"
+                    )
+                elif path.endswith("core/tests/suite/pending_input.rs"):
+                    old = (
+                        r"__QWENDEX_REGEX__(?m)^#\[test_case\(WaitInput::UserSteer; \"user_steer\"\)\]\n"
+                        r"#\[test_case\(WaitInput::PendingInjection; \"already_pending_injection\"\)\]\n"
+                        r"#\[test_case\(WaitInput::LiveInjection; \"injection_while_waiting\"\)\]\n"
+                        r"#\[tokio::test\(flavor = \"multi_thread\", worker_threads = 2\)\]\n"
+                        r"async fn input_interrupts_wait_agent_and_is_sent_in_follow_up_request\(input: WaitInput\) \{\n"
+                        r".*?^    server.shutdown\(\).await;\n}\n"
+                    )
+                    new = '#[tokio::test(flavor = "multi_thread", worker_threads = 2)]\n' + new
+                elif path.endswith("multi_agents_tests.rs") and "multi_agent_v2_spawn_partial_fork_turns_allows_agent_type_override" in old:
+                    # Removed upstream when the shared thread-spawn path landed.
+                    continue
+                elif path.endswith("multi_agents_v2/wait.rs") and old.startswith("__QWENDEX_REGEX__"):
+                    old = (
+                        "        let deadline = wait_started + Duration::from_millis(timeout_ms as u64);\n"
+                        "        let outcome = wait_for_activity(&mut activity_rx, pending_activity, deadline).await;\n"
+                    )
+                    new = new[:new.index("        let result = WaitAgentResult::from_outcome")]
+                    new = new.replace("Instant::now() + Duration::from_millis", "wait_started + Duration::from_millis")
+                elif path.endswith("multi_agents_v2/spawn.rs"):
+                    if old.startswith("__QWENDEX_REGEX__"):
+                        old = (
+                            "    let role_name = args\n"
+                            "        .agent_type\n"
+                            "        .as_deref()\n"
+                            "        .map(str::trim)\n"
+                            "        .filter(|role| !role.is_empty());\n"
+                        )
+                        new = ""
+                    elif old.startswith("use crate::agent::types::SpawnAgentOptions;"):
+                        continue
+                elif path.endswith("tools/spec_plan.rs") and "let depth_allowed" in new:
+                    new = new.replace(
+                        "            depth_allowed && model_allowed",
+                        "            !turn_context.config.multi_agent_v2.disable_native_tools\n"
+                        "                && depth_allowed\n"
+                        "                && model_allowed",
+                    )
+                replacements.append((old, new))
+            spec["replacements"] = replacements
+            if path.endswith("codex-mcp/src/connection_manager.rs") and "expected_occurrences" in spec:
+                spec["expected_occurrences"] = {
+                    old: 4 if old.startswith("__QWENDEX_REGEX__") else 2
+                    for old, _new in replacements
+                    if old.startswith("__QWENDEX_REGEX__") or "client.client().await" in old
+                }
+        specs.extend([
+            {
+                "path": "codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs",
+                "replacements": [(
+                    "            agent_type: args.agent_type.clone(),\n"
+                    "            model: args.model,\n"
+                    "            reasoning_effort: args.reasoning_effort,\n",
+                    "",
+                )],
+            },
+            {
+                "path": "codex-rs/core/src/thread_spawn.rs",
+                "replacements": [
+                    (
+                        "use crate::agent::next_thread_spawn_depth;\n",
+                        "use crate::agent::exceeds_thread_spawn_depth_limit;\n"
+                        "use crate::agent::next_thread_spawn_depth;\n",
+                    ),
+                    (
+                        "    let turn = &step_context.turn;\n",
+                        "    let turn = &step_context.turn;\n"
+                        "    // QWENDEX_CODEX_TUI_PATCH_V1: bounded inherited worker contract.\n"
+                        "    const QWENDEX_V2_MAX_DEPTH: i32 = 2;\n"
+                        "    if exceeds_thread_spawn_depth_limit(\n"
+                        "        next_thread_spawn_depth(&turn.session_source),\n"
+                        "        QWENDEX_V2_MAX_DEPTH,\n"
+                        "    ) {\n"
+                        "        return Err(ThreadSpawnError::Preparation(\n"
+                        "            \"Agent depth limit reached. Solve the task yourself.\".to_string(),\n"
+                        "        ));\n"
+                        "    }\n",
+                    ),
+                    (
+                        "        agent_type,\n        model,\n        reasoning_effort,\n",
+                        "",
+                    ),
+                    (
+                        "use codex_protocol::openai_models::ReasoningEffort;\n",
+                        "",
+                    ),
+                    (
+                        "    pub agent_type: Option<String>,\n"
+                        "    pub model: Option<String>,\n"
+                        "    pub reasoning_effort: Option<ReasoningEffort>,\n",
+                        "",
+                    ),
+                    (
+                        "    let role_name = agent_type\n        .as_deref()\n        .map(str::trim)\n        .filter(|role| !role.is_empty());\n",
+                        "",
+                    ),
+                    (
+                        "            role_name,\n            model: model.as_deref(),\n            reasoning_effort,\n",
+                        "            role_name: None,\n            model: None,\n            reasoning_effort: None,\n",
+                    ),
+                ],
+            },
+            {
+                "path": "codex-rs/codex-mcp/src/connection_manager.rs",
+                "replacements": [(
+                    "                                    return (server_name, Err(StartupOutcomeError::Cancelled), false);\n",
+                    "                                    return (\n"
+                    "                                        server_name,\n"
+                    "                                        Err(StartupOutcomeError::Cancelled),\n"
+                    "                                        false,\n"
+                    "                                    );\n",
+                )],
+            },
+            {
+                "path": "codex-rs/core/src/tools/handlers/multi_agents_v2/wait.rs",
+                "replacements": [(
+                    '                    WaitOutcome::TimedOut => "timed_out",\n',
+                    '                    WaitOutcome::TimedOut => "timed_out",\n'
+                    '                    WaitOutcome::NoRunningAgents => "no_running_agents",\n',
+                )],
+            },
+        ])
     return specs
 
 
@@ -9746,7 +9903,7 @@ def apply_codex_source_patch(source: Path, version: str, *, dry_run: bool = Fals
     # Keep the rebase fail-closed: validate every source replacement before
     # writing any file.  The 0.147/0.150 contract also requires unique anchors so
     # a broad fragment cannot silently duplicate a patched Rust test.
-    strict_anchor_cardinality = version in {"0.147.0", "0.150.0", "0.153.1", "0.154.0", "0.155.0", "0.157.1", "0.158.0", "0.159.3"}
+    strict_anchor_cardinality = version in {"0.147.0", "0.150.0", "0.153.1", "0.154.0", "0.155.0", "0.157.1", "0.158.0", "0.159.3", "0.164.0"}
     original_texts: dict[str, str] = {}
     updated_texts: dict[str, str] = {}
     for spec in specs:
