@@ -4,9 +4,9 @@ import json
 import os
 import shutil
 import subprocess
-import tomllib
 from pathlib import Path
 
+import tomllib
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "qwendex_testbench"
@@ -157,7 +157,7 @@ import sys
 from pathlib import Path
 
 if sys.argv[1:] == ["--version"]:
-    print("codex-cli 0.164.0")
+    print("codex-cli 0.167.1")
     raise SystemExit(0)
 Path(os.environ["QWENDEX_TEST_CODEX_CAPTURE"]).write_text(
     json.dumps({

@@ -19,7 +19,6 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlsplit
 
-
 SCHEMA_VERSION = "qwendex.dev.release_summary.v2"
 SUMMARY_DIGEST_FIELD = "receipt_sha256"
 RECEIPT_BINDING_SCHEMA = "qwendex.dev.receipt_binding.v1"
@@ -76,7 +75,7 @@ CODEX_153_V8_BASE_URL = CODEX_V8_BASE_URL
 CODEX_153_V8_DOWNLOAD_POLICY = CODEX_V8_DOWNLOAD_POLICY
 CODEX_153_V8_TARGET = CODEX_V8_TARGET
 CODEX_153_V8_ARTIFACTS = CODEX_V8_ARTIFACTS
-CODEX_V8_PINNED_VERSIONS = frozenset({"0.147.0", "0.150.0", "0.153.1", "0.154.0", "0.155.0", "0.157.1", "0.158.0", "0.159.3", "0.164.0"})
+CODEX_V8_PINNED_VERSIONS = frozenset({"0.147.0", "0.150.0", "0.153.1", "0.154.0", "0.155.0", "0.157.1", "0.158.0", "0.159.3", "0.164.0", "0.167.1"})
 CODEX_164_V8_PIN = {
     "version": "152.2.0",
     "release_tag": "rusty-v8-v152.2.0",
@@ -189,6 +188,7 @@ CODEX_ALLOWED_BUILD_PATHS = {
     "codex-rs/core/src/hook_runtime.rs",
     "codex-rs/core/src/tools/handlers/multi_agents_common.rs",
     "codex-rs/core/src/agent/child_config.rs",
+    "codex-rs/core/src/agent/host/spawn_tests.rs",
     "codex-rs/core/src/thread_spawn.rs",
     "codex-rs/core/src/tools/handlers/multi_agents_spec.rs",
     "codex-rs/core/src/tools/handlers/multi_agents_v2.rs",
@@ -1380,9 +1380,11 @@ def validate_receipt_binding(
 def codex_required_patch_paths(version: str) -> set[str]:
     """Return the fail-closed source-patch footprint for a supported Codex version."""
     required = set(CODEX_REQUIRED_PATCH_PATHS)
-    if version != "0.164.0":
+    if version != "0.167.1":
+        required.discard("codex-rs/core/src/agent/host/spawn_tests.rs")
+    if version not in {"0.164.0", "0.167.1"}:
         required.discard("codex-rs/core/src/thread_spawn.rs")
-    if version in {"0.157.1", "0.158.0", "0.159.3", "0.164.0"}:
+    if version in {"0.157.1", "0.158.0", "0.159.3", "0.164.0", "0.167.1"}:
         required.discard("codex-rs/core/src/tools/handlers/multi_agents_common.rs")
     else:
         required.discard("codex-rs/core/src/agent/child_config.rs")
@@ -1390,7 +1392,7 @@ def codex_required_patch_paths(version: str) -> set[str]:
         # Upstream 0.145 incorporates the config/mod.rs compatibility behavior,
         # while Qwendex adds the V2 role/default hardening files.
         required -= CODEX_145_UPSTREAM_PATCH_PATHS
-    elif version in {"0.147.0", "0.150.0", "0.153.1", "0.154.0", "0.155.0", "0.157.1", "0.158.0", "0.159.3", "0.164.0"}:
+    elif version in {"0.147.0", "0.150.0", "0.153.1", "0.154.0", "0.155.0", "0.157.1", "0.158.0", "0.159.3", "0.164.0", "0.167.1"}:
         # Upstream supplies config/mod.rs compatibility, while these rebases
         # require the complete Qwendex V2 and Apps-cache footprint.
         required -= CODEX_147_UPSTREAM_PATCH_PATHS
@@ -1469,7 +1471,7 @@ def validate_codex_build_receipt(
         )
     )
     if required_version in CODEX_V8_PINNED_VERSIONS:
-        v8_pin = CODEX_164_V8_PIN if required_version == "0.164.0" else {
+        v8_pin = CODEX_164_V8_PIN if required_version in {"0.164.0", "0.167.1"} else {
             "version": CODEX_V8_VERSION,
             "release_tag": CODEX_V8_RELEASE_TAG,
             "base_url": CODEX_V8_BASE_URL,

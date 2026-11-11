@@ -33,11 +33,11 @@ CODEX_SOURCE_DIR="$WORK_ROOT/codex-source/codex"
 QWENDEX_CODEX_YOLO_FLAG="--dangerously-bypass-approvals-and-sandbox"
 QWENDEX_RELEASE_CODEX_SOURCE_REPO="https://github.com/openai/codex.git"
 QWENDEX_CODEX_SOURCE_REPO="${QWENDEX_CODEX_SOURCE_REPO:-$QWENDEX_RELEASE_CODEX_SOURCE_REPO}"
-QWENDEX_RELEASE_CODEX_VERSION="0.164.0"
-QWENDEX_RELEASE_CODEX_SOURCE_COMMIT="6aaac694803004a63c6f393d153c96d22521a6b9"
-QWENDEX_RELEASE_CODEX_PATCH_SHA256="26f44a7e3339c5a95e87aa18102dad338bb92d6d1bc5a5f201f31b6a8b52fbcf"
-QWENDEX_RELEASE_CODEX_CARGO_LOCK_SHA256="bc5f7352658f51deace9dddb4bc404742b06c6402cc825b6d37051c008d989bd"
-# Codex 0.164.0 retains Rusty V8's sandboxed code-mode runtime. Its own pinned
+QWENDEX_RELEASE_CODEX_VERSION="0.167.1"
+QWENDEX_RELEASE_CODEX_SOURCE_COMMIT="0a94398fa60c4fac0e7659e4213a0a36e613dd46"
+QWENDEX_RELEASE_CODEX_PATCH_SHA256="891108bf2b62d063e739f40c3fe417274b40247f73c1d18047b835f991c0df0f"
+QWENDEX_RELEASE_CODEX_CARGO_LOCK_SHA256="9efc26116852723f76540da85d9e4537979014f166c39494bef61e49a9cc0883"
+# Codex 0.167.1 retains Rusty V8's sandboxed code-mode runtime. Its own pinned
 # release publishes the verified archive/binding pair that the generic Rusty
 # V8 release omits; never substitute the non-sandbox archive or build an
 # unverified dependency copy.
@@ -1360,7 +1360,7 @@ cmd_codex_source() {
           CARGO_HOME="$isolated_cargo_home" \
           cargo metadata --format-version 1 >/dev/null
       )
-      # Codex 0.164.0's code-mode host enables the sandboxed Rusty V8 profile.
+      # Codex 0.167.1's code-mode host enables the sandboxed Rusty V8 profile.
       # Fetch the exact archive and generated binding from the pinned Codex
       # release, verify the manifest before Cargo sees either input, and keep
       # the pair inside this disposable build root.
@@ -1541,6 +1541,7 @@ allowed_changes = {
     "codex-rs/core/src/hook_runtime.rs",
     "codex-rs/core/src/tools/handlers/multi_agents_common.rs",
     "codex-rs/core/src/agent/child_config.rs",
+    "codex-rs/core/src/agent/host/spawn_tests.rs",
     "codex-rs/core/src/thread_spawn.rs",
     "codex-rs/core/src/tools/handlers/multi_agents_spec.rs",
     "codex-rs/core/src/tools/handlers/multi_agents_v2.rs",
@@ -1611,7 +1612,7 @@ if source_ref == "rust-v0.145.0":
     # formerly patched in this file, so its canonical patch intentionally
     # leaves it untouched.
     required_patch_paths -= {"codex-rs/core/src/config/mod.rs"}
-elif source_ref in {"rust-v0.147.0", "rust-v0.150.0", "rust-v0.153.1", "rust-v0.154.0", "rust-v0.155.0", "rust-v0.157.1", "rust-v0.158.0", "rust-v0.159.3", "rust-v0.164.0"}:
+elif source_ref in {"rust-v0.147.0", "rust-v0.150.0", "rust-v0.153.1", "rust-v0.154.0", "rust-v0.155.0", "rust-v0.157.1", "rust-v0.158.0", "rust-v0.159.3", "rust-v0.164.0", "rust-v0.167.1"}:
     # These releases retain the upstream config/mod.rs behavior but rebase the
     # full Qwendex V2 and Apps-cache patch surface, including rmcp_client.rs.
     required_patch_paths -= {"codex-rs/core/src/config/mod.rs"}
@@ -1633,12 +1634,14 @@ else:
         "codex-rs/core/tests/suite/subagent_notifications.rs",
         "codex-rs/core/config.schema.json",
     }
-if source_ref in {"rust-v0.157.1", "rust-v0.158.0", "rust-v0.159.3", "rust-v0.164.0"}:
+if source_ref in {"rust-v0.157.1", "rust-v0.158.0", "rust-v0.159.3", "rust-v0.164.0", "rust-v0.167.1"}:
     required_patch_paths -= {"codex-rs/core/src/tools/handlers/multi_agents_common.rs"}
 else:
     required_patch_paths -= {"codex-rs/core/src/agent/child_config.rs"}
-if source_ref != "rust-v0.164.0":
+if source_ref not in {"rust-v0.164.0", "rust-v0.167.1"}:
     required_patch_paths -= {"codex-rs/core/src/thread_spawn.rs"}
+if source_ref != "rust-v0.167.1":
+    required_patch_paths -= {"codex-rs/core/src/agent/host/spawn_tests.rs"}
 missing_patch_paths = sorted(required_patch_paths - set(changed_paths))
 source_diff = run(
     "git", "-C", str(source_path), "diff", "HEAD", "--binary", "--full-index", "--no-ext-diff", binary=True

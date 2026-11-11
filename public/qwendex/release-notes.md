@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Update the source compatibility target to Codex `0.167.1`, including its
+  shared child-creation and input-wait APIs while retaining Qdex controls.
 - Support official Codex `0.164.0` with the matching source, normalized Cargo
   lock, canonical patch, sandboxed Rusty V8 `152.2.0`, and binary pair. Rebase
   sealed worker inheritance onto shared spawning; preserve wait telemetry,

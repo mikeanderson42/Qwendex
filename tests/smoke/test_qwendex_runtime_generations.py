@@ -7,11 +7,10 @@ import os
 import shutil
 import sqlite3
 import subprocess
-import tomllib
 from pathlib import Path
 
 import pytest
-
+import tomllib
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -82,7 +81,7 @@ def write_pinned_codex_fixture(dev_root: Path) -> tuple[Path, Path]:
     codex.write_text(
         "#!/usr/bin/env bash\n"
         "if [[ \"${1:-}\" == \"--version\" ]]; then\n"
-        "  printf 'codex-cli 0.164.0\\n'\n"
+        "  printf 'codex-cli 0.167.1\\n'\n"
         "  exit 0\n"
         "fi\n"
         "exit 0\n",
@@ -96,10 +95,10 @@ def write_pinned_codex_fixture(dev_root: Path) -> tuple[Path, Path]:
         "schema_version": "qwendex.dev.codex_build.v1",
         "status": "pass",
         "source_head": "1" * 40,
-        "source_ref": "rust-v0.164.0",
+        "source_ref": "rust-v0.167.1",
         "source_patch_sha256": "2" * 64,
         "binary_sha256": sha256_file(codex),
-        "binary_version": "codex-cli 0.164.0",
+        "binary_version": "codex-cli 0.167.1",
         "code_mode_host": {"binary_sha256": sha256_file(host)},
     }
     receipt_path = dev_root / ".qwendex-dev" / "results" / "meta" / "codex_build.json"

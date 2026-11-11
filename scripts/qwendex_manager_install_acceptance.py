@@ -19,7 +19,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Mapping
 
-
 ROOT = Path(__file__).resolve().parents[1]
 V057_REF = "v0.5.7"
 
@@ -575,8 +574,8 @@ def run_acceptance(run_id: str, output_root: Path) -> dict[str, Any]:
         timeout=30,
         check=False,
     )
-    if stock_version.returncode or stock_version.stdout.strip() != "codex-cli 0.164.0":
-        raise InstallAcceptanceError("stock Codex does not match the supported 0.164.0 build contract")
+    if stock_version.returncode or stock_version.stdout.strip() != "codex-cli 0.167.1":
+        raise InstallAcceptanceError("stock Codex does not match the supported 0.167.1 build contract")
     auth_source = Path.home() / ".codex" / "auth.json"
     actual_normal_before = LIVE.static_normal_home_snapshot(Path.home())
     commands: list[dict[str, Any]] = []
@@ -1247,7 +1246,7 @@ def run_acceptance(run_id: str, output_root: Path) -> dict[str, Any]:
             "normal_home_unchanged": normal_unchanged,
             "stock_codex_version": stock_version.stdout.strip(),
             "claim_scope": (
-                "tested Linux and Codex 0.164.0 stable-control-file plus "
+                "tested Linux and Codex 0.167.1 stable-control-file plus "
                 "full-decoy-home isolation only"
             ),
             "result": "pass",

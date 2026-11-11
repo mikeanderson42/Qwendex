@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import importlib.util
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -83,6 +83,7 @@ def test_codex_build_contract_requires_the_current_canonical_patch_surface():
     ) | {"codex-rs/core/src/agent/child_config.rs"}
     assert release_gate.codex_required_patch_paths("0.158.0") == release_gate.codex_required_patch_paths("0.157.1")
     assert release_gate.codex_required_patch_paths("0.159.3") == release_gate.codex_required_patch_paths("0.158.0")
+    assert release_gate.codex_required_patch_paths("0.167.1") == release_gate.codex_required_patch_paths("0.164.0") | {"codex-rs/core/src/agent/host/spawn_tests.rs"}
     assert release_gate.codex_required_patch_paths("0.164.0") == (
         release_gate.codex_required_patch_paths("0.159.3") | {"codex-rs/core/src/thread_spawn.rs"}
     )
@@ -559,7 +560,7 @@ def test_codex_147_v8_release_pair_is_independently_pinned():
     assert "--proto '=https' --proto-redir '=https'" in dev_env
 
 
-@pytest.mark.parametrize("version", ["0.147.0", "0.164.0"])
+@pytest.mark.parametrize("version", ["0.147.0", "0.164.0", "0.167.1"])
 def test_release_gate_rejects_unpinned_codex_v8_artifacts(tmp_path, version):
     fixture = release_fixture(tmp_path)
     release_gate = load_release_gate()
@@ -572,7 +573,7 @@ def test_release_gate_rejects_unpinned_codex_v8_artifacts(tmp_path, version):
     payload["source_ref"] = f"rust-v{version}"
     build_inputs["source_ref"] = f"rust-v{version}"
     payload["binary_version"] = f"codex-cli {version}"
-    pin = release_gate.CODEX_164_V8_PIN if version == "0.164.0" else {
+    pin = release_gate.CODEX_164_V8_PIN if version in {"0.164.0", "0.167.1"} else {
         "version": release_gate.CODEX_147_V8_VERSION,
         "release_tag": release_gate.CODEX_147_V8_RELEASE_TAG,
         "base_url": release_gate.CODEX_147_V8_BASE_URL,
@@ -622,8 +623,8 @@ def test_release_gate_rejects_unpinned_codex_v8_artifacts(tmp_path, version):
         "archive.sha256": "0" * 64,
         "binding.name": "different-binding.rs",
         "checksums.sha256": "f" * 64,
-        "crate_version": "150.4.0" if version == "0.164.0" else "152.2.0",
-        "release_tag": "rusty-v8-v150.4.0" if version == "0.164.0" else "rusty-v8-v152.2.0",
+        "crate_version": "150.4.0" if version in {"0.164.0", "0.167.1"} else "152.2.0",
+        "release_tag": "rusty-v8-v150.4.0" if version in {"0.164.0", "0.167.1"} else "rusty-v8-v152.2.0",
     }
     for field, value in mutations.items():
         candidate = json.loads(json.dumps(payload))

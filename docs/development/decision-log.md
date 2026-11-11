@@ -1,5 +1,17 @@
 # Qwendex Development Decision Log
 
+## Codex 0.167.1 Source Compatibility
+
+GitHub's latest stable release and npm's latest tag both identify Codex
+`0.167.1`; the official `rust-v0.167.1` tag resolves to commit
+`0a94398fa60c4fac0e7659e4213a0a36e613dd46`. Target that release while
+retaining historical manifests. Upstream split child preparation from message
+delivery and moved the wait primitives. Apply the inherited-worker policy at
+the shared preparation boundary, retain the public child-creation API, and
+adapt wait handling without modifying the shared upstream outcome type. Qdex
+continues to use embedded `--no-daemon` execution.
+
+
 ## Codex 0.164.0 Shared-Spawn Rebase
 
 Decision: use official stable `rust-v0.164.0` at

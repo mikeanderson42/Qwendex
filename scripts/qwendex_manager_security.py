@@ -11,7 +11,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_TESTS = {
     "test_qdex_dry_run_wires_agent_policy_into_supported_v2_config",
@@ -74,7 +73,7 @@ def evaluate(run_id: str, junit: Path, routing_path: Path) -> dict[str, Any]:
         "isolated_codex_home_required": 'export CODEX_HOME="$QWENDEX_CODEX_HOME"' in qdex_text,
         "normal_stock_codex_fallback_separate": "codex-main" in dev_text,
         "development_bypass_named": "cmd_open_yolo" in dev_text and "open-yolo" in dev_text,
-        "supported_codex_version_pinned": 'QWENDEX_RELEASE_CODEX_VERSION="0.164.0"' in dev_text,
+        "supported_codex_version_pinned": 'QWENDEX_RELEASE_CODEX_VERSION="0.167.1"' in dev_text,
         "canonical_patch_digest_pinned": "QWENDEX_RELEASE_CODEX_PATCH_SHA256=" in dev_text,
     }
     boundary_results = {
@@ -121,7 +120,7 @@ def evaluate(run_id: str, junit: Path, routing_path: Path) -> dict[str, Any]:
         ],
         "support_matrix": {
             "platform": "Linux",
-            "codex_version": "0.164.0",
+            "codex_version": "0.167.1",
             "claim_ceiling": "Tested Qwendex orchestration and supported patched-Codex boundary only; not an operating-system security boundary.",
         },
         "actual_integration_tests": {
